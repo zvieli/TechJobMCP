@@ -4,7 +4,9 @@ import unittest
 from playwright.async_api import async_playwright
 
 from hireme_mcp.core.browser import (
+    JS_EXTRACT_ALL_JOBS,
     SELECTORS,
+    _extract_jobs_via_locators,
     bookmark_job,
     dynamic_registry,
     extract_jobs,
@@ -15,6 +17,7 @@ from hireme_mcp.core.discovery import (
     calibrate_all_selectors,
     discover_child_selector,
 )
+from hireme_mcp.models.schemas import WorkMode
 
 
 LIVE_CARD_HTML = """
@@ -27,6 +30,30 @@ LIVE_CARD_HTML = """
     <h4 class="font-bold text-gray-900 mb-1 text-sm">Fullstack AI Engineer</h4>
     <div class="text-xs text-gray-600">Acme Labs • Tel Aviv</div>
     <button class="group inline-flex items-center justify-center gap-2 px-4 py-2 min-h-[36px] text-white bg-ht-primary-500 rounded-xl text-xs font-semibold shadow-sm transition-colors">שמור</button>
+  </div>
+</main>
+</body>
+</html>
+"""
+
+RICH_CARD_HTML = """
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>HireMeTech Rich Card Mock</title></head>
+<body>
+<main>
+  <div class="rounded-2xl jobs-app-glass-surface shadow-ht-card p-4" data-job-id="job-rich-99">
+    <h4 class="font-bold text-gray-900 mb-1 text-sm">Senior Python AI Architect</h4>
+    <div class="text-xs text-gray-600">Anthropic Labs • Tel Aviv - Hybrid</div>
+    <p class="description text-xs text-gray-500 my-2">Design state of the art LLM agent architectures using FastMCP.</p>
+    <div class="salary-range font-medium">35,000 - 45,000 ILS</div>
+    <div class="flex gap-1 my-2">
+      <span class="tech-badge bg-gray-100 rounded px-2 py-1 text-xs">Python</span>
+      <span class="tech-badge bg-gray-100 rounded px-2 py-1 text-xs">FastMCP</span>
+      <span class="tech-badge bg-gray-100 rounded px-2 py-1 text-xs">Playwright</span>
+    </div>
+    <a href="/jobs/job-rich-99" class="text-blue-600 underline">View Job Details</a>
+    <button class="bg-ht-primary-500 saved active rounded-xl" aria-pressed="true">שמור</button>
   </div>
 </main>
 </body>
@@ -182,3 +209,43 @@ class TestLiveDOMInteraction(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report["job_title"]["status"], "primary_matched")
         self.assertIn("bookmark_button", report)
         self.assertEqual(report["bookmark_button"]["status"], "primary_matched")
+
+    async def test_extract_jobs_single_pass_rich_fields(self):
+        await self.page.set_content(RICH_CARD_HTML)
+
+        jobs = await extract_jobs(self.page)
+        self.assertEqual(len(jobs), 1)
+        job = jobs[0]
+        self.assertEqual(job.job_id, "job-rich-99")
+        self.assertEqual(job.title, "Senior Python AI Architect")
+        self.assertEqual(job.company, "Anthropic Labs")
+        self.assertIn("Tel Aviv", job.location)
+        self.assertEqual(job.work_mode, WorkMode.HYBRID)
+        self.assertEqual(job.salary_range, "35,000 - 45,000 ILS")
+        self.assertIn("Python", job.tech_stack)
+        self.assertIn("FastMCP", job.tech_stack)
+        self.assertIn("Playwright", job.tech_stack)
+        self.assertEqual(job.url, "https://hiremetech.com/jobs/job-rich-99")
+        self.assertTrue(job.is_bookmarked)
+
+        # Verify element was stamped with data-mcp-job-id in the DOM
+        stamped_id = await self.page.evaluate(
+            "() => document.querySelector('[data-job-id=\"job-rich-99\"]').getAttribute('data-mcp-job-id')"
+        )
+        self.assertEqual(stamped_id, "job-rich-99")
+
+    async def test_extract_jobs_locator_fallback(self):
+        await self.page.set_content(RICH_CARD_HTML)
+
+        # Directly invoke locator fallback to verify parity
+        jobs = await _extract_jobs_via_locators(
+            self.page, "div.jobs-app-glass-surface, div.shadow-ht-card"
+        )
+        self.assertEqual(len(jobs), 1)
+        job = jobs[0]
+        self.assertEqual(job.job_id, "job-rich-99")
+        self.assertEqual(job.title, "Senior Python AI Architect")
+        self.assertEqual(job.company, "Anthropic Labs")
+        self.assertEqual(job.salary_range, "35,000 - 45,000 ILS")
+        self.assertTrue(job.is_bookmarked)
+

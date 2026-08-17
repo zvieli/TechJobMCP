@@ -201,21 +201,368 @@ async def _extract_meaningful_lines(locator: Locator) -> list[str]:
     return lines
 
 
-@browser_retry
-async def extract_jobs(page: Page) -> list[Job]:
-    """Extract job listings from the current page.
+JS_EXTRACT_ALL_JOBS = r"""
+(cardSelector) => {
+    let cards = [];
+    if (cardSelector) {
+        try {
+            cards = Array.from(document.querySelectorAll(cardSelector));
+        } catch (e) {}
+    }
+    if (!cards || cards.length === 0) {
+        const defaultCardSelectors = [
+            'div.jobs-app-glass-surface',
+            'div.shadow-ht-card',
+            '[data-testid="job-card"]',
+            'div[class*="jobs-app-glass-surface"]',
+            'div[class*="shadow-ht-card"]',
+            '.job-listing-card',
+            '.job-item',
+            'article.job',
+            'div.job-card'
+        ];
+        for (const sel of defaultCardSelectors) {
+            try {
+                const found = Array.from(document.querySelectorAll(sel));
+                if (found.length > 0) {
+                    cards = found;
+                    break;
+                }
+            } catch (e) {}
+        }
+    }
+
+    if (!cards || cards.length === 0) {
+        return [];
+    }
+
+    function djb2(str) {
+        let hash = 5381;
+        for (let i = 0; i < str.length; i++) {
+            hash = ((hash << 5) + hash) + str.charCodeAt(i);
+            hash = hash & hash;
+        }
+        return Math.abs(hash).toString(16).padStart(8, '0');
+    }
+
+    const results = [];
+
+    cards.forEach((card, index) => {
+        try {
+            // A. Title extraction
+            let title = "";
+            const titleSelectors = [
+                'h4.font-bold',
+                'h4[class*="text-gray-900"]',
+                '[data-testid="job-title"]',
+                'h4',
+                'h2.job-title',
+                'h3.title',
+                '.job-card-title',
+                'a.job-title',
+                '[class*="job-title"]',
+                '[class*="jobTitle"]',
+                '[class*="position"]',
+                '[class*="role"]',
+                'h1', 'h2', 'h3', 'h5', 'h6',
+                'a[href*="job"]', 'a[href*="listing"]', 'a.title',
+                'strong'
+            ];
+            for (const sel of titleSelectors) {
+                const el = card.querySelector(sel);
+                if (el && el.innerText && el.innerText.trim()) {
+                    title = el.innerText.trim();
+                    break;
+                }
+            }
+
+            const rawText = card.innerText || "";
+            const textLines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+            if (!title && textLines.length > 0) {
+                title = textLines[0];
+            }
+            if (!title) {
+                title = "Untitled Position";
+            }
+
+            // B. Company and Location extraction
+            let company = "";
+            let location = "";
+
+            const sibSelectors = [
+                'h4 ~ div', 'h4 ~ p', 'h4 ~ span',
+                'h1 ~ div', 'h2 ~ div', 'h3 ~ div', 'h5 ~ div'
+            ];
+            for (const sel of sibSelectors) {
+                const sib = card.querySelector(sel);
+                if (sib && sib.innerText && sib.innerText.trim()) {
+                    const sibText = sib.innerText.trim();
+                    let parts = [];
+                    if (sibText.includes('•') || sibText.includes('|') || sibText.includes('\n')) {
+                        parts = sibText.split(/[•|\n]+/).map(p => p.trim()).filter(p => p.length > 0);
+                    } else if (sibText.includes('-')) {
+                        parts = sibText.split(/[-]+/).map(p => p.trim()).filter(p => p.length > 0);
+                    } else {
+                        parts = [sibText];
+                    }
+
+                    if (parts.length >= 2) {
+                        company = parts[0];
+                        location = parts.slice(1).join(' - ');
+                        break;
+                    } else if (parts.length === 1) {
+                        company = parts[0];
+                        break;
+                    }
+                }
+            }
+
+            if (!company) {
+                const compSelectors = [
+                    '[data-testid="company"]',
+                    '[data-testid="employer"]',
+                    '.company',
+                    '.employer',
+                    '.company-name',
+                    'span.company',
+                    '[class*="company"]',
+                    '[class*="employer"]',
+                    '[class*="organization"]',
+                    '[class*="companyName"]',
+                    '[class*="company-name"]',
+                    'span[class*="company"]',
+                    'a[class*="company"]',
+                    'a[href*="company"]'
+                ];
+                for (const sel of compSelectors) {
+                    const el = card.querySelector(sel);
+                    if (el && el.innerText && el.innerText.trim()) {
+                        company = el.innerText.trim();
+                        break;
+                    }
+                }
+            }
+
+            if (!company && textLines.length > 0) {
+                const filtered = textLines.filter(l => l !== title && !['שמור', 'שמירה', 'Apply', 'הגש', 'הגשת מועמדות'].some(k => l.includes(k)));
+                if (filtered.length > 0) {
+                    const firstLine = filtered[0];
+                    let parts = [];
+                    if (firstLine.includes('•') || firstLine.includes('|') || firstLine.includes('\n')) {
+                        parts = firstLine.split(/[•|\n]+/).map(p => p.trim()).filter(p => p.length > 0);
+                    } else if (firstLine.includes('-')) {
+                        parts = firstLine.split(/[-]+/).map(p => p.trim()).filter(p => p.length > 0);
+                    } else {
+                        parts = [firstLine];
+                    }
+                    if (parts.length >= 2) {
+                        company = parts[0];
+                        if (!location) location = parts.slice(1).join(' - ');
+                    } else if (parts.length === 1) {
+                        company = parts[0];
+                    }
+                }
+            }
+            if (!company) {
+                company = "Unknown Company";
+            }
+
+            if (!location) {
+                const locSelectors = [
+                    '[data-testid="location"]',
+                    '.location',
+                    '.job-location',
+                    'span.location',
+                    '.job-card-location',
+                    '[class*="location"]',
+                    '[class*="city"]',
+                    '[class*="place"]',
+                    '[class*="work-mode"]'
+                ];
+                for (const sel of locSelectors) {
+                    const el = card.querySelector(sel);
+                    if (el && el.innerText && el.innerText.trim()) {
+                        location = el.innerText.trim();
+                        break;
+                    }
+                }
+            }
+
+            // C. Job ID extraction & Deterministic Generation
+            let jobId = card.getAttribute('data-mcp-job-id') ||
+                        card.getAttribute('data-job-id') ||
+                        card.getAttribute('data-id') ||
+                        card.id ||
+                        "";
+            if (!jobId || !jobId.trim()) {
+                const hashInput = `${title}_${company}_${location}_${index}`;
+                jobId = `job-${djb2(hashInput)}`;
+            }
+
+            // D. Stamp DOM element
+            card.setAttribute('data-mcp-job-id', jobId);
+
+            // E. Description
+            let description = "";
+            const descSelectors = [
+                '[data-testid="job-description"]',
+                '.job-description',
+                '.description',
+                '[class*="description"]',
+                '[class*="summary"]',
+                'p.text-sm', 'p.text-xs', 'p'
+            ];
+            for (const sel of descSelectors) {
+                const el = card.querySelector(sel);
+                if (el && el.innerText && el.innerText.trim() && el.innerText.trim() !== company && el.innerText.trim() !== location) {
+                    description = el.innerText.trim();
+                    break;
+                }
+            }
+
+            // F. Salary
+            let salary = "";
+            const salarySelectors = [
+                '[data-testid="salary"]',
+                '[data-testid="salary-range"]',
+                '.salary',
+                '.salary-range',
+                '[class*="salary"]',
+                '[class*="compensation"]'
+            ];
+            for (const sel of salarySelectors) {
+                const el = card.querySelector(sel);
+                if (el && el.innerText && el.innerText.trim()) {
+                    salary = el.innerText.trim();
+                    break;
+                }
+            }
+
+            // G. Posted Date
+            let postedDate = "";
+            const dateSelectors = [
+                '[data-testid="posted-date"]',
+                '.posted-date',
+                '[class*="date"]',
+                '[class*="posted"]',
+                'time'
+            ];
+            for (const sel of dateSelectors) {
+                const el = card.querySelector(sel);
+                if (el && el.innerText && el.innerText.trim()) {
+                    postedDate = el.innerText.trim();
+                    break;
+                }
+            }
+
+            // H. Tech Stack Badges
+            const techStack = [];
+            const badgeSelectors = [
+                '[data-testid="tech-badge"]',
+                '.tech-badge',
+                '[class*="badge"]',
+                '[class*="tag"]',
+                '[class*="skill"]',
+                '[class*="chip"]',
+                'span.rounded'
+            ];
+            for (const bSel of badgeSelectors) {
+                const badges = card.querySelectorAll(bSel);
+                if (badges && badges.length > 0) {
+                    badges.forEach(b => {
+                        const txt = (b.innerText || "").trim();
+                        if (txt && txt.length <= 30 && !techStack.includes(txt) && txt !== title && txt !== company && txt !== location) {
+                            techStack.push(txt);
+                        }
+                    });
+                    if (techStack.length > 0) break;
+                }
+            }
+
+            // I. URL
+            let url = null;
+            const linkEl = card.querySelector('a[href]');
+            if (linkEl) {
+                const href = linkEl.getAttribute('href');
+                if (href) {
+                    if (href.startsWith('/')) {
+                        url = `https://hiremetech.com${href}`;
+                    } else {
+                        url = href;
+                    }
+                }
+            }
+
+            // J. Bookmark Status
+            let isBookmarked = false;
+            const bmSelectors = [
+                'button.bg-ht-primary-500',
+                'button[class*="bg-ht-primary"]',
+                '[data-testid="bookmark-btn"]',
+                'button[aria-label*="save" i]',
+                'button[aria-label*="bookmark" i]',
+                'button[aria-label*="שמור" i]',
+                'button[aria-label*="שמירה" i]',
+                'button.bookmark',
+                '.favorite-btn',
+                'button'
+            ];
+            for (const bmSel of bmSelectors) {
+                const bmBtn = card.querySelector(bmSel);
+                if (bmBtn) {
+                    const bmClasses = bmBtn.getAttribute('class') || '';
+                    const bmAria = bmBtn.getAttribute('aria-pressed') || '';
+                    if (
+                        bmClasses.includes('active') ||
+                        bmClasses.includes('saved') ||
+                        bmClasses.includes('bookmarked') ||
+                        bmAria.toLowerCase() === 'true'
+                    ) {
+                        isBookmarked = true;
+                    }
+                    break;
+                }
+            }
+
+            results.push({
+                job_id: jobId,
+                title: title,
+                company: company,
+                location: location,
+                description: description,
+                salary_range: salary || null,
+                posted_date: postedDate || null,
+                tech_stack: techStack,
+                url: url,
+                is_bookmarked: isBookmarked,
+                raw_text: rawText
+            });
+
+        } catch (cardErr) {
+            // Ignore card error and proceed to next
+        }
+    });
+
+    return results;
+}
+"""
+
+
+async def _extract_jobs_via_locators(page: Page, card_selector: str) -> list[Job]:
+    """Fallback extraction using Playwright locators when single-pass JS evaluation is unavailable.
 
     Args:
         page: Playwright active page.
+        card_selector: Selector for job cards.
 
     Returns:
-        list[Job]: List of extracted job models.
+        list[Job]: Extracted job models.
     """
-    card_selector = await _resolve_selector(page, "job_card")
     card_locators = page.locator(card_selector)
     count = await card_locators.count()
 
-    logger.info("Found %d job card elements using selector '%s'", count, card_selector)
+    logger.info("Found %d job card elements using locator selector '%s'", count, card_selector)
     jobs: list[Job] = []
 
     for i in range(count):
@@ -285,8 +632,8 @@ async def extract_jobs(page: Page) -> list[Job]:
                     except Exception:
                         continue
 
+            lines = await _extract_meaningful_lines(card)
             if not title:
-                lines = await _extract_meaningful_lines(card)
                 if lines:
                     title = lines[0]
             if not title:
@@ -302,13 +649,18 @@ async def extract_jobs(page: Page) -> list[Job]:
                         sib_loc = card.locator(sib_sel).first
                         sib_text = await _safe_get_text(sib_loc)
                         if sib_text:
-                            # Split on bullet characters •, |, -, or newlines
-                            parts = [p.strip() for p in re.split(r"[•|\-\n]+", sib_text) if p.strip()]
+                            if "•" in sib_text or "|" in sib_text or "\n" in sib_text:
+                                parts = [p.strip() for p in re.split(r"[•|\n]+", sib_text) if p.strip()]
+                            elif "-" in sib_text:
+                                parts = [p.strip() for p in sib_text.split("-") if p.strip()]
+                            else:
+                                parts = [sib_text.strip()]
+
                             if len(parts) >= 2:
                                 if not company:
                                     company = parts[0]
                                 if not location:
-                                    location = parts[1]
+                                    location = " - ".join(parts[1:])
                                 break
                             elif len(parts) == 1:
                                 if not company:
@@ -335,20 +687,22 @@ async def extract_jobs(page: Page) -> list[Job]:
                         continue
 
             if not company:
-                lines = await _extract_meaningful_lines(card)
                 filtered = [l for l in lines if l != title and not any(k in l for k in ["שמור", "Apply", "הגש"])]
                 if filtered:
                     first_line = filtered[0]
-                    if any(sep in first_line for sep in ["•", "|", "-"]):
-                        parts = [p.strip() for p in re.split(r"[•|\-\n]+", first_line) if p.strip()]
-                        if len(parts) >= 2:
-                            company = parts[0]
-                            if not location:
-                                location = parts[1]
-                        elif len(parts) == 1:
-                            company = parts[0]
+                    if "•" in first_line or "|" in first_line or "\n" in first_line:
+                        parts = [p.strip() for p in re.split(r"[•|\n]+", first_line) if p.strip()]
+                    elif "-" in first_line:
+                        parts = [p.strip() for p in first_line.split("-") if p.strip()]
                     else:
-                        company = first_line
+                        parts = [first_line.strip()]
+
+                    if len(parts) >= 2:
+                        company = parts[0]
+                        if not location:
+                            location = " - ".join(parts[1:])
+                    elif len(parts) == 1:
+                        company = parts[0]
 
             if not company:
                 company = "Unknown Company"
@@ -418,7 +772,7 @@ async def extract_jobs(page: Page) -> list[Job]:
             tech_stack = sorted(list(set(tech_stack + heuristic_tech)), key=lambda s: s.lower())
 
             # Determine work mode
-            work_mode = _parse_work_mode(f"{location} {title} {description}")
+            work_mode = _parse_work_mode(f"{location} {title} {description} {' '.join(lines)}")
 
             # Extract URL if available
             link_locator = card.locator("a[href]").first
@@ -491,6 +845,78 @@ async def extract_jobs(page: Page) -> list[Job]:
 
     logger.info("Successfully extracted %d jobs from page.", len(jobs))
     return jobs
+
+
+@browser_retry
+async def extract_jobs(page: Page) -> list[Job]:
+    """Extract job listings from the current page using single-pass JS evaluation with locator fallback.
+
+    Args:
+        page: Playwright active page.
+
+    Returns:
+        list[Job]: List of extracted job models.
+    """
+    try:
+        card_selector = await _resolve_selector(page, "job_card")
+    except Exception:
+        card_selector = "div.jobs-app-glass-surface, div.shadow-ht-card, [data-testid='job-card']"
+
+    # Tier 1: Fast Single-Pass JavaScript Evaluation
+    try:
+        if hasattr(page, "evaluate"):
+            eval_res = page.evaluate(JS_EXTRACT_ALL_JOBS, card_selector)
+            if hasattr(eval_res, "__await__"):
+                raw_jobs = await eval_res
+            else:
+                raw_jobs = eval_res
+
+            if isinstance(raw_jobs, list) and len(raw_jobs) > 0 and all(isinstance(x, dict) for x in raw_jobs):
+                jobs: list[Job] = []
+                for idx, raw in enumerate(raw_jobs):
+                    title = raw.get("title") or "Untitled Position"
+                    company = raw.get("company") or "Unknown Company"
+                    location = raw.get("location") or ""
+                    description = raw.get("description") or ""
+                    salary = raw.get("salary_range")
+                    posted_date = raw.get("posted_date")
+                    job_id = raw.get("job_id") or ""
+                    if not job_id:
+                        hash_input = f"{title}_{company}_{location}_{idx}".encode("utf-8")
+                        job_id = f"job-{hashlib.md5(hash_input).hexdigest()[:10]}"
+
+                    tech_stack = list(raw.get("tech_stack") or [])
+                    combined_text = f"{title} {description} {' '.join(tech_stack)}"
+                    heuristic_tech = _extract_tech_from_text(combined_text)
+                    tech_stack = sorted(list(set(tech_stack + heuristic_tech)), key=lambda s: s.lower())
+
+                    raw_text = raw.get("raw_text") or ""
+                    work_mode = _parse_work_mode(f"{location} {title} {description} {raw_text}")
+                    url = raw.get("url")
+                    is_bookmarked = bool(raw.get("is_bookmarked", False))
+
+                    jobs.append(
+                        Job(
+                            job_id=job_id,
+                            title=title,
+                            company=company,
+                            location=location,
+                            work_mode=work_mode,
+                            tech_stack=tech_stack,
+                            description=description,
+                            salary_range=salary if salary else None,
+                            posted_date=posted_date if posted_date else None,
+                            url=url,
+                            is_bookmarked=is_bookmarked,
+                        )
+                    )
+                logger.info("Fast single-pass JS evaluation extracted %d jobs from page.", len(jobs))
+                return jobs
+    except Exception as exc:
+        logger.debug("Fast single-pass JS extraction encountered exception: %s. Falling back to locators.", exc)
+
+    # Tier 2: Resilient locator-based fallback
+    return await _extract_jobs_via_locators(page, card_selector)
 
 
 @browser_retry
