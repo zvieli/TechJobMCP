@@ -63,6 +63,22 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
 
         mock_shutdown.assert_called_once()
 
+    async def test_tool_response_contains_trace_id(self):
+        """Verify that tool responses include an auto-generated trace_id."""
+        from hireme_mcp.main import set_operation_mode
+        res = await set_operation_mode(mode="autonomous")
+        self.assertTrue(res["success"])
+        self.assertIn("trace_id", res)
+        self.assertIsNotNone(res["trace_id"])
+        self.assertEqual(len(res["trace_id"]), 8)
+
+        # Invalid mode error response
+        err_res = await set_operation_mode(mode="invalid_mode_xyz")
+        self.assertFalse(err_res["success"])
+        self.assertIn("trace_id", err_res)
+        self.assertIsNotNone(err_res["trace_id"])
+        self.assertEqual(len(err_res["trace_id"]), 8)
+
 
 class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
     """Tests for setup CLI and __main__ execution."""

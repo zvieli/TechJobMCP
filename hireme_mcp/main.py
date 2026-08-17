@@ -31,9 +31,26 @@ from hireme_mcp.models.schemas import (
     ToolResponse,
     WorkMode,
 )
-from hireme_mcp.utils.logger import get_logger
+from hireme_mcp.utils.logger import generate_trace_id, get_logger
 
 logger = get_logger(__name__)
+
+
+def _response(
+    success: bool,
+    message: str,
+    data: Any = None,
+    error_code: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build a ToolResponse dict with auto-generated trace_id."""
+    return ToolResponse(
+        success=success,
+        message=message,
+        data=data,
+        error_code=error_code,
+        trace_id=generate_trace_id(),
+    ).model_dump()
+
 
 # Server system instructions
 SERVER_INSTRUCTIONS = """
@@ -263,16 +280,16 @@ async def set_operation_mode(
     try:
         new_mode = OperationMode(mode_clean)
     except ValueError:
-        return ToolResponse(
+        return _response(
             success=False,
             message=f"Invalid operation mode '{mode}'. Valid modes: 'supervised', 'autonomous'.",
             error_code="INVALID_MODE",
-        ).model_dump()
+        )
 
     _operation_mode = new_mode
     logger.info("Operation mode changed to: %s", new_mode.value)
 
-    return ToolResponse(
+    return _response(
         success=True,
         message=(
             f"Operation mode set to '{new_mode.value}'. "
@@ -284,7 +301,7 @@ async def set_operation_mode(
             )
         ),
         data={"mode": new_mode.value},
-    ).model_dump()
+    )
 
 
 @mcp.tool()
@@ -309,23 +326,23 @@ async def get_job_matches(
         cached_jobs = cache.get_all()
         if cached_jobs:
             logger.info("Returning %d jobs from cache.", len(cached_jobs))
-            return ToolResponse(
+            return _response(
                 success=True,
                 message=f"Retrieved {len(cached_jobs)} cached job matches.",
                 data=[job.model_dump() for job in cached_jobs],
-            ).model_dump()
+            )
 
     try:
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
-            return ToolResponse(
+            return _response(
                 success=False,
                 message=(
                     "Browser session is not authenticated or not logged into HireMeTech. "
                     "Please run 'python -m hireme_mcp.setup' to authenticate."
                 ),
                 error_code="UNAUTHENTICATED",
-            ).model_dump()
+            )
 
         page = await session.get_page()
         target_url = f"{BASE_URL}{DASHBOARD_PATH}"
@@ -339,19 +356,19 @@ async def get_job_matches(
         jobs = await browser_extract_jobs(page)
         cache.update(jobs)
 
-        return ToolResponse(
+        return _response(
             success=True,
             message=f"Successfully fetched {len(jobs)} live job matches.",
             data=[job.model_dump() for job in jobs],
-        ).model_dump()
+        )
 
     except Exception as exc:
         logger.exception("Error in get_job_matches: %s", exc)
-        return ToolResponse(
+        return _response(
             success=False,
             message=f"Failed to fetch job matches: {exc}",
             error_code="FETCH_ERROR",
-        ).model_dump()
+        )
 
 
 @mcp.tool()
@@ -384,11 +401,11 @@ async def filter_jobs_by_preferences(
     cached_jobs = cache.get_all()
 
     if not cached_jobs:
-        return ToolResponse(
+        return _response(
             success=False,
             message="No job listings found in cache. Please call 'get_job_matches' first to load jobs.",
             error_code="NO_CACHED_JOBS",
-        ).model_dump()
+        )
 
     parsed_work_mode: Optional[WorkMode] = None
     if work_mode:
@@ -411,18 +428,18 @@ async def filter_jobs_by_preferences(
 
     try:
         filtered = filter_jobs(cached_jobs, prefs)
-        return ToolResponse(
+        return _response(
             success=True,
             message=f"Found {len(filtered)} matching jobs (out of {len(cached_jobs)} total).",
             data=[job.model_dump() for job in filtered],
-        ).model_dump()
+        )
     except Exception as exc:
         logger.exception("Error in filter_jobs_by_preferences: %s", exc)
-        return ToolResponse(
+        return _response(
             success=False,
             message=f"Failed to filter jobs: {exc}",
             error_code="FILTER_ERROR",
-        ).model_dump()
+        )
 
 
 @mcp.tool()
@@ -442,11 +459,11 @@ async def bookmark_job(
     try:
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
-            return ToolResponse(
+            return _response(
                 success=False,
                 message="Browser session is unauthenticated. Please log in first.",
                 error_code="UNAUTHENTICATED",
-            ).model_dump()
+            )
 
         page = await session.get_page()
         await browser_bookmark_job(page, job_id)
@@ -457,19 +474,19 @@ async def bookmark_job(
         if cached_job:
             cached_job.is_bookmarked = True
 
-        return ToolResponse(
+        return _response(
             success=True,
             message=f"Successfully bookmarked job '{job_id}'.",
             data={"job_id": job_id, "is_bookmarked": True},
-        ).model_dump()
+        )
 
     except Exception as exc:
         logger.exception("Error in bookmark_job for '%s': %s", job_id, exc)
-        return ToolResponse(
+        return _response(
             success=False,
             message=f"Failed to bookmark job '{job_id}': {exc}",
             error_code="BOOKMARK_ERROR",
-        ).model_dump()
+        )
 
 
 @mcp.tool()
@@ -489,11 +506,11 @@ async def delete_job(
     try:
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
-            return ToolResponse(
+            return _response(
                 success=False,
                 message="Browser session is unauthenticated. Please log in first.",
                 error_code="UNAUTHENTICATED",
-            ).model_dump()
+            )
 
         page = await session.get_page()
         await browser_delete_job(page, job_id)
@@ -503,19 +520,19 @@ async def delete_job(
         updated_jobs = [j for j in cache.get_all() if j.job_id != job_id]
         cache.update(updated_jobs)
 
-        return ToolResponse(
+        return _response(
             success=True,
             message=f"Successfully dismissed/deleted job '{job_id}'.",
             data={"job_id": job_id},
-        ).model_dump()
+        )
 
     except Exception as exc:
         logger.exception("Error in delete_job for '%s': %s", job_id, exc)
-        return ToolResponse(
+        return _response(
             success=False,
             message=f"Failed to delete job '{job_id}': {exc}",
             error_code="DELETE_ERROR",
-        ).model_dump()
+        )
 
 
 @mcp.tool()
@@ -537,11 +554,11 @@ async def auto_apply_job(
     try:
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
-            return ToolResponse(
+            return _response(
                 success=False,
                 message="Browser session is unauthenticated. Please log in first.",
                 error_code="UNAUTHENTICATED",
-            ).model_dump()
+            )
 
         page = await session.get_page()
         preview = await browser_preview_application(page, job_id)
@@ -549,7 +566,7 @@ async def auto_apply_job(
         # Store preview in pending applications store
         _pending_applications[job_id] = preview.model_dump()
 
-        return ToolResponse(
+        return _response(
             success=True,
             message=(
                 f"Application preview generated for job '{job_id}' ({preview.job_title} at {preview.company}). "
@@ -557,15 +574,15 @@ async def auto_apply_job(
                 f"To submit the application, call 'confirm_auto_apply(job_id=\"{job_id}\")'."
             ),
             data=preview.model_dump(),
-        ).model_dump()
+        )
 
     except Exception as exc:
         logger.exception("Error in auto_apply_job for '%s': %s", job_id, exc)
-        return ToolResponse(
+        return _response(
             success=False,
             message=f"Failed to generate application preview for job '{job_id}': {exc}",
             error_code="PREVIEW_ERROR",
-        ).model_dump()
+        )
 
 
 @mcp.tool()
@@ -585,30 +602,30 @@ async def confirm_auto_apply(
         dict: ToolResponse with submission status and details.
     """
     if job_id not in _pending_applications:
-        return ToolResponse(
+        return _response(
             success=False,
             message=(
                 f"No pending application preview found for job '{job_id}'. "
                 f"You MUST call 'auto_apply_job(job_id=\"{job_id}\")' first to preview and verify before confirming."
             ),
             error_code="NO_PENDING_PREVIEW",
-        ).model_dump()
+        )
 
     try:
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
-            return ToolResponse(
+            return _response(
                 success=False,
                 message="Browser session is unauthenticated. Please log in first.",
                 error_code="UNAUTHENTICATED",
-            ).model_dump()
+            )
 
         page = await session.get_page()
         await browser_execute_application(page, job_id)
 
         preview_details = _pending_applications.pop(job_id)
 
-        return ToolResponse(
+        return _response(
             success=True,
             message=(
                 f"Successfully submitted application for job '{job_id}' "
@@ -619,15 +636,15 @@ async def confirm_auto_apply(
                 "submitted": True,
                 "application_details": preview_details,
             },
-        ).model_dump()
+        )
 
     except Exception as exc:
         logger.exception("Error in confirm_auto_apply for '%s': %s", job_id, exc)
-        return ToolResponse(
+        return _response(
             success=False,
             message=f"Failed to submit application for job '{job_id}': {exc}",
             error_code="APPLY_EXECUTION_ERROR",
-        ).model_dump()
+        )
 
 
 @mcp.tool()
@@ -651,11 +668,11 @@ async def calibrate_selectors(
     try:
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
-            return ToolResponse(
+            return _response(
                 success=False,
                 message="Browser session is unauthenticated. Please log in first.",
                 error_code="UNAUTHENTICATED",
-            ).model_dump()
+            )
 
         page = await session.get_page()
         # Navigate to dashboard if not already there
@@ -674,7 +691,7 @@ async def calibrate_selectors(
         matched_count = sum(1 for v in results.values() if v.get("status") != "failed")
         total_count = len(results)
 
-        return ToolResponse(
+        return _response(
             success=True,
             message=f"Calibrated {matched_count}/{total_count} selectors successfully.",
             data={
@@ -682,13 +699,13 @@ async def calibrate_selectors(
                 "matched_count": matched_count,
                 "total_count": total_count,
             },
-        ).model_dump()
+        )
 
     except Exception as exc:
         logger.exception("Error during selector calibration: %s", exc)
-        return ToolResponse(
+        return _response(
             success=False,
             message=f"Selector calibration failed: {exc}",
             error_code="CALIBRATION_ERROR",
-        ).model_dump()
+        )
 
