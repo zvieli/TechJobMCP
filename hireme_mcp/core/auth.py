@@ -230,6 +230,10 @@ class SessionManager:
                     max_retries,
                     exc,
                 )
+                try:
+                    await self.shutdown()
+                except Exception:
+                    pass
                 # Reset state for next attempt
                 self._initialized = False
 

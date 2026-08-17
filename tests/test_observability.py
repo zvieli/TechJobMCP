@@ -65,6 +65,27 @@ class TestStructuredLogger:
         assert any("should_appear" in l for l in lines)
         assert not any("should_not_appear" in l for l in lines)
 
+    def test_logger_positional_args(self, capfd):
+        log = get_logger("test.positional")
+        log.info("Hello %s, number %d", "world", 123)
+        captured = capfd.readouterr()
+        lines = [l for l in captured.err.strip().split("\n") if l.strip()]
+        parsed = json.loads(lines[-1])
+        assert parsed["event"] == "Hello world, number 123"
+
+    def test_logger_exception_stack_trace(self, capfd):
+        log = get_logger("test.exception")
+        try:
+            raise ValueError("test exception for logger")
+        except ValueError:
+            log.exception("an error occurred")
+        captured = capfd.readouterr()
+        lines = [l for l in captured.err.strip().split("\n") if l.strip()]
+        parsed = json.loads(lines[-1])
+        assert parsed["event"] == "an error occurred"
+        assert "exception" in parsed
+        assert "ValueError: test exception for logger" in parsed["exception"]
+
 
 class TestGenerateTraceId:
     def test_returns_hex_string(self):

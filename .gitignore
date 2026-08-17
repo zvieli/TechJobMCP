@@ -42,3 +42,7 @@ user-data/
 .venv
 .superpowers
 lior_zvieli_cv.pdf
+docs
+logs.txt
+sparkchat.txt
+uv.lock

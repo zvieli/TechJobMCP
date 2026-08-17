@@ -148,8 +148,10 @@ def _configure_structlog() -> None:
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(remove_positional_args=True),
             _level_filter_processor,
             structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.format_exc_info,
             sanitize_processor,
             structlog.processors.JSONRenderer(),
         ],
