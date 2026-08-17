@@ -23,11 +23,11 @@ SELECTORS: dict[str, dict[str, str]] = {
     },
     "job_title": {
         "primary": "[data-testid='job-title']",
-        "fallback": "h2.job-title, h3.title, .job-card-title, a.job-title",
+        "fallback": "h2.job-title, h3.title, .job-card-title, a.job-title, [class*='title'], [class*='position'], [class*='role'], [class*='jobTitle'], [class*='job-title']",
     },
     "job_company": {
         "primary": "[data-testid='company-name']",
-        "fallback": ".company-name, .employer, span.company, a.company",
+        "fallback": ".company-name, .employer, span.company, a.company, [class*='company'], [class*='employer'], [class*='organization'], [class*='companyName'], [class*='company-name']",
     },
     "job_location": {
         "primary": "[data-testid='job-location']",
@@ -35,15 +35,15 @@ SELECTORS: dict[str, dict[str, str]] = {
     },
     "bookmark_button": {
         "primary": "[data-testid='bookmark-btn']",
-        "fallback": "button.bookmark, button[aria-label*='save'], .favorite-btn",
+        "fallback": "button.bookmark, button[aria-label*='save' i], button[aria-label*='bookmark' i], button:has-text('שמור'), button:has-text('שמירה'), button[aria-label*='שמור' i], button[aria-label*='שמירה' i], .favorite-btn",
     },
     "delete_button": {
         "primary": "[data-testid='delete-btn']",
-        "fallback": "button.dismiss, button[aria-label*='hide'], .remove-job-btn",
+        "fallback": "button.dismiss, button[aria-label*='hide' i], button:has-text('מחק'), button:has-text('הסר'), button:has-text('הסרה'), button[aria-label*='מחק' i], button[aria-label*='הסר' i], button[aria-label*='הסרה' i], .remove-job-btn",
     },
     "apply_button": {
         "primary": "[data-testid='apply-btn']",
-        "fallback": "button.apply, a.apply-now, .auto-apply-btn, button:has-text('Apply')",
+        "fallback": "button.apply, a.apply-now, .auto-apply-btn, button:has-text('Apply'), button:has-text('הגש'), button:has-text('הגשת מועמדות'), button:has-text('הגש מועמדות'), a:has-text('הגש'), a:has-text('הגשת מועמדות'), button[aria-label*='הגש' i]",
     },
     "tech_badge": {
         "primary": "[data-testid='tech-badge']",
@@ -63,7 +63,7 @@ SELECTORS: dict[str, dict[str, str]] = {
     },
     "submit_button": {
         "primary": "[data-testid='submit-btn']",
-        "fallback": "button[type='submit'], button:has-text('Submit'), button:has-text('Send Application'), button:has-text('Confirm')",
+        "fallback": "button[type='submit'], button:has-text('Submit'), button:has-text('Send Application'), button:has-text('Confirm'), button:has-text('שלח'), button:has-text('שליחה'), button:has-text('אישור'), button[aria-label*='שלח' i]",
     },
 }
 
@@ -71,10 +71,14 @@ SELECTORS: dict[str, dict[str, str]] = {
 CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
     "job_title": [
         "[data-testid*='title']",
+        "[data-testid*='position']",
+        "[data-testid*='role']",
         "h1, h2, h3, h4",
         "[class*='title']",
         "[class*='position']",
         "[class*='role']",
+        "[class*='jobTitle']",
+        "[class*='job-title']",
         "a[href*='job']",
         "a[href*='listing']",
         "a.title",
@@ -86,6 +90,8 @@ CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
         "[class*='company']",
         "[class*='employer']",
         "[class*='organization']",
+        "[class*='companyName']",
+        "[class*='company-name']",
         "span.company",
         "a.company",
         ".company-name",
@@ -106,6 +112,12 @@ CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
         "button[aria-label*='bookmark' i]",
         "button[aria-label*='save' i]",
         "button[aria-label*='favorite' i]",
+        "button[aria-label*='שמור' i]",
+        "button[aria-label*='שמירה' i]",
+        "button:has-text('שמור')",
+        "button:has-text('שמירה')",
+        "a:has-text('שמור')",
+        "a:has-text('שמירה')",
         "button.bookmark",
         "button.save",
         ".bookmark-btn",
@@ -122,6 +134,12 @@ CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
         "button[aria-label*='dismiss' i]",
         "button[aria-label*='hide' i]",
         "button[aria-label*='remove' i]",
+        "button[aria-label*='מחק' i]",
+        "button[aria-label*='הסר' i]",
+        "button[aria-label*='הסרה' i]",
+        "button:has-text('מחק')",
+        "button:has-text('הסר')",
+        "button:has-text('הסרה')",
         "button.dismiss",
         "button.delete",
         ".dismiss-btn",
@@ -133,7 +151,15 @@ CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
         "[data-testid*='apply']",
         "button:has-text('Apply')",
         "a:has-text('Apply')",
+        "button:has-text('הגש')",
+        "button:has-text('הגשת מועמדות')",
+        "button:has-text('הגש מועמדות')",
+        "a:has-text('הגש')",
+        "a:has-text('הגשת מועמדות')",
+        "a:has-text('הגש מועמדות')",
         "button[aria-label*='apply' i]",
+        "button[aria-label*='הגש' i]",
+        "button[aria-label*='הגשת מועמדות' i]",
         "a[aria-label*='apply' i]",
         "button.apply",
         "a.apply-now",
@@ -192,6 +218,10 @@ CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
         "button:has-text('Send Application')",
         "button:has-text('Confirm')",
         "button:has-text('Apply Now')",
+        "button:has-text('שלח')",
+        "button:has-text('שליחה')",
+        "button:has-text('אישור')",
+        "button[aria-label*='שלח' i]",
     ],
 }
 

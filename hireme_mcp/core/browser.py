@@ -192,6 +192,15 @@ async def _safe_get_text(locator: Locator) -> str:
     return ""
 
 
+async def _extract_meaningful_lines(locator: Locator) -> list[str]:
+    """Safely extract non-empty trimmed text lines from a locator."""
+    text = await _safe_get_text(locator)
+    if not text:
+        return []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return lines
+
+
 @browser_retry
 async def extract_jobs(page: Page) -> list[Job]:
     """Extract job listings from the current page.
@@ -214,7 +223,8 @@ async def extract_jobs(page: Page) -> list[Job]:
         try:
             # Extract job ID
             job_id = (
-                await card.get_attribute("data-job-id")
+                await card.get_attribute("data-mcp-job-id")
+                or await card.get_attribute("data-job-id")
                 or await card.get_attribute("data-id")
                 or await card.get_attribute("id")
                 or ""
@@ -257,19 +267,87 @@ async def extract_jobs(page: Page) -> list[Job]:
             except ValueError:
                 posted_date = ""
 
-            # Fallbacks if title/company are empty
+            # Resilient fallbacks for title
             if not title:
-                heading = card.locator("h1, h2, h3, h4, h5, .title").first
-                title = await _safe_get_text(heading) or "Untitled Position"
+                for sel in [
+                    "h1, h2, h3, h4, h5, h6",
+                    "[class*='title'], [class*='position'], [class*='role'], [class*='jobTitle'], [class*='job-title']",
+                    "a[href*='job'], a[href*='listing'], a[href*='position'], a.title",
+                    "[data-testid*='title']",
+                    "strong",
+                ]:
+                    try:
+                        heading = card.locator(sel).first
+                        candidate = await _safe_get_text(heading)
+                        if candidate:
+                            title = candidate
+                            break
+                    except Exception:
+                        continue
+
+            if not title:
+                lines = await _extract_meaningful_lines(card)
+                if lines:
+                    title = lines[0]
+            if not title:
+                title = "Untitled Position"
+
+            # Resilient fallbacks for company
+            if not company:
+                for sel in [
+                    ".company, .employer, .company-name",
+                    "[class*='company'], [class*='employer'], [class*='organization'], [class*='companyName'], [class*='company-name']",
+                    "span[class*='company'], a[class*='company'], a[href*='company']",
+                    "[data-testid*='company'], [data-testid*='employer']",
+                ]:
+                    try:
+                        comp_fallback = card.locator(sel).first
+                        candidate = await _safe_get_text(comp_fallback)
+                        if candidate:
+                            company = candidate
+                            break
+                    except Exception:
+                        continue
 
             if not company:
-                comp_fallback = card.locator(".company, .employer, span[class*='company']").first
-                company = await _safe_get_text(comp_fallback) or "Unknown Company"
+                lines = await _extract_meaningful_lines(card)
+                if len(lines) > 1 and lines[0] == title:
+                    company = lines[1]
+                elif lines and lines[0] != title:
+                    company = lines[0]
+
+            if not company:
+                company = "Unknown Company"
 
             # Generate deterministic fallback ID if not present in attributes
             if not job_id:
                 hash_input = f"{title}_{company}_{location}_{i}".encode("utf-8")
                 job_id = f"job-{hashlib.md5(hash_input).hexdigest()[:10]}"
+
+            # DOM Card Stamping: stamp data-mcp-job-id on the element
+            try:
+                if hasattr(card, "evaluate"):
+                    eval_res = card.evaluate("(el, id) => el.setAttribute('data-mcp-job-id', id)", job_id)
+                    if hasattr(eval_res, "__await__"):
+                        await eval_res
+            except Exception as exc:
+                logger.debug("Failed to stamp card locator %d: %s", i, exc)
+
+            try:
+                if hasattr(page, "evaluate"):
+                    eval_res = page.evaluate(
+                        """([selector, index, jobId]) => {
+                            const cards = document.querySelectorAll(selector);
+                            if (cards && cards[index]) {
+                                cards[index].setAttribute('data-mcp-job-id', jobId);
+                            }
+                        }""",
+                        [card_selector, i, job_id],
+                    )
+                    if hasattr(eval_res, "__await__"):
+                        await eval_res
+            except Exception as exc:
+                logger.debug("Failed to stamp card via page.evaluate %d: %s", i, exc)
 
             # Extract tech stack badges
             tech_stack: list[str] = []
@@ -339,6 +417,28 @@ async def extract_jobs(page: Page) -> list[Job]:
             logger.warning("Failed to parse job card index %d: %s", i, exc)
             continue
 
+    # Batch DOM Card Stamping as extra resilience
+    try:
+        if hasattr(page, "evaluate") and jobs:
+            job_ids = [j.job_id for j in jobs]
+            eval_res = page.evaluate(
+                """([selector, ids]) => {
+                    const cards = document.querySelectorAll(selector);
+                    if (cards) {
+                        ids.forEach((id, idx) => {
+                            if (cards[idx]) {
+                                cards[idx].setAttribute('data-mcp-job-id', id);
+                            }
+                        });
+                    }
+                }""",
+                [card_selector, job_ids],
+            )
+            if hasattr(eval_res, "__await__"):
+                await eval_res
+    except Exception as exc:
+        logger.debug("Batch DOM stamping evaluation failed: %s", exc)
+
     logger.info("Successfully extracted %d jobs from page.", len(jobs))
     return jobs
 
@@ -356,8 +456,9 @@ async def bookmark_job(page: Page, job_id: str) -> bool:
     """
     logger.info("Bookmarking job: %s", job_id)
 
-    # Locate the target job card
+    # Locate the target job card (prioritizing stamped MCP job ID)
     card = page.locator(
+        f"[data-mcp-job-id='{job_id}'], "
         f"[data-testid='job-card'][data-job-id='{job_id}'], "
         f"[data-job-id='{job_id}'], [data-id='{job_id}'], #{job_id}"
     ).first
@@ -365,6 +466,7 @@ async def bookmark_job(page: Page, job_id: str) -> bool:
     if await card.count() == 0:
         # Try matching card containing the job ID text
         card = page.locator(
+            f"[data-mcp-job-id='{job_id}'], "
             f"div:has-text('{job_id}'), article:has-text('{job_id}'), [data-testid='job-card']"
         ).first
 
@@ -396,12 +498,14 @@ async def delete_job(page: Page, job_id: str) -> bool:
     logger.info("Deleting/Dismissing job: %s", job_id)
 
     card = page.locator(
+        f"[data-mcp-job-id='{job_id}'], "
         f"[data-testid='job-card'][data-job-id='{job_id}'], "
         f"[data-job-id='{job_id}'], [data-id='{job_id}'], #{job_id}"
     ).first
 
     if await card.count() == 0:
         card = page.locator(
+            f"[data-mcp-job-id='{job_id}'], "
             f"div:has-text('{job_id}'), article:has-text('{job_id}'), [data-testid='job-card']"
         ).first
 
@@ -433,12 +537,13 @@ async def preview_application(page: Page, job_id: str) -> ApplicationPreview:
     logger.info("Previewing application for job: %s", job_id)
 
     card = page.locator(
+        f"[data-mcp-job-id='{job_id}'], "
         f"[data-testid='job-card'][data-job-id='{job_id}'], "
         f"[data-job-id='{job_id}'], [data-id='{job_id}'], #{job_id}"
     ).first
 
     if await card.count() == 0:
-        card = page.locator(f"[data-testid='job-card']").first
+        card = page.locator(f"[data-mcp-job-id='{job_id}'], [data-testid='job-card']").first
 
     try:
         title_sel = await _resolve_selector(card, "job_title") if await card.count() > 0 else "h2"
@@ -587,12 +692,13 @@ async def execute_application(page: Page, job_id: str) -> bool:
     logger.info("Executing application submission for job: %s", job_id)
 
     card = page.locator(
+        f"[data-mcp-job-id='{job_id}'], "
         f"[data-testid='job-card'][data-job-id='{job_id}'], "
         f"[data-job-id='{job_id}'], [data-id='{job_id}'], #{job_id}"
     ).first
 
     if await card.count() == 0:
-        card = page.locator(f"[data-testid='job-card']").first
+        card = page.locator(f"[data-mcp-job-id='{job_id}'], [data-testid='job-card']").first
 
     try:
         apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
