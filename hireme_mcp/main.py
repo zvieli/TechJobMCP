@@ -95,6 +95,41 @@ _pending_applications: dict[str, dict[str, Any]] = {}
 # Current operation mode
 _operation_mode: OperationMode = OperationMode.SUPERVISED
 
+# Timeout constant for live scraping operations to avoid proxy / tunnel timeouts (e.g. DevTunnel 10s limit)
+_SCRAPE_TIMEOUT_SECONDS: float = 8.0
+
+
+async def _warm_cache(session: SessionManager, cache: JobCache) -> None:
+    """Warm up the job cache asynchronously in the background during startup.
+
+    Checks session health via `ensure_ready()`. If authenticated and healthy,
+    navigates to the dashboard, extracts current jobs, and populates the cache.
+    Catches all exceptions gracefully so background warmup never crashes the server.
+    """
+    try:
+        page = await session.ensure_ready(max_retries=2)
+    except Exception as exc:
+        logger.info("Cache warmup skipped (session not ready / unauthenticated): %s", exc)
+        return
+
+    try:
+        target_url = f"{BASE_URL}{DASHBOARD_PATH}"
+        if DASHBOARD_PATH not in (page.url or ""):
+            await page.goto(target_url, wait_until="commit", timeout=int(_SCRAPE_TIMEOUT_SECONDS * 1000))
+            if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
+                t = page.wait_for_timeout(2000)
+                if asyncio.iscoroutine(t):
+                    await t
+
+        jobs = await asyncio.wait_for(browser_extract_jobs(page), timeout=_SCRAPE_TIMEOUT_SECONDS)
+        cache.update(jobs)
+        logger.info("Cache warmup completed with %d jobs.", len(jobs))
+    except asyncio.CancelledError:
+        logger.debug("Cache warmup task cancelled.")
+        raise
+    except Exception as exc:
+        logger.warning("Cache warmup failed: %s", exc)
+
 
 @asynccontextmanager
 async def browser_lifespan(server: FastMCP):
@@ -112,10 +147,19 @@ async def browser_lifespan(server: FastMCP):
     except Exception as exc:
         logger.warning("SessionManager initial start notice: %s", exc)
 
+    warmup_task = asyncio.create_task(_warm_cache(session_mgr, job_cache))
+
     try:
         yield {"session": session_mgr, "cache": job_cache}
     finally:
         logger.info("Shutting down HireMeTech FastMCP lifespan...")
+        if warmup_task and not warmup_task.done():
+            warmup_task.cancel()
+            try:
+                await warmup_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         try:
             await session_mgr.shutdown()
         except Exception as exc:
@@ -344,16 +388,18 @@ async def get_job_matches(
                 error_code="UNAUTHENTICATED",
             )
 
-        page = await session.get_page()
-        target_url = f"{BASE_URL}{DASHBOARD_PATH}"
-        if DASHBOARD_PATH not in (page.url or ""):
-            await page.goto(target_url, wait_until="commit", timeout=20000)
-            if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
-                t = page.wait_for_timeout(2500)
-                if asyncio.iscoroutine(t):
-                    await t
+        async def _scrape_live() -> list[Job]:
+            page = await session.get_page()
+            target_url = f"{BASE_URL}{DASHBOARD_PATH}"
+            if DASHBOARD_PATH not in (page.url or ""):
+                await page.goto(target_url, wait_until="commit", timeout=int(_SCRAPE_TIMEOUT_SECONDS * 1000))
+                if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
+                    t = page.wait_for_timeout(2500)
+                    if asyncio.iscoroutine(t):
+                        await t
+            return await browser_extract_jobs(page)
 
-        jobs = await browser_extract_jobs(page)
+        jobs = await asyncio.wait_for(_scrape_live(), timeout=_SCRAPE_TIMEOUT_SECONDS)
         cache.update(jobs)
 
         return _response(
@@ -362,6 +408,13 @@ async def get_job_matches(
             data=[job.model_dump() for job in jobs],
         )
 
+    except (asyncio.TimeoutError, TimeoutError):
+        logger.warning("Scraping jobs timed out after %.1fs.", _SCRAPE_TIMEOUT_SECONDS)
+        return _response(
+            success=False,
+            message=f"Scraping job matches timed out after {_SCRAPE_TIMEOUT_SECONDS:.0f} seconds.",
+            error_code="FETCH_ERROR",
+        )
     except Exception as exc:
         logger.exception("Error in get_job_matches: %s", exc)
         return _response(

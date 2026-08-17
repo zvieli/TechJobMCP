@@ -1,8 +1,12 @@
 """Unit tests for DOM card stamping, Hebrew button resolution, and resilient fallback extraction."""
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastmcp import Context, FastMCP
+from hireme_mcp.core.api_client import JobCache
+from hireme_mcp.core.auth import BASE_URL, DASHBOARD_PATH, SessionManager
 from hireme_mcp.core.browser import (
     _resolve_selector,
     bookmark_job,
@@ -12,7 +16,8 @@ from hireme_mcp.core.browser import (
     preview_application,
 )
 from hireme_mcp.core.discovery import CHILD_ROLE_CANDIDATES, SELECTORS, DynamicSelectorRegistry
-from hireme_mcp.models.schemas import Job
+from hireme_mcp.main import _warm_cache, browser_lifespan, get_job_matches
+from hireme_mcp.models.schemas import Job, WorkMode
 
 
 class MockLocator:
@@ -204,3 +209,121 @@ class TestDomCardStampingAndResilience(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(jobs[0].company, "Unknown Company")
         self.assertEqual(jobs[0].title, "ארכיטקט תוכנה ענן")
         self.assertEqual(jobs[0].company, "סטארטאפ פינטק")
+
+
+class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
+    """Tests for background cache warmup task and lifespan integration."""
+
+    def setUp(self):
+        self.sample_jobs = [
+            Job(
+                job_id="job-warmup-1",
+                title="Fullstack Engineer",
+                company="Warmup Startup",
+                location="Tel Aviv",
+                work_mode=WorkMode.HYBRID,
+                tech_stack=["Python", "FastAPI", "React"],
+                description="Exciting role",
+            )
+        ]
+
+    @patch("hireme_mcp.main.browser_extract_jobs")
+    async def test_warm_cache_populates_cache_when_authenticated(self, mock_extract):
+        """Verify _warm_cache navigates and updates JobCache when session is healthy."""
+        mock_extract.return_value = self.sample_jobs
+
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_page = AsyncMock()
+        mock_page.url = "https://hiremetech.com/login"
+        mock_session.ensure_ready.return_value = mock_page
+
+        cache = JobCache(ttl_minutes=15)
+        self.assertEqual(len(cache.get_all()), 0)
+
+        await _warm_cache(mock_session, cache)
+
+        self.assertEqual(len(cache.get_all()), 1)
+        self.assertEqual(cache.get_all()[0].job_id, "job-warmup-1")
+        mock_page.goto.assert_called_once_with(f"{BASE_URL}{DASHBOARD_PATH}", wait_until="commit", timeout=8000)
+        mock_extract.assert_called_once_with(mock_page)
+
+    @patch("hireme_mcp.main.browser_extract_jobs")
+    async def test_warm_cache_handles_unauthenticated_gracefully(self, mock_extract):
+        """Verify _warm_cache does not raise and leaves cache empty if ensure_ready fails."""
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session.ensure_ready.side_effect = RuntimeError("Session unauthenticated")
+
+        cache = JobCache(ttl_minutes=15)
+        # Should not raise exception
+        await _warm_cache(mock_session, cache)
+
+        self.assertEqual(len(cache.get_all()), 0)
+        mock_extract.assert_not_called()
+
+    @patch("hireme_mcp.main.browser_extract_jobs")
+    async def test_warm_cache_handles_extraction_error_gracefully(self, mock_extract):
+        """Verify _warm_cache catches unexpected extraction exceptions without crashing."""
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_page = AsyncMock()
+        mock_page.url = f"{BASE_URL}{DASHBOARD_PATH}"
+        mock_session.ensure_ready.return_value = mock_page
+        mock_extract.side_effect = Exception("Page crashed")
+
+        cache = JobCache(ttl_minutes=15)
+        await _warm_cache(mock_session, cache)
+
+        self.assertEqual(len(cache.get_all()), 0)
+
+    @patch.object(SessionManager, "initialize", new_callable=AsyncMock)
+    @patch.object(SessionManager, "shutdown", new_callable=AsyncMock)
+    @patch("hireme_mcp.main._warm_cache", new_callable=AsyncMock)
+    async def test_browser_lifespan_starts_and_cancels_warmup(self, mock_warm, mock_shutdown, mock_init):
+        """Verify browser_lifespan starts _warm_cache task and cleanly handles shutdown."""
+        mock_init.return_value = None
+        mock_shutdown.return_value = None
+
+        # Simulate a warm cache that sleeps
+        async def slow_warm(session, cache):
+            await asyncio.sleep(10)
+        mock_warm.side_effect = slow_warm
+
+        mock_server = MagicMock(spec=FastMCP)
+
+        async with browser_lifespan(mock_server) as state:
+            self.assertIn("session", state)
+            self.assertIn("cache", state)
+            await asyncio.sleep(0.01)
+            self.assertTrue(mock_warm.called)
+
+        # Exited context - shutdown should be called
+        mock_shutdown.assert_called_once()
+
+
+class TestScrapingTimeoutSafeguards(unittest.IsolatedAsyncioTestCase):
+    """Tests for scraping timeout safeguards preventing DevTunnel / client timeouts."""
+
+    @patch("hireme_mcp.main.browser_extract_jobs")
+    async def test_get_job_matches_handles_timeout(self, mock_extract):
+        """Verify get_job_matches returns error when scraping exceeds timeout limit."""
+        cache = JobCache(ttl_minutes=10)
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_page = AsyncMock()
+        mock_page.url = f"{BASE_URL}{DASHBOARD_PATH}"
+        mock_session.get_page.return_value = mock_page
+        mock_session.ensure_ready.return_value = mock_page
+
+        async def slow_scrape(page):
+            await asyncio.sleep(15)
+            return []
+        mock_extract.side_effect = slow_scrape
+
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"session": mock_session, "cache": cache}
+
+        # Use patch to shorten timeout or test with actual timeout mechanism
+        with patch("hireme_mcp.main._SCRAPE_TIMEOUT_SECONDS", 0.05, create=True):
+            res = await get_job_matches(force_refresh=True, ctx=ctx)
+            self.assertFalse(res["success"])
+            self.assertEqual(res["error_code"], "FETCH_ERROR")
+            self.assertIn("timed out", res["message"].lower())
+
