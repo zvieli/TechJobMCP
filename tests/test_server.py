@@ -8,12 +8,77 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastmcp import FastMCP
 
+from starlette.testclient import TestClient
+
 from hireme_mcp import mcp
 from hireme_mcp.__main__ import main as server_main
 from hireme_mcp.core.api_client import JobCache
 from hireme_mcp.core.auth import SessionManager
-from hireme_mcp.main import browser_lifespan
+from hireme_mcp.main import GeminiProbeMiddleware, browser_lifespan
 from hireme_mcp.setup import main as setup_main, run_setup
+
+
+class TestGeminiProbeMiddleware(unittest.TestCase):
+    """Integration tests for GeminiProbeMiddleware ASGI handling of probe requests."""
+
+    @classmethod
+    def setUpClass(cls):
+        app = mcp.http_app(transport="http")
+        app.add_middleware(GeminiProbeMiddleware)
+        cls.client = TestClient(app)
+
+    def test_options_preflight(self):
+        """Verify OPTIONS requests return 200 with CORS headers."""
+        for path in ("/mcp", "/sse", "/health", "/any-endpoint"):
+            response = self.client.options(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
+            self.assertEqual(response.headers.get("access-control-allow-methods"), "*")
+            self.assertEqual(response.headers.get("access-control-allow-headers"), "*")
+
+    def test_head_probe(self):
+        """Verify HEAD requests return 200 with CORS headers."""
+        for path in ("/mcp", "/sse", "/health", "/"):
+            response = self.client.head(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
+
+    def test_get_non_sse_probe_on_mcp_and_sse(self):
+        """Verify GET without text/event-stream on /mcp or /sse returns 200 'MCP Server Active'."""
+        for path in ("/mcp", "/sse"):
+            response = self.client.get(path, headers={"accept": "application/json"})
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("text/plain", response.headers.get("content-type", ""))
+            self.assertEqual(response.text, "MCP Server Active")
+            self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
+
+    def test_delete_probe_on_mcp_and_sse(self):
+        """Verify DELETE on /mcp and /sse returns 200 with CORS headers."""
+        for path in ("/mcp", "/sse"):
+            response = self.client.delete(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
+
+    def test_oauth_protected_resource_probe(self):
+        """Verify .well-known/oauth-protected-resource returns 200 JSON object with CORS headers."""
+        for path in (
+            "/.well-known/oauth-protected-resource",
+            "/.well-known/oauth-protected-resource/v1",
+        ):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {})
+            self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
+
+    def test_passthrough_custom_routes(self):
+        """Verify regular routes like /health and / pass through to the FastMCP route handlers."""
+        health_resp = self.client.get("/health")
+        self.assertEqual(health_resp.status_code, 200)
+        self.assertEqual(health_resp.json().get("status"), "ok")
+
+        root_resp = self.client.get("/")
+        self.assertEqual(root_resp.status_code, 200)
+        self.assertEqual(root_resp.json().get("status"), "ok")
 
 
 class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
@@ -91,6 +156,9 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
         mock_page = AsyncMock()
         mock_page.url = "https://hiremetech.com/dashboard"
         mock_page.goto.return_value = MagicMock(status=200)
+        mock_locator = MagicMock()
+        mock_locator.count = MagicMock(return_value=0)
+        mock_page.locator = MagicMock(return_value=mock_locator)
         mock_context.pages = [mock_page]
         mock_pw.chromium.launch_persistent_context.return_value = mock_context
 
@@ -112,6 +180,9 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
         mock_page = AsyncMock()
         mock_page.url = "https://hiremetech.com/login"
         mock_page.goto.return_value = MagicMock(status=200)
+        mock_locator = MagicMock()
+        mock_locator.count = MagicMock(return_value=0)
+        mock_page.locator = MagicMock(return_value=mock_locator)
         mock_context.pages = [mock_page]
         mock_pw.chromium.launch_persistent_context.return_value = mock_context
 
@@ -146,6 +217,7 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
         }):
             server_main()
             mock_http_app.assert_called_once_with(transport="http")
+            mock_app.add_middleware.assert_called_once_with(GeminiProbeMiddleware)
             mock_uvicorn_run.assert_called_once_with(mock_app, host="127.0.0.1", port=8080)
 
     @patch("hireme_mcp.__main__.uvicorn.run")
@@ -162,6 +234,7 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
         }):
             server_main()
             mock_http_app.assert_called_once_with(transport="sse")
+            mock_app.add_middleware.assert_called_once_with(GeminiProbeMiddleware)
             mock_uvicorn_run.assert_called_once_with(mock_app, host="0.0.0.0", port=9000)
 
 

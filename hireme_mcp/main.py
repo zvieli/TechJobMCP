@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastmcp import Context, FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse, Response
 
 from hireme_mcp.core.api_client import JobCache, filter_jobs
 from hireme_mcp.core.auth import (
@@ -172,11 +174,6 @@ mcp = FastMCP(
     instructions=SERVER_INSTRUCTIONS.strip(),
     lifespan=browser_lifespan,
 )
-
-
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse, Response
 
 
 class GeminiProbeMiddleware(BaseHTTPMiddleware):
