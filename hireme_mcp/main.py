@@ -27,6 +27,7 @@ from hireme_mcp.core.discovery import calibrate_all_selectors
 from hireme_mcp.models.schemas import (
     Job,
     JobPreferences,
+    OperationMode,
     ToolResponse,
     WorkMode,
 )
@@ -38,18 +39,33 @@ logger = get_logger(__name__)
 SERVER_INSTRUCTIONS = """
 HireMeTech MCP Server enables intelligent job matching, filtering, bookmarking, and automated job applications on HireMeTech.
 
-Available Tools:
+## Operation Modes
+
+The server supports two operation modes, controlled via `set_operation_mode`:
+
+### Supervised Mode (default)
+- Present each tool call to the user for confirmation before executing.
+- Standard behavior matching typical MCP tool usage.
+
+### Autonomous Mode
+- Execute read-only and safe-action tools (`get_job_matches`, `filter_jobs_by_preferences`, `bookmark_job`, `delete_job`, `calibrate_selectors`) WITHOUT asking the user for per-tool confirmation.
+- Chain operations freely: scan -> filter -> bookmark matching jobs -> report results.
+- The ONLY action that ALWAYS requires explicit user confirmation is `confirm_auto_apply` — actual job application submission. This is a safety-critical action.
+
+## Available Tools
 1. `get_job_matches`: Fetch matched job listings from your HireMeTech dashboard. Uses caching for high performance.
 2. `filter_jobs_by_preferences`: Filter cached job listings based on tech stack, work mode (remote/hybrid/onsite), location, minimum salary, keywords, exclusion criteria, or CV keyword extraction.
 3. `bookmark_job`: Save/favorite a specific job listing by its ID.
 4. `delete_job`: Dismiss or hide a job listing from view by its ID.
 5. `auto_apply_job`: Step 1 of safe auto-application. Inspects the job application form, generates a preview of fields to submit and warnings, and stages the application.
-6. `confirm_auto_apply`: Step 2 of safe auto-application. Submits the staged job application after user confirmation.
+6. `confirm_auto_apply`: Step 2 of safe auto-application. Submits the staged job application after user confirmation. ALWAYS requires explicit user confirmation, even in autonomous mode.
 7. `calibrate_selectors`: Test, discover, and calibrate DOM selectors against the live HireMeTech page with self-healing heuristics.
+8. `set_operation_mode`: Switch between 'supervised' and 'autonomous' operation modes.
 
-Safety Rules:
-- Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2).
+## Safety Rules
+- Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2). This rule applies in ALL modes.
 - When a user provides a CV path, use `filter_jobs_by_preferences(cv_path=...)` to automatically parse and score matching jobs against the CV.
+- In autonomous mode, proceed with read/filter/bookmark operations without waiting for per-tool confirmation. Report a summary of all actions taken at the end.
 """
 
 # Global singletons for direct tool execution or when context is omitted in tests
@@ -58,6 +74,9 @@ _default_cache: Optional[JobCache] = None
 
 # Staged pending applications store: job_id -> application preview dict
 _pending_applications: dict[str, dict[str, Any]] = {}
+
+# Current operation mode
+_operation_mode: OperationMode = OperationMode.SUPERVISED
 
 
 @asynccontextmanager
@@ -217,6 +236,55 @@ async def _ensure_session(ctx: Optional[Context] = None) -> tuple[SessionManager
     except RuntimeError:
         logger.warning("Session could not be made ready after retries.")
         return session, False
+
+
+@mcp.tool()
+async def set_operation_mode(
+    mode: str,
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Switch between supervised and autonomous operation modes.
+
+    In autonomous mode, the server signals the LLM client that it may chain
+    read-only and safe-action tools without per-tool user confirmation.
+    Only `confirm_auto_apply` (actual job submission) always requires explicit
+    user confirmation.
+
+    Args:
+        mode: Operation mode — 'supervised' or 'autonomous'.
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse confirming the mode switch.
+    """
+    global _operation_mode
+
+    mode_clean = mode.strip().lower()
+    try:
+        new_mode = OperationMode(mode_clean)
+    except ValueError:
+        return ToolResponse(
+            success=False,
+            message=f"Invalid operation mode '{mode}'. Valid modes: 'supervised', 'autonomous'.",
+            error_code="INVALID_MODE",
+        ).model_dump()
+
+    _operation_mode = new_mode
+    logger.info("Operation mode changed to: %s", new_mode.value)
+
+    return ToolResponse(
+        success=True,
+        message=(
+            f"Operation mode set to '{new_mode.value}'. "
+            + (
+                "The server will now execute read/filter/bookmark tools autonomously. "
+                "Only job application submission (confirm_auto_apply) requires explicit user confirmation."
+                if new_mode == OperationMode.AUTONOMOUS
+                else "All tool calls will be presented for user confirmation."
+            )
+        ),
+        data={"mode": new_mode.value},
+    ).model_dump()
 
 
 @mcp.tool()

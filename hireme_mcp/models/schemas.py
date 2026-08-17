@@ -12,6 +12,13 @@ class WorkMode(str, Enum):
     ONSITE = "onsite"
 
 
+class OperationMode(str, Enum):
+    """Server operation mode controlling autonomy level."""
+    SUPERVISED = "supervised"
+    AUTONOMOUS = "autonomous"
+
+
+
 class Job(BaseModel):
     """Job listing model."""
     job_id: str

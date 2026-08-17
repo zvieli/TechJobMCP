@@ -25,7 +25,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
         self.assertIn("HireMeTech MCP Server", mcp.instructions)
 
     async def test_all_tools_registered(self):
-        """Verify all 6 required tools are properly registered on the FastMCP instance."""
+        """Verify all required tools are properly registered on the FastMCP instance."""
         tools = await mcp.list_tools()
         tool_names = [t.name for t in tools]
 
@@ -37,6 +37,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
             "auto_apply_job",
             "confirm_auto_apply",
             "calibrate_selectors",
+            "set_operation_mode",
         ]
 
         for expected in expected_tools:
