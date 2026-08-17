@@ -94,17 +94,80 @@ mcp = FastMCP(
 )
 
 
-@mcp.custom_route("/health", methods=["GET"])
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse, Response
+
+
+class GeminiProbeMiddleware(BaseHTTPMiddleware):
+    """ASGI Middleware to ensure preliminary probes from Gemini Spark and other clients succeed."""
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        method = request.method
+
+        # Handle CORS OPTIONS preflight
+        if method == "OPTIONS":
+            return Response(
+                b"",
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
+
+        # Handle HEAD requests on any MCP endpoint
+        if method == "HEAD":
+            return Response(
+                b"",
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
+
+        # Handle GET probes on /mcp or /sse when not establishing an active SSE stream
+        if method == "GET" and path in ("/mcp", "/sse"):
+            accept_header = request.headers.get("accept", "")
+            if "text/event-stream" not in accept_header:
+                return Response(
+                    b"MCP Server Active",
+                    status_code=200,
+                    headers={
+                        "Content-Type": "text/plain",
+                        "Access-Control-Allow-Origin": "*",
+                    },
+                )
+
+        # Handle DELETE probes on MCP endpoints
+        if method == "DELETE" and path in ("/mcp", "/sse"):
+            return Response(
+                b"",
+                status_code=200,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+
+        # Handle OAuth discovery probes
+        if path.startswith("/.well-known/oauth-protected-resource"):
+            return JSONResponse({}, status_code=200, headers={"Access-Control-Allow-Origin": "*"})
+
+        return await call_next(request)
+
+
+
+@mcp.custom_route("/health", methods=["GET", "HEAD"])
 async def health_check(request):
     """Health check endpoint for containers and reverse proxies."""
-    from starlette.responses import JSONResponse
     return JSONResponse({"status": "ok", "server": "HireMeTech MCP"})
 
 
-@mcp.custom_route("/", methods=["GET"])
+@mcp.custom_route("/", methods=["GET", "HEAD", "OPTIONS"])
 async def root_endpoint(request):
     """Root status endpoint directing to /mcp."""
-    from starlette.responses import JSONResponse
     return JSONResponse({
         "status": "ok",
         "server": "HireMeTech FastMCP Server",

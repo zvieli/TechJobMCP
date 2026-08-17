@@ -9,12 +9,14 @@ services:
       - "8000:8000"
     volumes:
       - /home/lior/.hireme_mcp/browser_profile:/app/browser_profile
+      - ./hireme_mcp:/app/hireme_mcp
     environment:
-      - MCP_TRANSPORT=sse
+      - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000
       - BROWSER_HEADLESS=true
       - BROWSER_PROFILE_DIR=/app/browser_profile
       - CACHE_TTL_MINUTES=60
       - LOG_LEVEL=INFO
+
 

@@ -115,27 +115,37 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
             server_main()
             mock_run.assert_called_once_with(transport="stdio")
 
-    @patch("hireme_mcp.__main__.mcp.run")
-    def test_main_http(self, mock_run):
+    @patch("hireme_mcp.__main__.uvicorn.run")
+    @patch("hireme_mcp.__main__.mcp.http_app")
+    def test_main_http(self, mock_http_app, mock_uvicorn_run):
         """Test __main__.py http transport with host and port."""
+        mock_app = MagicMock()
+        mock_http_app.return_value = mock_app
+
         with patch.dict(os.environ, {
             "MCP_TRANSPORT": "http",
             "MCP_HOST": "127.0.0.1",
             "MCP_PORT": "8080",
         }):
             server_main()
-            mock_run.assert_called_once_with(transport="http", host="127.0.0.1", port=8080)
+            mock_http_app.assert_called_once_with(transport="http")
+            mock_uvicorn_run.assert_called_once_with(mock_app, host="127.0.0.1", port=8080)
 
-    @patch("hireme_mcp.__main__.mcp.run")
-    def test_main_sse(self, mock_run):
+    @patch("hireme_mcp.__main__.uvicorn.run")
+    @patch("hireme_mcp.__main__.mcp.http_app")
+    def test_main_sse(self, mock_http_app, mock_uvicorn_run):
         """Test __main__.py sse transport with host and port."""
+        mock_app = MagicMock()
+        mock_http_app.return_value = mock_app
+
         with patch.dict(os.environ, {
             "MCP_TRANSPORT": "sse",
             "MCP_HOST": "0.0.0.0",
             "MCP_PORT": "9000",
         }):
             server_main()
-            mock_run.assert_called_once_with(transport="sse", host="0.0.0.0", port=9000)
+            mock_http_app.assert_called_once_with(transport="sse")
+            mock_uvicorn_run.assert_called_once_with(mock_app, host="0.0.0.0", port=9000)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import sys
+import uvicorn
 
-from hireme_mcp.main import mcp
+from hireme_mcp.main import GeminiProbeMiddleware, mcp
 from hireme_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,7 +32,10 @@ def main() -> None:
     )
 
     if transport in ("http", "sse", "streamable-http"):
-        mcp.run(transport=transport, host=host, port=port)
+        http_transport = "sse" if transport == "sse" else "http"
+        app = mcp.http_app(transport=http_transport)
+        app.add_middleware(GeminiProbeMiddleware)
+        uvicorn.run(app, host=host, port=port)
     elif transport == "stdio":
         mcp.run(transport="stdio")
     else:
