@@ -292,6 +292,31 @@ async def extract_jobs(page: Page) -> list[Job]:
             if not title:
                 title = "Untitled Position"
 
+            # Sibling-based fallback for company and location immediately adjacent to h4 (or heading)
+            if not company or not location:
+                for sib_sel in [
+                    "h4 ~ div, h4 ~ p, h4 ~ span",
+                    "h1 ~ div, h2 ~ div, h3 ~ div, h5 ~ div",
+                ]:
+                    try:
+                        sib_loc = card.locator(sib_sel).first
+                        sib_text = await _safe_get_text(sib_loc)
+                        if sib_text:
+                            # Split on bullet characters •, |, -, or newlines
+                            parts = [p.strip() for p in re.split(r"[•|\-\n]+", sib_text) if p.strip()]
+                            if len(parts) >= 2:
+                                if not company:
+                                    company = parts[0]
+                                if not location:
+                                    location = parts[1]
+                                break
+                            elif len(parts) == 1:
+                                if not company:
+                                    company = parts[0]
+                                break
+                    except Exception:
+                        continue
+
             # Resilient fallbacks for company
             if not company:
                 for sel in [
@@ -311,13 +336,38 @@ async def extract_jobs(page: Page) -> list[Job]:
 
             if not company:
                 lines = await _extract_meaningful_lines(card)
-                if len(lines) > 1 and lines[0] == title:
-                    company = lines[1]
-                elif lines and lines[0] != title:
-                    company = lines[0]
+                filtered = [l for l in lines if l != title and not any(k in l for k in ["שמור", "Apply", "הגש"])]
+                if filtered:
+                    first_line = filtered[0]
+                    if any(sep in first_line for sep in ["•", "|", "-"]):
+                        parts = [p.strip() for p in re.split(r"[•|\-\n]+", first_line) if p.strip()]
+                        if len(parts) >= 2:
+                            company = parts[0]
+                            if not location:
+                                location = parts[1]
+                        elif len(parts) == 1:
+                            company = parts[0]
+                    else:
+                        company = first_line
 
             if not company:
                 company = "Unknown Company"
+
+            # Resilient fallbacks for location
+            if not location:
+                for sel in [
+                    ".location, .job-location, span.location, .job-card-location",
+                    "[class*='location'], [class*='city'], [class*='place'], [class*='work-mode']",
+                    "[data-testid*='location']",
+                ]:
+                    try:
+                        loc_fallback = card.locator(sel).first
+                        candidate = await _safe_get_text(loc_fallback)
+                        if candidate:
+                            location = candidate
+                            break
+                    except Exception:
+                        continue
 
             # Generate deterministic fallback ID if not present in attributes
             if not job_id:
@@ -467,7 +517,8 @@ async def bookmark_job(page: Page, job_id: str) -> bool:
         # Try matching card containing the job ID text
         card = page.locator(
             f"[data-mcp-job-id='{job_id}'], "
-            f"div:has-text('{job_id}'), article:has-text('{job_id}'), [data-testid='job-card']"
+            f"div:has-text('{job_id}'), article:has-text('{job_id}'), [data-testid='job-card'], "
+            f"div.jobs-app-glass-surface, div.shadow-ht-card"
         ).first
 
     if await card.count() == 0:
@@ -506,7 +557,8 @@ async def delete_job(page: Page, job_id: str) -> bool:
     if await card.count() == 0:
         card = page.locator(
             f"[data-mcp-job-id='{job_id}'], "
-            f"div:has-text('{job_id}'), article:has-text('{job_id}'), [data-testid='job-card']"
+            f"div:has-text('{job_id}'), article:has-text('{job_id}'), [data-testid='job-card'], "
+            f"div.jobs-app-glass-surface, div.shadow-ht-card"
         ).first
 
     if await card.count() == 0:
@@ -543,7 +595,11 @@ async def preview_application(page: Page, job_id: str) -> ApplicationPreview:
     ).first
 
     if await card.count() == 0:
-        card = page.locator(f"[data-mcp-job-id='{job_id}'], [data-testid='job-card']").first
+        card = page.locator(
+            f"[data-mcp-job-id='{job_id}'], "
+            f"div:has-text('{job_id}'), article:has-text('{job_id}'), [data-testid='job-card'], "
+            f"div.jobs-app-glass-surface, div.shadow-ht-card"
+        ).first
 
     try:
         title_sel = await _resolve_selector(card, "job_title") if await card.count() > 0 else "h2"
@@ -698,7 +754,11 @@ async def execute_application(page: Page, job_id: str) -> bool:
     ).first
 
     if await card.count() == 0:
-        card = page.locator(f"[data-mcp-job-id='{job_id}'], [data-testid='job-card']").first
+        card = page.locator(
+            f"[data-mcp-job-id='{job_id}'], "
+            f"div:has-text('{job_id}'), article:has-text('{job_id}'), [data-testid='job-card'], "
+            f"div.jobs-app-glass-surface, div.shadow-ht-card"
+        ).first
 
     try:
         apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"

@@ -24,6 +24,7 @@ from hireme_mcp.core.browser import (
     _resolve_selector,
     bookmark_job,
     delete_job,
+    dynamic_registry,
     extract_jobs,
     preview_application,
     execute_application,
@@ -135,6 +136,12 @@ class MockLocator:
 
 class TestBrowser(unittest.IsolatedAsyncioTestCase):
     """Tests for browser selector registry and operations."""
+
+    def setUp(self):
+        dynamic_registry.clear()
+
+    def tearDown(self):
+        dynamic_registry.clear()
 
     def test_selectors_registry(self):
         required_keys = [

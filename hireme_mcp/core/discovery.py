@@ -18,12 +18,12 @@ DEFAULT_DYNAMIC_SELECTORS_PATH = os.path.expanduser("~/.hireme_mcp/dynamic_selec
 # Default selector definitions used across the browser automation layer
 SELECTORS: dict[str, dict[str, str]] = {
     "job_card": {
-        "primary": "[data-testid='job-card']",
-        "fallback": ".job-listing-card, .job-item, article.job, div.job-card",
+        "primary": "div.jobs-app-glass-surface, div.shadow-ht-card, [data-testid='job-card']",
+        "fallback": "div[class*='jobs-app-glass-surface'], div[class*='shadow-ht-card'], .job-listing-card, .job-item, article.job, div.job-card",
     },
     "job_title": {
-        "primary": "[data-testid='job-title']",
-        "fallback": "h2.job-title, h3.title, .job-card-title, a.job-title, [class*='title'], [class*='position'], [class*='role'], [class*='jobTitle'], [class*='job-title']",
+        "primary": "h4.font-bold, h4[class*='text-gray-900'], [data-testid='job-title']",
+        "fallback": "h4, h2.job-title, h3.title, .job-card-title, a.job-title, [class*='title'], [class*='position'], [class*='role'], [class*='jobTitle'], [class*='job-title']",
     },
     "job_company": {
         "primary": "[data-testid='company-name']",
@@ -34,8 +34,8 @@ SELECTORS: dict[str, dict[str, str]] = {
         "fallback": ".job-location, .location, span.location, .job-card-location",
     },
     "bookmark_button": {
-        "primary": "[data-testid='bookmark-btn']",
-        "fallback": "button.bookmark, button[aria-label*='save' i], button[aria-label*='bookmark' i], button:has-text('שמור'), button:has-text('שמירה'), button[aria-label*='שמור' i], button[aria-label*='שמירה' i], .favorite-btn",
+        "primary": "button.bg-ht-primary-500, button[class*='bg-ht-primary'], [data-testid='bookmark-btn']",
+        "fallback": "button[aria-label*='save' i], button[aria-label*='bookmark' i], button:has-text('שמור'), button:has-text('שמירה'), button[aria-label*='שמור' i], button[aria-label*='שמירה' i], button.bookmark, .favorite-btn",
     },
     "delete_button": {
         "primary": "[data-testid='delete-btn']",
@@ -69,10 +69,27 @@ SELECTORS: dict[str, dict[str, str]] = {
 
 # Semantic candidate patterns for heuristic child element discovery
 CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
+    "job_card": [
+        "div.jobs-app-glass-surface",
+        "div.shadow-ht-card",
+        ".jobs-app-glass-surface",
+        ".shadow-ht-card",
+        "[class*='jobs-app-glass-surface']",
+        "[class*='shadow-ht-card']",
+        "[data-testid='job-card']",
+        "[data-testid*='job-card']",
+        ".job-listing-card",
+        ".job-item",
+        "article.job",
+        "div.job-card",
+    ],
     "job_title": [
+        "h4.font-bold",
+        "h4[class*='text-gray-900']",
         "[data-testid*='title']",
         "[data-testid*='position']",
         "[data-testid*='role']",
+        "h4",
         "h1, h2, h3, h4",
         "[class*='title']",
         "[class*='position']",
@@ -106,6 +123,8 @@ CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
         ".job-location",
     ],
     "bookmark_button": [
+        "button.bg-ht-primary-500",
+        "button[class*='bg-ht-primary']",
         "[data-testid*='bookmark']",
         "[data-testid*='save']",
         "[data-testid*='favorite']",
@@ -256,6 +275,7 @@ JS_DISCOVER_CARD = """() => {
 
     // 2. Class-based standard heuristics
     const standardClassSelectors = [
+        ".jobs-app-glass-surface", ".shadow-ht-card",
         ".job-listing-card", ".job-item", "article.job", "div.job-card",
         ".job-card", ".job-listing", ".card-job", "[class*='job-card']",
         "[class*='JobCard']", "[class*='jobCard']", "[class*='job-listing']",
