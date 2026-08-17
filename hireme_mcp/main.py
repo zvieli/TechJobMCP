@@ -17,10 +17,12 @@ from hireme_mcp.core.auth import (
 from hireme_mcp.core.browser import (
     bookmark_job as browser_bookmark_job,
     delete_job as browser_delete_job,
+    dynamic_registry,
     execute_application as browser_execute_application,
     extract_jobs as browser_extract_jobs,
     preview_application as browser_preview_application,
 )
+from hireme_mcp.core.discovery import calibrate_all_selectors
 from hireme_mcp.models.schemas import (
     Job,
     JobPreferences,
@@ -42,6 +44,7 @@ Available Tools:
 4. `delete_job`: Dismiss or hide a job listing from view by its ID.
 5. `auto_apply_job`: Step 1 of safe auto-application. Inspects the job application form, generates a preview of fields to submit and warnings, and stages the application.
 6. `confirm_auto_apply`: Step 2 of safe auto-application. Submits the staged job application after user confirmation.
+7. `calibrate_selectors`: Test, discover, and calibrate DOM selectors against the live HireMeTech page with self-healing heuristics.
 
 Safety Rules:
 - Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2).
@@ -474,3 +477,67 @@ async def confirm_auto_apply(
             message=f"Failed to submit application for job '{job_id}': {exc}",
             error_code="APPLY_EXECUTION_ERROR",
         ).model_dump()
+
+
+@mcp.tool()
+async def calibrate_selectors(
+    force_recalibrate: bool = False,
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Test, discover, and calibrate DOM selectors against the live page.
+
+    Tests all registered selectors against the live DOM, heuristically discovers
+    alternative selectors if layout changes have occurred, and persists verified
+    selectors into the dynamic selector registry.
+
+    Args:
+        force_recalibrate: If True, clears existing dynamic registry cache before calibration.
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse containing calibration results and status per selector key.
+    """
+    try:
+        session, is_healthy = await _ensure_session(ctx)
+        if not is_healthy:
+            return ToolResponse(
+                success=False,
+                message="Browser session is unauthenticated. Please log in first.",
+                error_code="UNAUTHENTICATED",
+            ).model_dump()
+
+        page = await session.get_page()
+        # Navigate to dashboard if not already there
+        if DASHBOARD_PATH not in (page.url or ""):
+            await page.goto(f"{BASE_URL}{DASHBOARD_PATH}")
+            try:
+                await page.wait_for_load_state("domcontentloaded")
+            except Exception:
+                pass
+
+        if force_recalibrate:
+            dynamic_registry.clear()
+
+        results = await calibrate_all_selectors(page, dynamic_registry)
+
+        matched_count = sum(1 for v in results.values() if v.get("status") != "failed")
+        total_count = len(results)
+
+        return ToolResponse(
+            success=True,
+            message=f"Calibrated {matched_count}/{total_count} selectors successfully.",
+            data={
+                "results": results,
+                "matched_count": matched_count,
+                "total_count": total_count,
+            },
+        ).model_dump()
+
+    except Exception as exc:
+        logger.exception("Error during selector calibration: %s", exc)
+        return ToolResponse(
+            success=False,
+            message=f"Selector calibration failed: {exc}",
+            error_code="CALIBRATION_ERROR",
+        ).model_dump()
+

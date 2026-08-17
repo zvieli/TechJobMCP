@@ -36,6 +36,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
             "delete_job",
             "auto_apply_job",
             "confirm_auto_apply",
+            "calibrate_selectors",
         ]
 
         for expected in expected_tools:

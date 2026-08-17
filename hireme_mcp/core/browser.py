@@ -9,62 +9,19 @@ from typing import Any, Optional
 from playwright.async_api import Locator, Page
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from hireme_mcp.core.discovery import (
+    SELECTORS,
+    DynamicSelectorRegistry,
+    discover_card_selector,
+    discover_child_selector,
+)
 from hireme_mcp.models.schemas import ApplicationPreview, Job, WorkMode
 from hireme_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Self-healing selector registry dictionary
-SELECTORS: dict[str, dict[str, str]] = {
-    "job_card": {
-        "primary": "[data-testid='job-card']",
-        "fallback": ".job-listing-card, .job-item, article.job, div.job-card",
-    },
-    "job_title": {
-        "primary": "[data-testid='job-title']",
-        "fallback": "h2.job-title, h3.title, .job-card-title, a.job-title",
-    },
-    "job_company": {
-        "primary": "[data-testid='company-name']",
-        "fallback": ".company-name, .employer, span.company, a.company",
-    },
-    "job_location": {
-        "primary": "[data-testid='job-location']",
-        "fallback": ".job-location, .location, span.location, .job-card-location",
-    },
-    "bookmark_button": {
-        "primary": "[data-testid='bookmark-btn']",
-        "fallback": "button.bookmark, button[aria-label*='save'], .favorite-btn",
-    },
-    "delete_button": {
-        "primary": "[data-testid='delete-btn']",
-        "fallback": "button.dismiss, button[aria-label*='hide'], .remove-job-btn",
-    },
-    "apply_button": {
-        "primary": "[data-testid='apply-btn']",
-        "fallback": "button.apply, a.apply-now, .auto-apply-btn, button:has-text('Apply')",
-    },
-    "tech_badge": {
-        "primary": "[data-testid='tech-badge']",
-        "fallback": ".tech-badge, .badge, .tag, .skill-tag, .tech-stack span, span[class*='badge'], span[class*='tag']",
-    },
-    "job_description": {
-        "primary": "[data-testid='job-description']",
-        "fallback": ".job-description, .description, .job-details, div[class*='description'], p",
-    },
-    "salary_range": {
-        "primary": "[data-testid='salary-range']",
-        "fallback": ".salary, .salary-range, [data-testid='salary'], span[class*='salary']",
-    },
-    "posted_date": {
-        "primary": "[data-testid='posted-date']",
-        "fallback": ".posted-date, .date, time, span[class*='date']",
-    },
-    "submit_button": {
-        "primary": "[data-testid='submit-btn']",
-        "fallback": "button[type='submit'], button:has-text('Submit'), button:has-text('Send Application'), button:has-text('Confirm')",
-    },
-}
+# Module-level dynamic selector registry singleton
+dynamic_registry = DynamicSelectorRegistry()
 
 # Retry policy for browser operations
 browser_retry = retry(
@@ -89,7 +46,11 @@ COMMON_TECH_STACK = [
 
 
 async def _resolve_selector(page_or_locator: Page | Locator, key: str) -> str:
-    """Resolve selector using primary registry key with self-healing fallback.
+    """Resolve selector using 4-tier adaptive hierarchy:
+    Tier 1: Dynamic Selector Registry (cached working selectors)
+    Tier 2: Primary static selector
+    Tier 3: Fallback static selector list
+    Tier 4: Heuristic DOM discovery (sibling clustering or semantic search)
 
     Args:
         page_or_locator: Playwright Page or Locator context.
@@ -97,20 +58,49 @@ async def _resolve_selector(page_or_locator: Page | Locator, key: str) -> str:
 
     Returns:
         str: Resolved working selector string.
+
+    Raises:
+        ValueError: If no valid selector can be resolved across all 4 tiers.
     """
+    # Tier 1: Check dynamic registry
+    cached_selector = dynamic_registry.get(key)
+    if cached_selector:
+        try:
+            if await page_or_locator.locator(cached_selector).count() > 0:
+                logger.debug("Resolved selector for '%s' from dynamic registry: '%s'", key, cached_selector)
+                return cached_selector
+        except Exception as exc:
+            logger.debug("Dynamic registry selector '%s' invalid for '%s': %s", cached_selector, key, exc)
+
+    # If key is not in registered SELECTORS, attempt heuristic discovery or return raw selector
     if key not in SELECTORS:
+        discovered = await discover_child_selector(page_or_locator, key)
+        if discovered:
+            try:
+                if await page_or_locator.locator(discovered).count() > 0:
+                    dynamic_registry.set(key, discovered)
+                    logger.info("Discovered unregistered selector for '%s': '%s'", key, discovered)
+                    return discovered
+            except Exception:
+                pass
+        try:
+            if await page_or_locator.locator(key).count() > 0:
+                return key
+        except Exception:
+            pass
         return key
 
     primary = SELECTORS[key]["primary"]
     fallback = SELECTORS[key]["fallback"]
 
+    # Tier 2: Primary selector
     try:
         if await page_or_locator.locator(primary).count() > 0:
             return primary
     except Exception as exc:
-        logger.debug("Primary selector resolution error for '%s' ('%s'): %s", key, primary, exc)
+        logger.debug("Primary selector '%s' failed for '%s': %s", primary, key, exc)
 
-    # Check individual fallback sub-selectors
+    # Tier 3: Fallback selectors
     for sub_fallback in [f.strip() for f in fallback.split(",")]:
         try:
             if await page_or_locator.locator(sub_fallback).count() > 0:
@@ -120,11 +110,11 @@ async def _resolve_selector(page_or_locator: Page | Locator, key: str) -> str:
                     key,
                     sub_fallback,
                 )
+                dynamic_registry.set(key, sub_fallback)
                 return sub_fallback
         except Exception:
             continue
 
-    # Check combined fallback
     try:
         if await page_or_locator.locator(fallback).count() > 0:
             logger.warning(
@@ -133,12 +123,38 @@ async def _resolve_selector(page_or_locator: Page | Locator, key: str) -> str:
                 key,
                 fallback,
             )
+            dynamic_registry.set(key, fallback)
             return fallback
     except Exception:
         pass
 
-    logger.debug("No element found matching '%s' or fallback. Defaulting to '%s'", key, primary)
-    return primary
+    # Tier 4: Heuristic DOM discovery
+    discovered_selector: Optional[str] = None
+    if key == "job_card":
+        target_page = page_or_locator
+        if not hasattr(target_page, "evaluate") and hasattr(target_page, "page"):
+            target_page = getattr(target_page, "page")
+        if target_page is not None:
+            discovered_selector = await discover_card_selector(target_page)
+    else:
+        discovered_selector = await discover_child_selector(page_or_locator, key)
+
+    if discovered_selector:
+        try:
+            if await page_or_locator.locator(discovered_selector).count() > 0:
+                logger.info(
+                    "Heuristically discovered working selector for '%s': '%s'",
+                    key,
+                    discovered_selector,
+                )
+                dynamic_registry.set(key, discovered_selector)
+                return discovered_selector
+        except Exception as exc:
+            logger.debug("Discovered selector '%s' failed validation for '%s': %s", discovered_selector, key, exc)
+
+    raise ValueError(
+        f"Failed to resolve selector for '{key}' across all 4 tiers (registry, primary='{primary}', fallback='{fallback}', heuristic)."
+    )
 
 
 def _parse_work_mode(text: str) -> Optional[WorkMode]:
@@ -205,23 +221,41 @@ async def extract_jobs(page: Page) -> list[Job]:
             )
 
             # Resolve child selectors on the card
-            title_sel = await _resolve_selector(card, "job_title")
-            title = await _safe_get_text(card.locator(title_sel))
+            try:
+                title_sel = await _resolve_selector(card, "job_title")
+                title = await _safe_get_text(card.locator(title_sel))
+            except ValueError:
+                title = ""
 
-            company_sel = await _resolve_selector(card, "job_company")
-            company = await _safe_get_text(card.locator(company_sel))
+            try:
+                company_sel = await _resolve_selector(card, "job_company")
+                company = await _safe_get_text(card.locator(company_sel))
+            except ValueError:
+                company = ""
 
-            location_sel = await _resolve_selector(card, "job_location")
-            location = await _safe_get_text(card.locator(location_sel))
+            try:
+                location_sel = await _resolve_selector(card, "job_location")
+                location = await _safe_get_text(card.locator(location_sel))
+            except ValueError:
+                location = ""
 
-            desc_sel = await _resolve_selector(card, "job_description")
-            description = await _safe_get_text(card.locator(desc_sel))
+            try:
+                desc_sel = await _resolve_selector(card, "job_description")
+                description = await _safe_get_text(card.locator(desc_sel))
+            except ValueError:
+                description = ""
 
-            salary_sel = await _resolve_selector(card, "salary_range")
-            salary = await _safe_get_text(card.locator(salary_sel))
+            try:
+                salary_sel = await _resolve_selector(card, "salary_range")
+                salary = await _safe_get_text(card.locator(salary_sel))
+            except ValueError:
+                salary = ""
 
-            date_sel = await _resolve_selector(card, "posted_date")
-            posted_date = await _safe_get_text(card.locator(date_sel))
+            try:
+                date_sel = await _resolve_selector(card, "posted_date")
+                posted_date = await _safe_get_text(card.locator(date_sel))
+            except ValueError:
+                posted_date = ""
 
             # Fallbacks if title/company are empty
             if not title:
@@ -238,15 +272,17 @@ async def extract_jobs(page: Page) -> list[Job]:
                 job_id = f"job-{hashlib.md5(hash_input).hexdigest()[:10]}"
 
             # Extract tech stack badges
-            tech_sel = await _resolve_selector(card, "tech_badge")
-            badge_locators = card.locator(tech_sel)
-            badge_count = await badge_locators.count()
             tech_stack: list[str] = []
-
-            for b in range(badge_count):
-                badge_text = await _safe_get_text(badge_locators.nth(b))
-                if badge_text and len(badge_text) <= 30:
-                    tech_stack.append(badge_text)
+            try:
+                tech_sel = await _resolve_selector(card, "tech_badge")
+                badge_locators = card.locator(tech_sel)
+                badge_count = await badge_locators.count()
+                for b in range(badge_count):
+                    badge_text = await _safe_get_text(badge_locators.nth(b))
+                    if badge_text and len(badge_text) <= 30:
+                        tech_stack.append(badge_text)
+            except ValueError:
+                pass
 
             # Supplement tech stack with heuristic text parsing
             combined_text = f"{title} {description} {' '.join(tech_stack)}"
@@ -268,18 +304,21 @@ async def extract_jobs(page: Page) -> list[Job]:
                         url = href
 
             # Check bookmark status
-            bm_sel = await _resolve_selector(card, "bookmark_button")
-            bm_button = card.locator(bm_sel).first
             is_bookmarked = False
-            if await bm_button.count() > 0:
-                bm_classes = await bm_button.get_attribute("class") or ""
-                bm_aria = await bm_button.get_attribute("aria-pressed") or ""
-                is_bookmarked = (
-                    "active" in bm_classes
-                    or "saved" in bm_classes
-                    or "bookmarked" in bm_classes
-                    or bm_aria.lower() == "true"
-                )
+            try:
+                bm_sel = await _resolve_selector(card, "bookmark_button")
+                bm_button = card.locator(bm_sel).first
+                if await bm_button.count() > 0:
+                    bm_classes = await bm_button.get_attribute("class") or ""
+                    bm_aria = await bm_button.get_attribute("aria-pressed") or ""
+                    is_bookmarked = (
+                        "active" in bm_classes
+                        or "saved" in bm_classes
+                        or "bookmarked" in bm_classes
+                        or bm_aria.lower() == "true"
+                    )
+            except ValueError:
+                pass
 
             job = Job(
                 job_id=job_id,
@@ -401,13 +440,23 @@ async def preview_application(page: Page, job_id: str) -> ApplicationPreview:
     if await card.count() == 0:
         card = page.locator(f"[data-testid='job-card']").first
 
-    title_sel = await _resolve_selector(card, "job_title") if await card.count() > 0 else "h2"
-    company_sel = await _resolve_selector(card, "job_company") if await card.count() > 0 else ".company"
+    try:
+        title_sel = await _resolve_selector(card, "job_title") if await card.count() > 0 else "h2"
+    except ValueError:
+        title_sel = "h2"
+
+    try:
+        company_sel = await _resolve_selector(card, "job_company") if await card.count() > 0 else ".company"
+    except ValueError:
+        company_sel = ".company"
 
     job_title = await _safe_get_text(card.locator(title_sel)) if await card.count() > 0 else "Job Application"
     company = await _safe_get_text(card.locator(company_sel)) if await card.count() > 0 else "Employer"
 
-    apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
+    try:
+        apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
+    except ValueError:
+        apply_sel = "button.apply"
     apply_elem = card.locator(apply_sel).first if await card.count() > 0 else page.locator(apply_sel).first
 
     warnings: list[str] = []
@@ -545,7 +594,10 @@ async def execute_application(page: Page, job_id: str) -> bool:
     if await card.count() == 0:
         card = page.locator(f"[data-testid='job-card']").first
 
-    apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
+    try:
+        apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
+    except ValueError:
+        apply_sel = "button.apply"
     apply_elem = card.locator(apply_sel).first if await card.count() > 0 else page.locator(apply_sel).first
 
     if await apply_elem.count() > 0:
@@ -554,7 +606,10 @@ async def execute_application(page: Page, job_id: str) -> bool:
         await page.wait_for_timeout(500)
 
     # Find confirmation / submit button in modal or page
-    submit_sel = await _resolve_selector(page, "submit_button")
+    try:
+        submit_sel = await _resolve_selector(page, "submit_button")
+    except ValueError:
+        submit_sel = "button[type='submit']"
     submit_btn = page.locator(submit_sel).first
 
     if await submit_btn.count() > 0 and await submit_btn.is_visible():

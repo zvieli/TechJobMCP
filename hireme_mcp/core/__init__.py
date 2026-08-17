@@ -17,9 +17,16 @@ from hireme_mcp.core.browser import (
     _resolve_selector,
     bookmark_job,
     delete_job,
+    dynamic_registry,
     execute_application,
     extract_jobs,
     preview_application,
+)
+from hireme_mcp.core.discovery import (
+    DynamicSelectorRegistry,
+    calibrate_all_selectors,
+    discover_card_selector,
+    discover_child_selector,
 )
 
 __all__ = [
@@ -29,6 +36,11 @@ __all__ = [
     "DEFAULT_PROFILE_DIR",
     "SessionManager",
     "SELECTORS",
+    "dynamic_registry",
+    "DynamicSelectorRegistry",
+    "discover_card_selector",
+    "discover_child_selector",
+    "calibrate_all_selectors",
     "_resolve_selector",
     "extract_jobs",
     "bookmark_job",
