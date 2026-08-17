@@ -55,3 +55,4 @@ class ToolResponse(BaseModel):
     message: str
     data: Optional[dict[str, Any] | list[Any] | Any] = None
     error_code: Optional[str] = None
+    trace_id: Optional[str] = None

@@ -1,8 +1,9 @@
 """Utils package for HireMeTech MCP server."""
 
-from hireme_mcp.utils.logger import SanitizingFormatter, get_logger
+from hireme_mcp.utils.logger import generate_trace_id, get_logger, sanitize_processor
 
 __all__ = [
-    "SanitizingFormatter",
+    "generate_trace_id",
     "get_logger",
+    "sanitize_processor",
 ]
