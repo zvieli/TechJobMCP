@@ -59,7 +59,6 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(state["session"], SessionManager)
             self.assertIsInstance(state["cache"], JobCache)
             mock_init.assert_called_once()
-            mock_health.assert_called_once()
 
         mock_shutdown.assert_called_once()
 

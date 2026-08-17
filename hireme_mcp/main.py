@@ -73,16 +73,8 @@ async def browser_lifespan(server: FastMCP):
 
     try:
         await session_mgr.initialize()
-        is_healthy = await session_mgr.check_session_health()
-        if is_healthy:
-            logger.info("HireMeTech browser session is active and authenticated.")
-        else:
-            logger.warning(
-                "HireMeTech browser session is not authenticated or not on dashboard. "
-                "Run 'python -m hireme_mcp.setup' to log in interactively."
-            )
     except Exception as exc:
-        logger.error("Failed during lifespan browser initialization: %s", exc)
+        logger.warning("SessionManager initial start notice: %s", exc)
 
     try:
         yield {"session": session_mgr, "cache": job_cache}
