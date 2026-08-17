@@ -1,0 +1,43 @@
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Sensitive browser profiles and user data
+browser_profile/
+user-data/
+*.session
+
+# IDEs and tooling
+.superpowers/
+.idea/
+.vscode/
+*.swp
+*.swo
+.venv
+.superpowers
