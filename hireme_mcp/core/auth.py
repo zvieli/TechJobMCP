@@ -13,9 +13,9 @@ from hireme_mcp.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Constants
-BASE_URL = "https://hiremetech.com"
-DASHBOARD_PATH = "/dashboard"
-LOGIN_PATH = "/login"
+BASE_URL = os.getenv("HIREMETECH_BASE_URL", "https://hiremetech.com")
+DASHBOARD_PATH = os.getenv("HIREMETECH_DASHBOARD_PATH", "/he-il/jobs-app")
+LOGIN_PATH = os.getenv("HIREMETECH_LOGIN_PATH", "/login")
 DEFAULT_PROFILE_DIR = os.path.expanduser("~/.hireme_mcp/browser_profile")
 
 
@@ -119,9 +119,10 @@ class SessionManager:
         try:
             response = await page.goto(
                 target_url,
-                wait_until="domcontentloaded",
-                timeout=15000,
+                wait_until="commit",
+                timeout=20000,
             )
+            await page.wait_for_timeout(2500)
 
             if response and response.status in (401, 403):
                 logger.warning(
@@ -154,7 +155,8 @@ class SessionManager:
         logger.info("Attempting session re-authentication/refresh...")
         try:
             page = await self.get_page()
-            await page.reload(wait_until="domcontentloaded", timeout=15000)
+            await page.reload(wait_until="commit", timeout=20000)
+            await page.wait_for_timeout(2500)
         except Exception as exc:
             logger.warning("Reload failed during attempt_reauth: %s", exc)
 

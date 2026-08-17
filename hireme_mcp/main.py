@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Optional
@@ -183,8 +184,12 @@ async def get_job_matches(
 
         page = await session.get_page()
         target_url = f"{BASE_URL}{DASHBOARD_PATH}"
-        if DASHBOARD_PATH not in page.url:
-            await page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+        if DASHBOARD_PATH not in (page.url or ""):
+            await page.goto(target_url, wait_until="commit", timeout=20000)
+            if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
+                t = page.wait_for_timeout(2500)
+                if asyncio.iscoroutine(t):
+                    await t
 
         jobs = await browser_extract_jobs(page)
         cache.update(jobs)
@@ -509,11 +514,11 @@ async def calibrate_selectors(
         page = await session.get_page()
         # Navigate to dashboard if not already there
         if DASHBOARD_PATH not in (page.url or ""):
-            await page.goto(f"{BASE_URL}{DASHBOARD_PATH}")
-            try:
-                await page.wait_for_load_state("domcontentloaded")
-            except Exception:
-                pass
+            await page.goto(f"{BASE_URL}{DASHBOARD_PATH}", wait_until="commit", timeout=20000)
+            if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
+                t = page.wait_for_timeout(2500)
+                if asyncio.iscoroutine(t):
+                    await t
 
         if force_recalibrate:
             dynamic_registry.clear()

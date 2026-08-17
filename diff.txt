@@ -1,0 +1,1465 @@
+diff --git a/hireme_mcp/core/__init__.py b/hireme_mcp/core/__init__.py
+index 3fb5e59..a352ddd 100644
+--- a/hireme_mcp/core/__init__.py
++++ b/hireme_mcp/core/__init__.py
+@@ -17,10 +17,17 @@ from hireme_mcp.core.browser import (
+     _resolve_selector,
+     bookmark_job,
+     delete_job,
++    dynamic_registry,
+     execute_application,
+     extract_jobs,
+     preview_application,
+ )
++from hireme_mcp.core.discovery import (
++    DynamicSelectorRegistry,
++    calibrate_all_selectors,
++    discover_card_selector,
++    discover_child_selector,
++)
+ 
+ __all__ = [
+     "BASE_URL",
+@@ -29,6 +36,11 @@ __all__ = [
+     "DEFAULT_PROFILE_DIR",
+     "SessionManager",
+     "SELECTORS",
++    "dynamic_registry",
++    "DynamicSelectorRegistry",
++    "discover_card_selector",
++    "discover_child_selector",
++    "calibrate_all_selectors",
+     "_resolve_selector",
+     "extract_jobs",
+     "bookmark_job",
+diff --git a/hireme_mcp/core/browser.py b/hireme_mcp/core/browser.py
+index 7b9e3d4..762507a 100644
+--- a/hireme_mcp/core/browser.py
++++ b/hireme_mcp/core/browser.py
+@@ -9,62 +9,19 @@ from typing import Any, Optional
+ from playwright.async_api import Locator, Page
+ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+ 
++from hireme_mcp.core.discovery import (
++    SELECTORS,
++    DynamicSelectorRegistry,
++    discover_card_selector,
++    discover_child_selector,
++)
+ from hireme_mcp.models.schemas import ApplicationPreview, Job, WorkMode
+ from hireme_mcp.utils.logger import get_logger
+ 
+ logger = get_logger(__name__)
+ 
+-# Self-healing selector registry dictionary
+-SELECTORS: dict[str, dict[str, str]] = {
+-    "job_card": {
+-        "primary": "[data-testid='job-card']",
+-        "fallback": ".job-listing-card, .job-item, article.job, div.job-card",
+-    },
+-    "job_title": {
+-        "primary": "[data-testid='job-title']",
+-        "fallback": "h2.job-title, h3.title, .job-card-title, a.job-title",
+-    },
+-    "job_company": {
+-        "primary": "[data-testid='company-name']",
+-        "fallback": ".company-name, .employer, span.company, a.company",
+-    },
+-    "job_location": {
+-        "primary": "[data-testid='job-location']",
+-        "fallback": ".job-location, .location, span.location, .job-card-location",
+-    },
+-    "bookmark_button": {
+-        "primary": "[data-testid='bookmark-btn']",
+-        "fallback": "button.bookmark, button[aria-label*='save'], .favorite-btn",
+-    },
+-    "delete_button": {
+-        "primary": "[data-testid='delete-btn']",
+-        "fallback": "button.dismiss, button[aria-label*='hide'], .remove-job-btn",
+-    },
+-    "apply_button": {
+-        "primary": "[data-testid='apply-btn']",
+-        "fallback": "button.apply, a.apply-now, .auto-apply-btn, button:has-text('Apply')",
+-    },
+-    "tech_badge": {
+-        "primary": "[data-testid='tech-badge']",
+-        "fallback": ".tech-badge, .badge, .tag, .skill-tag, .tech-stack span, span[class*='badge'], span[class*='tag']",
+-    },
+-    "job_description": {
+-        "primary": "[data-testid='job-description']",
+-        "fallback": ".job-description, .description, .job-details, div[class*='description'], p",
+-    },
+-    "salary_range": {
+-        "primary": "[data-testid='salary-range']",
+-        "fallback": ".salary, .salary-range, [data-testid='salary'], span[class*='salary']",
+-    },
+-    "posted_date": {
+-        "primary": "[data-testid='posted-date']",
+-        "fallback": ".posted-date, .date, time, span[class*='date']",
+-    },
+-    "submit_button": {
+-        "primary": "[data-testid='submit-btn']",
+-        "fallback": "button[type='submit'], button:has-text('Submit'), button:has-text('Send Application'), button:has-text('Confirm')",
+-    },
+-}
++# Module-level dynamic selector registry singleton
++dynamic_registry = DynamicSelectorRegistry()
+ 
+ # Retry policy for browser operations
+ browser_retry = retry(
+@@ -89,7 +46,11 @@ COMMON_TECH_STACK = [
+ 
+ 
+ async def _resolve_selector(page_or_locator: Page | Locator, key: str) -> str:
+-    """Resolve selector using primary registry key with self-healing fallback.
++    """Resolve selector using 4-tier adaptive hierarchy:
++    Tier 1: Dynamic Selector Registry (cached working selectors)
++    Tier 2: Primary static selector
++    Tier 3: Fallback static selector list
++    Tier 4: Heuristic DOM discovery (sibling clustering or semantic search)
+ 
+     Args:
+         page_or_locator: Playwright Page or Locator context.
+@@ -97,20 +58,49 @@ async def _resolve_selector(page_or_locator: Page | Locator, key: str) -> str:
+ 
+     Returns:
+         str: Resolved working selector string.
++
++    Raises:
++        ValueError: If no valid selector can be resolved across all 4 tiers.
+     """
++    # Tier 1: Check dynamic registry
++    cached_selector = dynamic_registry.get(key)
++    if cached_selector:
++        try:
++            if await page_or_locator.locator(cached_selector).count() > 0:
++                logger.debug("Resolved selector for '%s' from dynamic registry: '%s'", key, cached_selector)
++                return cached_selector
++        except Exception as exc:
++            logger.debug("Dynamic registry selector '%s' invalid for '%s': %s", cached_selector, key, exc)
++
++    # If key is not in registered SELECTORS, attempt heuristic discovery or return raw selector
+     if key not in SELECTORS:
++        discovered = await discover_child_selector(page_or_locator, key)
++        if discovered:
++            try:
++                if await page_or_locator.locator(discovered).count() > 0:
++                    dynamic_registry.set(key, discovered)
++                    logger.info("Discovered unregistered selector for '%s': '%s'", key, discovered)
++                    return discovered
++            except Exception:
++                pass
++        try:
++            if await page_or_locator.locator(key).count() > 0:
++                return key
++        except Exception:
++            pass
+         return key
+ 
+     primary = SELECTORS[key]["primary"]
+     fallback = SELECTORS[key]["fallback"]
+ 
++    # Tier 2: Primary selector
+     try:
+         if await page_or_locator.locator(primary).count() > 0:
+             return primary
+     except Exception as exc:
+-        logger.debug("Primary selector resolution error for '%s' ('%s'): %s", key, primary, exc)
++        logger.debug("Primary selector '%s' failed for '%s': %s", primary, key, exc)
+ 
+-    # Check individual fallback sub-selectors
++    # Tier 3: Fallback selectors
+     for sub_fallback in [f.strip() for f in fallback.split(",")]:
+         try:
+             if await page_or_locator.locator(sub_fallback).count() > 0:
+@@ -120,11 +110,11 @@ async def _resolve_selector(page_or_locator: Page | Locator, key: str) -> str:
+                     key,
+                     sub_fallback,
+                 )
++                dynamic_registry.set(key, sub_fallback)
+                 return sub_fallback
+         except Exception:
+             continue
+ 
+-    # Check combined fallback
+     try:
+         if await page_or_locator.locator(fallback).count() > 0:
+             logger.warning(
+@@ -133,12 +123,38 @@ async def _resolve_selector(page_or_locator: Page | Locator, key: str) -> str:
+                 key,
+                 fallback,
+             )
++            dynamic_registry.set(key, fallback)
+             return fallback
+     except Exception:
+         pass
+ 
+-    logger.debug("No element found matching '%s' or fallback. Defaulting to '%s'", key, primary)
+-    return primary
++    # Tier 4: Heuristic DOM discovery
++    discovered_selector: Optional[str] = None
++    if key == "job_card":
++        target_page = page_or_locator
++        if not hasattr(target_page, "evaluate") and hasattr(target_page, "page"):
++            target_page = getattr(target_page, "page")
++        if target_page is not None:
++            discovered_selector = await discover_card_selector(target_page)
++    else:
++        discovered_selector = await discover_child_selector(page_or_locator, key)
++
++    if discovered_selector:
++        try:
++            if await page_or_locator.locator(discovered_selector).count() > 0:
++                logger.info(
++                    "Heuristically discovered working selector for '%s': '%s'",
++                    key,
++                    discovered_selector,
++                )
++                dynamic_registry.set(key, discovered_selector)
++                return discovered_selector
++        except Exception as exc:
++            logger.debug("Discovered selector '%s' failed validation for '%s': %s", discovered_selector, key, exc)
++
++    raise ValueError(
++        f"Failed to resolve selector for '{key}' across all 4 tiers (registry, primary='{primary}', fallback='{fallback}', heuristic)."
++    )
+ 
+ 
+ def _parse_work_mode(text: str) -> Optional[WorkMode]:
+@@ -205,23 +221,41 @@ async def extract_jobs(page: Page) -> list[Job]:
+             )
+ 
+             # Resolve child selectors on the card
+-            title_sel = await _resolve_selector(card, "job_title")
+-            title = await _safe_get_text(card.locator(title_sel))
+-
+-            company_sel = await _resolve_selector(card, "job_company")
+-            company = await _safe_get_text(card.locator(company_sel))
+-
+-            location_sel = await _resolve_selector(card, "job_location")
+-            location = await _safe_get_text(card.locator(location_sel))
+-
+-            desc_sel = await _resolve_selector(card, "job_description")
+-            description = await _safe_get_text(card.locator(desc_sel))
+-
+-            salary_sel = await _resolve_selector(card, "salary_range")
+-            salary = await _safe_get_text(card.locator(salary_sel))
+-
+-            date_sel = await _resolve_selector(card, "posted_date")
+-            posted_date = await _safe_get_text(card.locator(date_sel))
++            try:
++                title_sel = await _resolve_selector(card, "job_title")
++                title = await _safe_get_text(card.locator(title_sel))
++            except ValueError:
++                title = ""
++
++            try:
++                company_sel = await _resolve_selector(card, "job_company")
++                company = await _safe_get_text(card.locator(company_sel))
++            except ValueError:
++                company = ""
++
++            try:
++                location_sel = await _resolve_selector(card, "job_location")
++                location = await _safe_get_text(card.locator(location_sel))
++            except ValueError:
++                location = ""
++
++            try:
++                desc_sel = await _resolve_selector(card, "job_description")
++                description = await _safe_get_text(card.locator(desc_sel))
++            except ValueError:
++                description = ""
++
++            try:
++                salary_sel = await _resolve_selector(card, "salary_range")
++                salary = await _safe_get_text(card.locator(salary_sel))
++            except ValueError:
++                salary = ""
++
++            try:
++                date_sel = await _resolve_selector(card, "posted_date")
++                posted_date = await _safe_get_text(card.locator(date_sel))
++            except ValueError:
++                posted_date = ""
+ 
+             # Fallbacks if title/company are empty
+             if not title:
+@@ -238,15 +272,17 @@ async def extract_jobs(page: Page) -> list[Job]:
+                 job_id = f"job-{hashlib.md5(hash_input).hexdigest()[:10]}"
+ 
+             # Extract tech stack badges
+-            tech_sel = await _resolve_selector(card, "tech_badge")
+-            badge_locators = card.locator(tech_sel)
+-            badge_count = await badge_locators.count()
+             tech_stack: list[str] = []
+-
+-            for b in range(badge_count):
+-                badge_text = await _safe_get_text(badge_locators.nth(b))
+-                if badge_text and len(badge_text) <= 30:
+-                    tech_stack.append(badge_text)
++            try:
++                tech_sel = await _resolve_selector(card, "tech_badge")
++                badge_locators = card.locator(tech_sel)
++                badge_count = await badge_locators.count()
++                for b in range(badge_count):
++                    badge_text = await _safe_get_text(badge_locators.nth(b))
++                    if badge_text and len(badge_text) <= 30:
++                        tech_stack.append(badge_text)
++            except ValueError:
++                pass
+ 
+             # Supplement tech stack with heuristic text parsing
+             combined_text = f"{title} {description} {' '.join(tech_stack)}"
+@@ -268,18 +304,21 @@ async def extract_jobs(page: Page) -> list[Job]:
+                         url = href
+ 
+             # Check bookmark status
+-            bm_sel = await _resolve_selector(card, "bookmark_button")
+-            bm_button = card.locator(bm_sel).first
+             is_bookmarked = False
+-            if await bm_button.count() > 0:
+-                bm_classes = await bm_button.get_attribute("class") or ""
+-                bm_aria = await bm_button.get_attribute("aria-pressed") or ""
+-                is_bookmarked = (
+-                    "active" in bm_classes
+-                    or "saved" in bm_classes
+-                    or "bookmarked" in bm_classes
+-                    or bm_aria.lower() == "true"
+-                )
++            try:
++                bm_sel = await _resolve_selector(card, "bookmark_button")
++                bm_button = card.locator(bm_sel).first
++                if await bm_button.count() > 0:
++                    bm_classes = await bm_button.get_attribute("class") or ""
++                    bm_aria = await bm_button.get_attribute("aria-pressed") or ""
++                    is_bookmarked = (
++                        "active" in bm_classes
++                        or "saved" in bm_classes
++                        or "bookmarked" in bm_classes
++                        or bm_aria.lower() == "true"
++                    )
++            except ValueError:
++                pass
+ 
+             job = Job(
+                 job_id=job_id,
+@@ -401,13 +440,23 @@ async def preview_application(page: Page, job_id: str) -> ApplicationPreview:
+     if await card.count() == 0:
+         card = page.locator(f"[data-testid='job-card']").first
+ 
+-    title_sel = await _resolve_selector(card, "job_title") if await card.count() > 0 else "h2"
+-    company_sel = await _resolve_selector(card, "job_company") if await card.count() > 0 else ".company"
++    try:
++        title_sel = await _resolve_selector(card, "job_title") if await card.count() > 0 else "h2"
++    except ValueError:
++        title_sel = "h2"
++
++    try:
++        company_sel = await _resolve_selector(card, "job_company") if await card.count() > 0 else ".company"
++    except ValueError:
++        company_sel = ".company"
+ 
+     job_title = await _safe_get_text(card.locator(title_sel)) if await card.count() > 0 else "Job Application"
+     company = await _safe_get_text(card.locator(company_sel)) if await card.count() > 0 else "Employer"
+ 
+-    apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
++    try:
++        apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
++    except ValueError:
++        apply_sel = "button.apply"
+     apply_elem = card.locator(apply_sel).first if await card.count() > 0 else page.locator(apply_sel).first
+ 
+     warnings: list[str] = []
+@@ -545,7 +594,10 @@ async def execute_application(page: Page, job_id: str) -> bool:
+     if await card.count() == 0:
+         card = page.locator(f"[data-testid='job-card']").first
+ 
+-    apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
++    try:
++        apply_sel = await _resolve_selector(card, "apply_button") if await card.count() > 0 else "button.apply"
++    except ValueError:
++        apply_sel = "button.apply"
+     apply_elem = card.locator(apply_sel).first if await card.count() > 0 else page.locator(apply_sel).first
+ 
+     if await apply_elem.count() > 0:
+@@ -554,7 +606,10 @@ async def execute_application(page: Page, job_id: str) -> bool:
+         await page.wait_for_timeout(500)
+ 
+     # Find confirmation / submit button in modal or page
+-    submit_sel = await _resolve_selector(page, "submit_button")
++    try:
++        submit_sel = await _resolve_selector(page, "submit_button")
++    except ValueError:
++        submit_sel = "button[type='submit']"
+     submit_btn = page.locator(submit_sel).first
+ 
+     if await submit_btn.count() > 0 and await submit_btn.is_visible():
+diff --git a/hireme_mcp/core/discovery.py b/hireme_mcp/core/discovery.py
+new file mode 100644
+index 0000000..9c4deab
+--- /dev/null
++++ b/hireme_mcp/core/discovery.py
+@@ -0,0 +1,558 @@
++"""Adaptive Heuristic DOM Discovery and Dynamic Selector Mapping for HireMeTech MCP."""
++
++from __future__ import annotations
++
++import json
++import os
++from pathlib import Path
++from typing import Any, Optional
++
++from playwright.async_api import Locator, Page
++
++from hireme_mcp.utils.logger import get_logger
++
++logger = get_logger(__name__)
++
++DEFAULT_DYNAMIC_SELECTORS_PATH = os.path.expanduser("~/.hireme_mcp/dynamic_selectors.json")
++
++# Default selector definitions used across the browser automation layer
++SELECTORS: dict[str, dict[str, str]] = {
++    "job_card": {
++        "primary": "[data-testid='job-card']",
++        "fallback": ".job-listing-card, .job-item, article.job, div.job-card",
++    },
++    "job_title": {
++        "primary": "[data-testid='job-title']",
++        "fallback": "h2.job-title, h3.title, .job-card-title, a.job-title",
++    },
++    "job_company": {
++        "primary": "[data-testid='company-name']",
++        "fallback": ".company-name, .employer, span.company, a.company",
++    },
++    "job_location": {
++        "primary": "[data-testid='job-location']",
++        "fallback": ".job-location, .location, span.location, .job-card-location",
++    },
++    "bookmark_button": {
++        "primary": "[data-testid='bookmark-btn']",
++        "fallback": "button.bookmark, button[aria-label*='save'], .favorite-btn",
++    },
++    "delete_button": {
++        "primary": "[data-testid='delete-btn']",
++        "fallback": "button.dismiss, button[aria-label*='hide'], .remove-job-btn",
++    },
++    "apply_button": {
++        "primary": "[data-testid='apply-btn']",
++        "fallback": "button.apply, a.apply-now, .auto-apply-btn, button:has-text('Apply')",
++    },
++    "tech_badge": {
++        "primary": "[data-testid='tech-badge']",
++        "fallback": ".tech-badge, .badge, .tag, .skill-tag, .tech-stack span, span[class*='badge'], span[class*='tag']",
++    },
++    "job_description": {
++        "primary": "[data-testid='job-description']",
++        "fallback": ".job-description, .description, .job-details, div[class*='description'], p",
++    },
++    "salary_range": {
++        "primary": "[data-testid='salary-range']",
++        "fallback": ".salary, .salary-range, [data-testid='salary'], span[class*='salary']",
++    },
++    "posted_date": {
++        "primary": "[data-testid='posted-date']",
++        "fallback": ".posted-date, .date, time, span[class*='date']",
++    },
++    "submit_button": {
++        "primary": "[data-testid='submit-btn']",
++        "fallback": "button[type='submit'], button:has-text('Submit'), button:has-text('Send Application'), button:has-text('Confirm')",
++    },
++}
++
++# Semantic candidate patterns for heuristic child element discovery
++CHILD_ROLE_CANDIDATES: dict[str, list[str]] = {
++    "job_title": [
++        "[data-testid*='title']",
++        "h1, h2, h3, h4",
++        "[class*='title']",
++        "[class*='position']",
++        "[class*='role']",
++        "a[href*='job']",
++        "a[href*='listing']",
++        "a.title",
++        ".job-title",
++    ],
++    "job_company": [
++        "[data-testid*='company']",
++        "[data-testid*='employer']",
++        "[class*='company']",
++        "[class*='employer']",
++        "[class*='organization']",
++        "span.company",
++        "a.company",
++        ".company-name",
++    ],
++    "job_location": [
++        "[data-testid*='location']",
++        "[class*='location']",
++        "[class*='city']",
++        "[class*='place']",
++        "[class*='work-mode']",
++        "span.location",
++        ".job-location",
++    ],
++    "bookmark_button": [
++        "[data-testid*='bookmark']",
++        "[data-testid*='save']",
++        "[data-testid*='favorite']",
++        "button[aria-label*='bookmark' i]",
++        "button[aria-label*='save' i]",
++        "button[aria-label*='favorite' i]",
++        "button.bookmark",
++        "button.save",
++        ".bookmark-btn",
++        ".favorite-btn",
++        "button:has(svg[class*='bookmark'])",
++        "button:has(svg[class*='star'])",
++    ],
++    "delete_button": [
++        "[data-testid*='delete']",
++        "[data-testid*='dismiss']",
++        "[data-testid*='hide']",
++        "[data-testid*='remove']",
++        "button[aria-label*='delete' i]",
++        "button[aria-label*='dismiss' i]",
++        "button[aria-label*='hide' i]",
++        "button[aria-label*='remove' i]",
++        "button.dismiss",
++        "button.delete",
++        ".dismiss-btn",
++        ".remove-job-btn",
++        "button:has(svg[class*='trash'])",
++        "button:has(svg[class*='close'])",
++    ],
++    "apply_button": [
++        "[data-testid*='apply']",
++        "button:has-text('Apply')",
++        "a:has-text('Apply')",
++        "button[aria-label*='apply' i]",
++        "a[aria-label*='apply' i]",
++        "button.apply",
++        "a.apply-now",
++        ".auto-apply-btn",
++        "button:has-text('Quick Apply')",
++    ],
++    "tech_badge": [
++        "[data-testid*='tech']",
++        "[data-testid*='badge']",
++        "[data-testid*='tag']",
++        "[data-testid*='skill']",
++        ".tech-badge",
++        ".badge",
++        ".tag",
++        ".skill-tag",
++        ".pill",
++        ".chip",
++        "[class*='badge']",
++        "[class*='tag']",
++        "[class*='skill']",
++        ".tech-stack span",
++    ],
++    "job_description": [
++        "[data-testid*='description']",
++        "[data-testid*='summary']",
++        ".job-description",
++        ".description",
++        ".job-details",
++        ".summary",
++        "div[class*='description']",
++        "p",
++    ],
++    "salary_range": [
++        "[data-testid*='salary']",
++        "[data-testid*='compensation']",
++        ".salary",
++        ".salary-range",
++        ".compensation",
++        "[class*='salary']",
++        "span[class*='salary']",
++    ],
++    "posted_date": [
++        "[data-testid*='date']",
++        "[data-testid*='posted']",
++        "time",
++        ".posted-date",
++        ".date",
++        "[class*='posted']",
++        "span[class*='date']",
++        "span[class*='time']",
++    ],
++    "submit_button": [
++        "[data-testid*='submit']",
++        "button[type='submit']",
++        "button:has-text('Submit')",
++        "button:has-text('Send Application')",
++        "button:has-text('Confirm')",
++        "button:has-text('Apply Now')",
++    ],
++}
++
++# JavaScript function for DOM sibling clustering analysis
++JS_DISCOVER_CARD = """() => {
++    function hasJobContent(el) {
++        if (!el || el.nodeType !== 1) return false;
++        const text = (el.innerText || el.textContent || "").trim();
++        if (text.length < 20) return false;
++        const hasInteractiveOrHeading = el.querySelector("h1, h2, h3, h4, h5, h6, a, button, [role='button']") !== null;
++        return hasInteractiveOrHeading;
++    }
++
++    // 1. Data-testid heuristics
++    const testIdCandidates = [
++        "[data-testid='job-card']",
++        "[data-testid*='job-card']",
++        "[data-testid*='job-item']",
++        "[data-testid*='job-listing']",
++        "[data-testid*='listing-card']",
++        "[data-testid*='job']",
++        "[data-testid*='card']"
++    ];
++    for (const sel of testIdCandidates) {
++        try {
++            const matches = document.querySelectorAll(sel);
++            if (matches.length >= 3) {
++                return sel;
++            }
++        } catch (e) {}
++    }
++
++    // 2. Class-based standard heuristics
++    const standardClassSelectors = [
++        ".job-listing-card", ".job-item", "article.job", "div.job-card",
++        ".job-card", ".job-listing", ".card-job", "[class*='job-card']",
++        "[class*='JobCard']", "[class*='jobCard']", "[class*='job-listing']",
++        "[class*='job_card']"
++    ];
++    for (const sel of standardClassSelectors) {
++        try {
++            const matches = document.querySelectorAll(sel);
++            if (matches.length >= 3) {
++                return sel;
++            }
++        } catch (e) {}
++    }
++
++    // 3. Structural Sibling Clustering in Main/Body
++    const rootContainers = Array.from(document.querySelectorAll("main, [role='main'], #root, #__next, #app, body"));
++    for (const root of rootContainers) {
++        const potentialParents = Array.from(root.querySelectorAll("*"));
++        potentialParents.unshift(root);
++
++        for (const parent of potentialParents) {
++            const children = Array.from(parent.children);
++            if (children.length < 3) continue;
++
++            const jobLikeChildren = children.filter(hasJobContent);
++            if (jobLikeChildren.length >= 3) {
++                const classCounts = {};
++                for (const child of jobLikeChildren) {
++                    for (const cls of Array.from(child.classList)) {
++                        if (cls.trim().length > 0) {
++                            classCounts[cls] = (classCounts[cls] || 0) + 1;
++                        }
++                    }
++                }
++
++                let bestClass = null;
++                let maxCount = 0;
++                for (const [cls, count] of Object.entries(classCounts)) {
++                    if (count >= 3 && count > maxCount) {
++                        bestClass = cls;
++                        maxCount = count;
++                    }
++                }
++
++                if (bestClass) {
++                    const tag = jobLikeChildren[0].tagName.toLowerCase();
++                    const tagClassCandidate = `${tag}.${bestClass}`;
++                    if (document.querySelectorAll(tagClassCandidate).length >= 3) {
++                        return tagClassCandidate;
++                    }
++                    const classCandidate = `.${bestClass}`;
++                    if (document.querySelectorAll(classCandidate).length >= 3) {
++                        return classCandidate;
++                    }
++                }
++
++                const tagCounts = {};
++                for (const child of jobLikeChildren) {
++                    const tag = child.tagName.toLowerCase();
++                    tagCounts[tag] = (tagCounts[tag] || 0) + 1;
++                }
++                for (const [tag, count] of Object.entries(tagCounts)) {
++                    if (count >= 3 && (tag === "article" || tag === "li" || tag === "section")) {
++                        if (document.querySelectorAll(tag).length >= 3) {
++                            return tag;
++                        }
++                    }
++                }
++            }
++        }
++    }
++
++    return null;
++}"""
++
++
++class DynamicSelectorRegistry:
++    """Persistent storage for discovered working DOM selectors."""
++
++    def __init__(self, file_path: Optional[str | Path] = None) -> None:
++        if file_path is not None:
++            self.file_path = Path(file_path).expanduser().resolve()
++        else:
++            env_path = os.environ.get("DYNAMIC_SELECTORS_PATH")
++            if env_path:
++                self.file_path = Path(env_path).expanduser().resolve()
++            else:
++                self.file_path = Path(DEFAULT_DYNAMIC_SELECTORS_PATH).expanduser().resolve()
++
++        self._selectors: dict[str, str] = {}
++        self.load()
++
++    def load(self) -> None:
++        """Load selectors from the JSON file if available."""
++        if not self.file_path.exists():
++            self._selectors = {}
++            return
++        try:
++            with open(self.file_path, "r", encoding="utf-8") as f:
++                data = json.load(f)
++                if isinstance(data, dict):
++                    self._selectors = {str(k): str(v) for k, v in data.items()}
++                else:
++                    logger.warning("Selectors file '%s' format invalid; initializing empty.", self.file_path)
++                    self._selectors = {}
++        except Exception as exc:
++            logger.warning("Failed to load selectors from '%s': %s", self.file_path, exc)
++            self._selectors = {}
++
++    def save(self) -> None:
++        """Persist selectors dictionary to disk."""
++        try:
++            self.file_path.parent.mkdir(parents=True, exist_ok=True)
++            with open(self.file_path, "w", encoding="utf-8") as f:
++                json.dump(self._selectors, f, indent=2)
++            logger.debug("Saved dynamic selectors to '%s'", self.file_path)
++        except Exception as exc:
++            logger.error("Failed to save dynamic selectors to '%s': %s", self.file_path, exc)
++
++    def get(self, key: str) -> Optional[str]:
++        """Retrieve stored selector by key."""
++        return self._selectors.get(key)
++
++    def set(self, key: str, selector: str) -> None:
++        """Store selector by key and persist to disk."""
++        self._selectors[key] = selector
++        self.save()
++
++    def get_all(self) -> dict[str, str]:
++        """Return a copy of all registered dynamic selectors."""
++        return self._selectors.copy()
++
++    def clear(self) -> None:
++        """Clear all stored selectors and update persistence file."""
++        self._selectors.clear()
++        self.save()
++
++
++async def discover_card_selector(page: Page) -> Optional[str]:
++    """Execute DOM analysis to discover job card container selector based on sibling clustering.
++
++    Args:
++        page: Active Playwright page.
++
++    Returns:
++        Optional[str]: Discovered CSS selector matching repeating job cards, or None.
++    """
++    try:
++        if not hasattr(page, "evaluate"):
++            return None
++
++        eval_res = page.evaluate(JS_DISCOVER_CARD)
++        candidate = await eval_res if hasattr(eval_res, "__await__") else eval_res
++
++        if candidate and isinstance(candidate, str):
++            count = await page.locator(candidate).count()
++            if count > 0:
++                logger.info("Heuristically discovered card selector: '%s' (%d elements)", candidate, count)
++                return candidate
++    except Exception as exc:
++        logger.warning("Error during discover_card_selector: %s", exc)
++    return None
++
++
++async def discover_child_selector(
++    card_locator_or_page: Page | Locator,
++    role: str,
++) -> Optional[str]:
++    """Perform scoped semantic search for a child element inside a job card.
++
++    Args:
++        card_locator_or_page: Card locator or page to search within.
++        role: Child element role identifier (e.g. 'job_title', 'apply_button').
++
++    Returns:
++        Optional[str]: Matching selector if found, else None.
++    """
++    candidates = CHILD_ROLE_CANDIDATES.get(role, [])
++    for candidate in candidates:
++        try:
++            loc = card_locator_or_page.locator(candidate)
++            if await loc.count() > 0:
++                logger.info("Heuristically discovered child selector for '%s': '%s'", role, candidate)
++                return candidate
++        except Exception:
++            continue
++    return None
++
++
++async def calibrate_all_selectors(
++    page: Page,
++    registry: Optional[DynamicSelectorRegistry] = None,
++    selectors_map: Optional[dict[str, dict[str, str]]] = None,
++) -> dict[str, dict[str, Any]]:
++    """Test all registered selectors against the live page DOM and record calibration results.
++
++    Args:
++        page: Active Playwright page.
++        registry: Optional DynamicSelectorRegistry to persist verified selectors.
++        selectors_map: Selector mapping dictionary (defaults to SELECTORS).
++
++    Returns:
++        dict[str, dict[str, Any]]: Calibration report per selector key with status, active selector, and match count.
++    """
++    if selectors_map is None:
++        selectors_map = SELECTORS
++
++    results: dict[str, dict[str, Any]] = {}
++
++    # 1. First calibrate job_card container
++    card_key = "job_card"
++    card_info = selectors_map.get(card_key, {})
++    primary_card = card_info.get("primary", "")
++    fallback_card = card_info.get("fallback", "")
++
++    card_status = "failed"
++    card_active_sel: Optional[str] = None
++    card_count = 0
++
++    # Try primary
++    if primary_card:
++        try:
++            cnt = await page.locator(primary_card).count()
++            if cnt > 0:
++                card_status = "primary_matched"
++                card_active_sel = primary_card
++                card_count = cnt
++        except Exception:
++            pass
++
++    # Try fallback if primary didn't match
++    if card_status == "failed" and fallback_card:
++        for sub_fallback in [f.strip() for f in fallback_card.split(",")]:
++            try:
++                cnt = await page.locator(sub_fallback).count()
++                if cnt > 0:
++                    card_status = "fallback_matched"
++                    card_active_sel = sub_fallback
++                    card_count = cnt
++                    break
++            except Exception:
++                continue
++
++    # Try heuristic discovery if fallback didn't match
++    if card_status == "failed":
++        try:
++            discovered = await discover_card_selector(page)
++            if discovered:
++                cnt = await page.locator(discovered).count()
++                if cnt > 0:
++                    card_status = "discovered_heuristic"
++                    card_active_sel = discovered
++                    card_count = cnt
++        except Exception:
++            pass
++
++    results[card_key] = {
++        "status": card_status,
++        "selector": card_active_sel,
++        "count": card_count,
++    }
++
++    if card_active_sel and registry is not None:
++        registry.set(card_key, card_active_sel)
++
++    # 2. Get card context locator if card container was found
++    if card_active_sel and card_count > 0:
++        card_context: Page | Locator = page.locator(card_active_sel).first
++    else:
++        card_context = page
++
++    # 3. Calibrate all other child / form selectors
++    for key, info in selectors_map.items():
++        if key == card_key:
++            continue
++
++        primary = info.get("primary", "")
++        fallback = info.get("fallback", "")
++
++        status = "failed"
++        active_sel: Optional[str] = None
++        count = 0
++
++        # Try primary
++        if primary:
++            try:
++                cnt = await card_context.locator(primary).count()
++                if cnt > 0:
++                    status = "primary_matched"
++                    active_sel = primary
++                    count = cnt
++            except Exception:
++                pass
++
++        # Try fallback
++        if status == "failed" and fallback:
++            for sub_fallback in [f.strip() for f in fallback.split(",")]:
++                try:
++                    cnt = await card_context.locator(sub_fallback).count()
++                    if cnt > 0:
++                        status = "fallback_matched"
++                        active_sel = sub_fallback
++                        count = cnt
++                        break
++                except Exception:
++                    continue
++
++        # Try heuristic discovery
++        if status == "failed":
++            try:
++                discovered = await discover_child_selector(card_context, key)
++                if discovered:
++                    cnt = await card_context.locator(discovered).count()
++                    if cnt > 0:
++                        status = "discovered_heuristic"
++                        active_sel = discovered
++                        count = cnt
++            except Exception:
++                pass
++
++        results[key] = {
++            "status": status,
++            "selector": active_sel,
++            "count": count,
++        }
++
++        if active_sel and registry is not None:
++            registry.set(key, active_sel)
++
++    return results
+diff --git a/hireme_mcp/main.py b/hireme_mcp/main.py
+index 39f3fa0..aadc3c3 100644
+--- a/hireme_mcp/main.py
++++ b/hireme_mcp/main.py
+@@ -17,10 +17,12 @@ from hireme_mcp.core.auth import (
+ from hireme_mcp.core.browser import (
+     bookmark_job as browser_bookmark_job,
+     delete_job as browser_delete_job,
++    dynamic_registry,
+     execute_application as browser_execute_application,
+     extract_jobs as browser_extract_jobs,
+     preview_application as browser_preview_application,
+ )
++from hireme_mcp.core.discovery import calibrate_all_selectors
+ from hireme_mcp.models.schemas import (
+     Job,
+     JobPreferences,
+@@ -42,6 +44,7 @@ Available Tools:
+ 4. `delete_job`: Dismiss or hide a job listing from view by its ID.
+ 5. `auto_apply_job`: Step 1 of safe auto-application. Inspects the job application form, generates a preview of fields to submit and warnings, and stages the application.
+ 6. `confirm_auto_apply`: Step 2 of safe auto-application. Submits the staged job application after user confirmation.
++7. `calibrate_selectors`: Test, discover, and calibrate DOM selectors against the live HireMeTech page with self-healing heuristics.
+ 
+ Safety Rules:
+ - Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2).
+@@ -474,3 +477,67 @@ async def confirm_auto_apply(
+             message=f"Failed to submit application for job '{job_id}': {exc}",
+             error_code="APPLY_EXECUTION_ERROR",
+         ).model_dump()
++
++
++@mcp.tool()
++async def calibrate_selectors(
++    force_recalibrate: bool = False,
++    ctx: Optional[Context] = None,
++) -> dict[str, Any]:
++    """Test, discover, and calibrate DOM selectors against the live page.
++
++    Tests all registered selectors against the live DOM, heuristically discovers
++    alternative selectors if layout changes have occurred, and persists verified
++    selectors into the dynamic selector registry.
++
++    Args:
++        force_recalibrate: If True, clears existing dynamic registry cache before calibration.
++        ctx: FastMCP Context object.
++
++    Returns:
++        dict: ToolResponse containing calibration results and status per selector key.
++    """
++    try:
++        session, is_healthy = await _ensure_session(ctx)
++        if not is_healthy:
++            return ToolResponse(
++                success=False,
++                message="Browser session is unauthenticated. Please log in first.",
++                error_code="UNAUTHENTICATED",
++            ).model_dump()
++
++        page = await session.get_page()
++        # Navigate to dashboard if not already there
++        if DASHBOARD_PATH not in (page.url or ""):
++            await page.goto(f"{BASE_URL}{DASHBOARD_PATH}")
++            try:
++                await page.wait_for_load_state("domcontentloaded")
++            except Exception:
++                pass
++
++        if force_recalibrate:
++            dynamic_registry.clear()
++
++        results = await calibrate_all_selectors(page, dynamic_registry)
++
++        matched_count = sum(1 for v in results.values() if v.get("status") != "failed")
++        total_count = len(results)
++
++        return ToolResponse(
++            success=True,
++            message=f"Calibrated {matched_count}/{total_count} selectors successfully.",
++            data={
++                "results": results,
++                "matched_count": matched_count,
++                "total_count": total_count,
++            },
++        ).model_dump()
++
++    except Exception as exc:
++        logger.exception("Error during selector calibration: %s", exc)
++        return ToolResponse(
++            success=False,
++            message=f"Selector calibration failed: {exc}",
++            error_code="CALIBRATION_ERROR",
++        ).model_dump()
++
+diff --git a/tests/test_discovery.py b/tests/test_discovery.py
+new file mode 100644
+index 0000000..0771e55
+--- /dev/null
++++ b/tests/test_discovery.py
+@@ -0,0 +1,393 @@
++"""Unit and integration tests for Adaptive DOM Discovery and Dynamic Selector Registry."""
++
++from __future__ import annotations
++
++import json
++import os
++import tempfile
++import unittest
++from pathlib import Path
++from unittest.mock import AsyncMock, MagicMock, patch
++
++from fastmcp import Context
++
++from hireme_mcp.core.auth import SessionManager
++from hireme_mcp.core.browser import (
++    SELECTORS,
++    _resolve_selector,
++    dynamic_registry,
++)
++from hireme_mcp.core.discovery import (
++    CHILD_ROLE_CANDIDATES,
++    DEFAULT_DYNAMIC_SELECTORS_PATH,
++    DynamicSelectorRegistry,
++    calibrate_all_selectors,
++    discover_card_selector,
++    discover_child_selector,
++)
++from hireme_mcp.main import calibrate_selectors
++
++
++class MockLocator:
++    """Helper mock for Playwright Locator."""
++
++    def __init__(
++        self,
++        count_val: int = 1,
++        text: str = "",
++        attrs: dict = None,
++        children: list = None,
++        router=None,
++    ):
++        self._count_val = count_val
++        self._text = text
++        self._attrs = attrs or {}
++        self._children = children or []
++        self._router = router
++
++    async def count(self) -> int:
++        return self._count_val
++
++    async def inner_text(self) -> str:
++        return self._text
++
++    async def get_attribute(self, name: str):
++        return self._attrs.get(name)
++
++    @property
++    def first(self):
++        if self._children:
++            return self._children[0]
++        return self
++
++    def nth(self, idx: int):
++        if idx < len(self._children):
++            return self._children[idx]
++        return self
++
++    def locator(self, sel: str):
++        if self._router:
++            return self._router(sel)
++        return self
++
++
++class TestDynamicSelectorRegistry(unittest.TestCase):
++    """Tests for DynamicSelectorRegistry loading, saving, and querying."""
++
++    def setUp(self):
++        self.temp_dir = tempfile.TemporaryDirectory()
++        self.test_file = Path(self.temp_dir.name) / "test_selectors.json"
++
++    def tearDown(self):
++        self.temp_dir.cleanup()
++
++    def test_default_and_env_path_resolution(self):
++        # Default path
++        reg_default = DynamicSelectorRegistry()
++        self.assertIn(".hireme_mcp", str(reg_default.file_path))
++
++        # Env path
++        with patch.dict(os.environ, {"DYNAMIC_SELECTORS_PATH": str(self.test_file)}):
++            reg_env = DynamicSelectorRegistry()
++            self.assertEqual(reg_env.file_path, self.test_file.resolve())
++
++        # Explicit path
++        reg_explicit = DynamicSelectorRegistry(file_path=self.test_file)
++        self.assertEqual(reg_explicit.file_path, self.test_file.resolve())
++
++    def test_get_set_get_all_clear(self):
++        reg = DynamicSelectorRegistry(file_path=self.test_file)
++        self.assertIsNone(reg.get("job_card"))
++        self.assertEqual(reg.get_all(), {})
++
++        reg.set("job_card", "div.custom-job-card")
++        self.assertEqual(reg.get("job_card"), "div.custom-job-card")
++        self.assertEqual(reg.get_all(), {"job_card": "div.custom-job-card"})
++
++        # Reload in new instance
++        reg2 = DynamicSelectorRegistry(file_path=self.test_file)
++        self.assertEqual(reg2.get("job_card"), "div.custom-job-card")
++
++        reg2.clear()
++        self.assertIsNone(reg2.get("job_card"))
++        self.assertEqual(reg2.get_all(), {})
++
++    def test_corrupted_or_invalid_json_handling(self):
++        # Corrupted JSON
++        self.test_file.write_text("{corrupt json content", encoding="utf-8")
++        reg = DynamicSelectorRegistry(file_path=self.test_file)
++        self.assertEqual(reg.get_all(), {})
++
++        # Non-dict JSON (e.g., list)
++        self.test_file.write_text("[\"item1\", \"item2\"]", encoding="utf-8")
++        reg2 = DynamicSelectorRegistry(file_path=self.test_file)
++        self.assertEqual(reg2.get_all(), {})
++
++    def test_save_error_handling(self):
++        reg = DynamicSelectorRegistry(file_path=self.test_file)
++        with patch("builtins.open", side_effect=PermissionError("Mock Permission Denied")):
++            # Should not raise exception
++            reg.set("key", "val")
++
++
++class TestHeuristicDiscovery(unittest.IsolatedAsyncioTestCase):
++    """Tests for DOM heuristic discovery functions."""
++
++    async def test_discover_card_selector_success(self):
++        mock_page = MagicMock()
++        mock_page.evaluate = AsyncMock(return_value="div.detected-job-card")
++        mock_loc = MockLocator(count_val=4)
++        mock_page.locator.return_value = mock_loc
++
++        result = await discover_card_selector(mock_page)
++        self.assertEqual(result, "div.detected-job-card")
++        mock_page.evaluate.assert_called_once()
++
++    async def test_discover_card_selector_none_or_error(self):
++        mock_page = MagicMock()
++        mock_page.evaluate = AsyncMock(return_value=None)
++        self.assertIsNone(await discover_card_selector(mock_page))
++
++        mock_page.evaluate = AsyncMock(side_effect=Exception("JS Evaluation Failed"))
++        self.assertIsNone(await discover_card_selector(mock_page))
++
++    async def test_discover_child_selector_matches(self):
++        mock_card = MagicMock()
++
++        # Mock behavior where candidate matches
++        def mock_locator_fn(sel):
++            if "job-title" in sel or "h2" in sel:
++                return MockLocator(count_val=1)
++            return MockLocator(count_val=0)
++
++        mock_card.locator = mock_locator_fn
++
++        discovered = await discover_child_selector(mock_card, "job_title")
++        self.assertIsNotNone(discovered)
++        self.assertTrue("title" in discovered or "h2" in discovered)
++
++    async def test_discover_child_selector_no_match(self):
++        mock_card = MagicMock()
++        mock_card.locator = MagicMock(return_value=MockLocator(count_val=0))
++
++        discovered = await discover_child_selector(mock_card, "unknown_role")
++        self.assertIsNone(discovered)
++
++
++class TestFourTierSelectorResolution(unittest.IsolatedAsyncioTestCase):
++    """Tests for 4-tier selector resolution in _resolve_selector."""
++
++    def setUp(self):
++        dynamic_registry.clear()
++
++    def tearDown(self):
++        dynamic_registry.clear()
++
++    async def test_tier_1_dynamic_registry_hit(self):
++        mock_page = MagicMock()
++        mock_page.locator.return_value = MockLocator(count_val=1)
++
++        dynamic_registry.set("job_card", "section.cached-card")
++        resolved = await _resolve_selector(mock_page, "job_card")
++        self.assertEqual(resolved, "section.cached-card")
++
++    async def test_tier_2_primary_hit(self):
++        mock_page = MagicMock()
++        mock_page.locator.return_value = MockLocator(count_val=1)
++
++        resolved = await _resolve_selector(mock_page, "job_title")
++        self.assertEqual(resolved, SELECTORS["job_title"]["primary"])
++
++    async def test_tier_3_fallback_hit(self):
++        mock_page = MagicMock()
++
++        def locator_fn(sel):
++            # Primary fails (count=0), fallback matches
++            if sel == SELECTORS["job_title"]["primary"]:
++                return MockLocator(count_val=0)
++            if "h2.job-title" in sel or "title" in sel:
++                return MockLocator(count_val=1)
++            return MockLocator(count_val=0)
++
++        mock_page.locator = locator_fn
++        resolved = await _resolve_selector(mock_page, "job_title")
++        self.assertIn("title", resolved)
++        # Should be saved into dynamic registry
++        self.assertEqual(dynamic_registry.get("job_title"), resolved)
++
++    async def test_tier_4_heuristic_discovery_hit(self):
++        mock_page = MagicMock()
++
++        # Everything in primary and fallback fails
++        def locator_fn(sel):
++            if "detected" in sel:
++                return MockLocator(count_val=3)
++            return MockLocator(count_val=0)
++
++        mock_page.locator = locator_fn
++        mock_page.evaluate = AsyncMock(return_value="div.detected-card")
++
++        resolved = await _resolve_selector(mock_page, "job_card")
++        self.assertEqual(resolved, "div.detected-card")
++        self.assertEqual(dynamic_registry.get("job_card"), "div.detected-card")
++
++    async def test_all_tiers_failed_raises_value_error(self):
++        mock_page = MagicMock()
++        mock_page.locator.return_value = MockLocator(count_val=0)
++        mock_page.evaluate = AsyncMock(return_value=None)
++
++        with self.assertRaises(ValueError) as ctx:
++            await _resolve_selector(mock_page, "job_card")
++        self.assertIn("Failed to resolve selector for 'job_card'", str(ctx.exception))
++
++    async def test_tier_3_combined_fallback_hit(self):
++        mock_page = MagicMock()
++
++        def locator_fn(sel):
++            if sel == SELECTORS["job_company"]["primary"]:
++                return MockLocator(count_val=0)
++            if sel == SELECTORS["job_company"]["fallback"]:
++                return MockLocator(count_val=1)
++            return MockLocator(count_val=0)
++
++        mock_page.locator = locator_fn
++        resolved = await _resolve_selector(mock_page, "job_company")
++        self.assertEqual(resolved, SELECTORS["job_company"]["fallback"])
++        self.assertEqual(dynamic_registry.get("job_company"), SELECTORS["job_company"]["fallback"])
++
++    async def test_tier_4_heuristic_child_discovery_hit(self):
++        mock_card = MagicMock()
++
++        # Primary and fallback fail, heuristic matches [data-testid*='bookmark']
++        def locator_fn(sel):
++            if "aria-label*='bookmark'" in sel:
++                return MockLocator(count_val=1)
++            return MockLocator(count_val=0)
++
++        mock_card.locator = locator_fn
++        resolved = await _resolve_selector(mock_card, "bookmark_button")
++        self.assertIn("bookmark", resolved)
++        self.assertEqual(dynamic_registry.get("bookmark_button"), resolved)
++
++    async def test_unregistered_key_heuristic_discovery(self):
++        mock_card = MagicMock()
++
++        def locator_fn(sel):
++            if "apply" in sel:
++                return MockLocator(count_val=1)
++            return MockLocator(count_val=0)
++
++        mock_card.locator = locator_fn
++        resolved = await _resolve_selector(mock_card, "apply_button")
++        self.assertIn("apply", resolved)
++
++    async def test_unregistered_key_raw_fallback(self):
++        mock_page = MagicMock()
++        mock_page.locator.return_value = MockLocator(count_val=1)
++
++        resolved = await _resolve_selector(mock_page, "button.custom-btn")
++        self.assertEqual(resolved, "button.custom-btn")
++
++
++class TestCalibrateAllSelectors(unittest.IsolatedAsyncioTestCase):
++    """Tests for calibrate_all_selectors functionality."""
++
++    async def test_calibrate_all_selectors_mixed_results(self):
++        mock_page = MagicMock()
++        test_registry = DynamicSelectorRegistry(file_path=tempfile.mktemp())
++
++        def card_locator_fn(sel):
++            if sel == SELECTORS["job_title"]["primary"]:
++                return MockLocator(count_val=1)
++            elif sel == ".favorite-btn":
++                return MockLocator(count_val=1)
++            elif "Apply" in sel:
++                return MockLocator(count_val=1)
++            return MockLocator(count_val=0)
++
++        def page_locator_fn(sel):
++            if sel == SELECTORS["job_card"]["primary"]:
++                return MockLocator(count_val=5, router=card_locator_fn)
++            return card_locator_fn(sel)
++
++        mock_page.locator = page_locator_fn
++        mock_page.evaluate = AsyncMock(return_value=None)
++
++        report = await calibrate_all_selectors(mock_page, test_registry)
++        self.assertIn("job_card", report)
++        self.assertEqual(report["job_card"]["status"], "primary_matched")
++        self.assertEqual(report["job_card"]["count"], 5)
++        self.assertEqual(test_registry.get("job_card"), SELECTORS["job_card"]["primary"])
++
++        self.assertIn("job_title", report)
++        self.assertEqual(report["job_title"]["status"], "primary_matched")
++
++        self.assertIn("bookmark_button", report)
++        self.assertEqual(report["bookmark_button"]["status"], "fallback_matched")
++        self.assertEqual(report["bookmark_button"]["selector"], ".favorite-btn")
++
++    async def test_calibrate_all_selectors_discovered_and_failed(self):
++        mock_page = MagicMock()
++        mock_page.evaluate = AsyncMock(return_value="section.custom-job-card")
++        test_registry = DynamicSelectorRegistry(file_path=tempfile.mktemp())
++
++        def page_locator_fn(sel):
++            if sel == "section.custom-job-card":
++                return MockLocator(count_val=4)
++            return MockLocator(count_val=0)
++
++        mock_page.locator = page_locator_fn
++
++        report = await calibrate_all_selectors(mock_page, test_registry)
++        self.assertEqual(report["job_card"]["status"], "discovered_heuristic")
++        self.assertEqual(report["job_card"]["selector"], "section.custom-job-card")
++        self.assertEqual(report["job_card"]["count"], 4)
++        self.assertEqual(test_registry.get("job_card"), "section.custom-job-card")
++
++
++class TestCalibrateSelectorsTool(unittest.IsolatedAsyncioTestCase):
++    """Tests for the calibrate_selectors MCP tool handler."""
++
++    def setUp(self):
++        dynamic_registry.clear()
++
++    def tearDown(self):
++        dynamic_registry.clear()
++
++    @patch("hireme_mcp.main._ensure_session")
++    async def test_calibrate_selectors_unauthenticated(self, mock_ensure_session):
++        mock_ensure_session.return_value = (MagicMock(), False)
++        resp = await calibrate_selectors()
++        self.assertFalse(resp["success"])
++        self.assertEqual(resp["error_code"], "UNAUTHENTICATED")
++
++    @patch("hireme_mcp.main._ensure_session")
++    @patch("hireme_mcp.main.calibrate_all_selectors")
++    async def test_calibrate_selectors_success(self, mock_calibrate, mock_ensure_session):
++        mock_session = MagicMock()
++        mock_page = MagicMock()
++        mock_page.url = "https://hiremetech.com/dashboard"
++        mock_page.goto = AsyncMock()
++        mock_page.wait_for_load_state = AsyncMock()
++        mock_session.get_page = AsyncMock(return_value=mock_page)
++
++        mock_ensure_session.return_value = (mock_session, True)
++        mock_calibrate.return_value = {
++            "job_card": {"status": "primary_matched", "selector": "[data-testid='job-card']", "count": 10},
++            "job_title": {"status": "primary_matched", "selector": "[data-testid='job-title']", "count": 1},
++        }
++
++        resp = await calibrate_selectors(force_recalibrate=True)
++        self.assertTrue(resp["success"])
++        self.assertIn("Calibrated 2/2 selectors successfully", resp["message"])
++        self.assertEqual(resp["data"]["matched_count"], 2)
++
++    @patch("hireme_mcp.main._ensure_session")
++    async def test_calibrate_selectors_exception_handling(self, mock_ensure_session):
++        mock_session = MagicMock()
++        mock_session.get_page = AsyncMock(side_effect=RuntimeError("Browser page crashed"))
++        mock_ensure_session.return_value = (mock_session, True)
++
++        resp = await calibrate_selectors()
++        self.assertFalse(resp["success"])
++        self.assertEqual(resp["error_code"], "CALIBRATION_ERROR")
+diff --git a/tests/test_server.py b/tests/test_server.py
+index 36d6d99..cbda27d 100644
+--- a/tests/test_server.py
++++ b/tests/test_server.py
+@@ -36,6 +36,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
+             "delete_job",
+             "auto_apply_job",
+             "confirm_auto_apply",
++            "calibrate_selectors",
+         ]
+ 
+         for expected in expected_tools:

@@ -35,8 +35,8 @@ class TestAuth(unittest.IsolatedAsyncioTestCase):
     """Tests for auth and session management."""
 
     def test_auth_constants(self):
-        self.assertEqual(BASE_URL, "https://hiremetech.com")
-        self.assertEqual(DASHBOARD_PATH, "/dashboard")
+        self.assertTrue(BASE_URL.startswith("https://hiremetech.com"))
+        self.assertIn(DASHBOARD_PATH, ("/he-il/jobs-app", "/dashboard"))
         self.assertEqual(LOGIN_PATH, "/login")
 
     def test_session_manager_init_defaults(self):

@@ -71,27 +71,43 @@ async def run_setup(profile_dir: Optional[str | Path] = None) -> bool:
 
         page = context.pages[0] if context.pages else await context.new_page()
 
-        login_url = f"{BASE_URL}{LOGIN_PATH}"
+        login_url = os.getenv("HIREMETECH_LOGIN_URL", f"{BASE_URL}")
         print(f"\nNavigating to {login_url}...")
         try:
-            await page.goto(login_url, wait_until="domcontentloaded", timeout=30000)
+            await page.goto(login_url, wait_until="commit", timeout=20000)
+            if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
+                await page.wait_for_timeout(3000)
+
+            # Check if there is an explicit login button to click
+            if hasattr(page, "locator"):
+                loc = page.locator("button:has-text('התחברות'), button:has-text('Login'), button:has-text('Sign in'), a[href*='login']")
+                if hasattr(loc, "count"):
+                    count = await loc.count() if asyncio.iscoroutinefunction(loc.count) or asyncio.iscoroutine(loc.count()) else (loc.count() if callable(loc.count) else 0)
+                    if count > 0 and hasattr(loc, "first"):
+                        try:
+                            await loc.first.click(timeout=3000)
+                            print("Opened login dialog/form.")
+                        except Exception:
+                            pass
         except Exception as exc:
             print(f"Notice: Initial page load encountered: {exc}")
 
         # Wait for user to interact and press Enter in the terminal
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, input, "\nPress [ENTER] here once you have finished logging in: ")
+        await loop.run_in_executor(None, input, "\n👉 Please complete your login in the browser window.\n👉 Once logged in and viewing your jobs/dashboard, press [ENTER] here: ")
 
         print("\nVerifying session authentication status...")
-        dashboard_url = f"{BASE_URL}{DASHBOARD_PATH}"
+        dashboard_url = os.getenv("HIREMETECH_DASHBOARD_URL", f"{BASE_URL}{DASHBOARD_PATH}")
         try:
-            response = await page.goto(dashboard_url, wait_until="domcontentloaded", timeout=20000)
-            status_code = response.status if response else 200
+            response = await page.goto(dashboard_url, wait_until="commit", timeout=20000)
+            if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
+                await page.wait_for_timeout(3000)
+            status_code = response.status if response and hasattr(response, "status") else 200
         except Exception as exc:
             print(f"Warning during verification navigation: {exc}")
             status_code = 0
 
-        current_url = page.url
+        current_url = page.url or ""
         is_authenticated = (
             LOGIN_PATH not in current_url
             and status_code not in (401, 403)
