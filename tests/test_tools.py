@@ -1,0 +1,281 @@
+"""Unit and integration tests for HireMeTech MCP tools."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastmcp import Context
+
+from hireme_mcp.core.api_client import JobCache
+from hireme_mcp.core.auth import SessionManager
+from hireme_mcp.main import (
+    _get_cache,
+    _ensure_session,
+    _pending_applications,
+    auto_apply_job,
+    bookmark_job,
+    confirm_auto_apply,
+    delete_job,
+    filter_jobs_by_preferences,
+    get_job_matches,
+)
+from hireme_mcp.models.schemas import (
+    ApplicationPreview,
+    Job,
+    WorkMode,
+)
+
+
+class TestMcpTools(unittest.IsolatedAsyncioTestCase):
+    """Test suite for FastMCP tools implementation."""
+
+    def setUp(self):
+        """Reset pending applications and setup test data before each test."""
+        _pending_applications.clear()
+        self.mock_jobs = [
+            Job(
+                job_id="job-1",
+                title="Senior Backend Python Developer",
+                company="TechCorp",
+                location="Remote",
+                work_mode=WorkMode.REMOTE,
+                tech_stack=["Python", "FastAPI", "Docker", "PostgreSQL"],
+                description="We need an experienced Python engineer for scalable cloud services.",
+                salary_range="$140,000 - $160,000",
+                is_bookmarked=False,
+            ),
+            Job(
+                job_id="job-2",
+                title="Lead Frontend Engineer",
+                company="WebDev Inc",
+                location="New York, NY",
+                work_mode=WorkMode.HYBRID,
+                tech_stack=["React", "TypeScript", "Next.js", "TailwindCSS"],
+                description="Building next-generation frontend applications.",
+                salary_range="$150,000",
+                is_bookmarked=False,
+            ),
+            Job(
+                job_id="job-3",
+                title="Legacy PHP Maintenance",
+                company="OldTech Co",
+                location="Austin, TX",
+                work_mode=WorkMode.ONSITE,
+                tech_stack=["PHP", "MySQL"],
+                description="Legacy code maintenance.",
+                salary_range="$80,000",
+                is_bookmarked=False,
+            ),
+        ]
+
+    def _create_mock_context(self, session_mgr: SessionManager, cache: JobCache) -> MagicMock:
+        """Create a mock FastMCP Context with lifespan state."""
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"session": session_mgr, "cache": cache}
+        return ctx
+
+    @patch("hireme_mcp.main.browser_extract_jobs")
+    async def test_get_job_matches_cache_hit(self, mock_extract):
+        """Test get_job_matches returns cached data without calling browser extraction."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        mock_session = AsyncMock(spec=SessionManager)
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await get_job_matches(force_refresh=False, ctx=ctx)
+
+        self.assertTrue(res["success"])
+        self.assertIn("Retrieved 3 cached", res["message"])
+        self.assertEqual(len(res["data"]), 3)
+        mock_extract.assert_not_called()
+
+    @patch("hireme_mcp.main.browser_extract_jobs")
+    async def test_get_job_matches_live_fetch_and_force_refresh(self, mock_extract):
+        """Test live extraction when cache is empty or force_refresh is True."""
+        cache = JobCache(ttl_minutes=10)
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session._initialized = True
+        mock_session.check_session_health.return_value = True
+        mock_page = AsyncMock()
+        mock_page.url = "https://hiremetech.com/login"
+        mock_session.get_page.return_value = mock_page
+
+        mock_extract.return_value = self.mock_jobs
+        ctx = self._create_mock_context(mock_session, cache)
+
+        # 1. First fetch (cache empty)
+        res = await get_job_matches(force_refresh=False, ctx=ctx)
+        self.assertTrue(res["success"])
+        self.assertIn("Successfully fetched 3 live", res["message"])
+        self.assertEqual(len(res["data"]), 3)
+        self.assertEqual(len(cache.get_all()), 3)
+        mock_extract.assert_called_once()
+
+        # 2. Second fetch with force_refresh=True
+        mock_extract.reset_mock()
+        res2 = await get_job_matches(force_refresh=True, ctx=ctx)
+        self.assertTrue(res2["success"])
+        mock_extract.assert_called_once()
+
+    @patch("hireme_mcp.main.browser_extract_jobs")
+    async def test_get_job_matches_unauthenticated(self, mock_extract):
+        """Test get_job_matches returns UNAUTHENTICATED error when session is invalid."""
+        cache = JobCache(ttl_minutes=10)
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session._initialized = True
+        mock_session.check_session_health.return_value = False
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await get_job_matches(force_refresh=True, ctx=ctx)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["error_code"], "UNAUTHENTICATED")
+        mock_extract.assert_not_called()
+
+    async def test_filter_jobs_no_cached_jobs(self):
+        """Test filter_jobs_by_preferences returns error if cache has no jobs."""
+        cache = JobCache(ttl_minutes=10)
+        mock_session = AsyncMock(spec=SessionManager)
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await filter_jobs_by_preferences(tech_stack=["Python"], ctx=ctx)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["error_code"], "NO_CACHED_JOBS")
+
+    async def test_filter_jobs_by_stack_and_work_mode(self):
+        """Test filtering jobs by tech stack, work mode, and exclusion."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        mock_session = AsyncMock(spec=SessionManager)
+        ctx = self._create_mock_context(mock_session, cache)
+
+        # Filter for Python & remote, excluding PHP
+        res = await filter_jobs_by_preferences(
+            tech_stack=["Python", "FastAPI"],
+            work_mode="remote",
+            exclude_keywords=["PHP", "Legacy"],
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        data = res["data"]
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["job_id"], "job-1")
+        self.assertEqual(data[0]["company"], "TechCorp")
+        self.assertGreater(data[0]["match_score"], 80.0)
+
+    async def test_filter_jobs_by_cv_file(self):
+        """Test filtering jobs with CV file keyword extraction."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        mock_session = AsyncMock(spec=SessionManager)
+        ctx = self._create_mock_context(mock_session, cache)
+
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("Fullstack developer proficient in React, TypeScript, and Next.js")
+            cv_file = f.name
+
+        try:
+            res = await filter_jobs_by_preferences(cv_path=cv_file, ctx=ctx)
+            self.assertTrue(res["success"])
+            data = res["data"]
+            self.assertGreater(len(data), 0)
+            self.assertEqual(data[0]["job_id"], "job-2")
+        finally:
+            os.unlink(cv_file)
+
+    @patch("hireme_mcp.main.browser_bookmark_job")
+    async def test_bookmark_job_flow(self, mock_browser_bookmark):
+        """Test bookmark_job updates browser and job cache."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session._initialized = True
+        mock_session.check_session_health.return_value = True
+        mock_page = AsyncMock()
+        mock_session.get_page.return_value = mock_page
+        mock_browser_bookmark.return_value = True
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await bookmark_job("job-1", ctx=ctx)
+        self.assertTrue(res["success"])
+        self.assertEqual(res["data"]["job_id"], "job-1")
+        self.assertTrue(res["data"]["is_bookmarked"])
+        self.assertTrue(cache.get_by_id("job-1").is_bookmarked)
+        mock_browser_bookmark.assert_called_once_with(mock_page, "job-1")
+
+    @patch("hireme_mcp.main.browser_delete_job")
+    async def test_delete_job_flow(self, mock_browser_delete):
+        """Test delete_job dismisses job on page and removes from cache."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session._initialized = True
+        mock_session.check_session_health.return_value = True
+        mock_page = AsyncMock()
+        mock_session.get_page.return_value = mock_page
+        mock_browser_delete.return_value = True
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await delete_job("job-3", ctx=ctx)
+        self.assertTrue(res["success"])
+        self.assertEqual(res["data"]["job_id"], "job-3")
+        self.assertIsNone(cache.get_by_id("job-3"))
+        self.assertEqual(len(cache.get_all()), 2)
+        mock_browser_delete.assert_called_once_with(mock_page, "job-3")
+
+    @patch("hireme_mcp.main.browser_preview_application")
+    @patch("hireme_mcp.main.browser_execute_application")
+    async def test_two_step_auto_apply_flow(self, mock_execute, mock_preview):
+        """Test complete 2-step apply workflow: auto_apply_job then confirm_auto_apply."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session._initialized = True
+        mock_session.check_session_health.return_value = True
+        mock_page = AsyncMock()
+        mock_session.get_page.return_value = mock_page
+        ctx = self._create_mock_context(mock_session, cache)
+
+        mock_preview.return_value = ApplicationPreview(
+            job_id="job-1",
+            job_title="Senior Backend Python Developer",
+            company="TechCorp",
+            application_method="direct_submission",
+            fields_to_submit={"full_name": "Lior Zvieli", "email": "test@example.com"},
+            warnings=["Resume file auto-attached"],
+        )
+        mock_execute.return_value = True
+
+        # Step 1: Preview application
+        res1 = await auto_apply_job("job-1", ctx=ctx)
+        self.assertTrue(res1["success"])
+        self.assertIn("Application preview generated", res1["message"])
+        self.assertIn("job-1", _pending_applications)
+        self.assertEqual(res1["data"]["job_title"], "Senior Backend Python Developer")
+        mock_preview.assert_called_once_with(mock_page, "job-1")
+
+        # Step 2: Confirm application
+        res2 = await confirm_auto_apply("job-1", ctx=ctx)
+        self.assertTrue(res2["success"])
+        self.assertIn("Successfully submitted application", res2["message"])
+        self.assertTrue(res2["data"]["submitted"])
+        self.assertNotIn("job-1", _pending_applications)
+        mock_execute.assert_called_once_with(mock_page, "job-1")
+
+    async def test_confirm_auto_apply_without_preview_error(self):
+        """Test calling confirm_auto_apply without auto_apply_job returns error."""
+        cache = JobCache(ttl_minutes=10)
+        mock_session = AsyncMock(spec=SessionManager)
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await confirm_auto_apply("unpreviewed-job-id", ctx=ctx)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["error_code"], "NO_PENDING_PREVIEW")
+        self.assertIn("MUST call 'auto_apply_job", res["message"])
+
+
+if __name__ == "__main__":
+    unittest.main()
