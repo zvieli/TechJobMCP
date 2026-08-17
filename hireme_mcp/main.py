@@ -191,6 +191,8 @@ def _get_cache(ctx: Optional[Context] = None) -> JobCache:
 async def _ensure_session(ctx: Optional[Context] = None) -> tuple[SessionManager, bool]:
     """Retrieve SessionManager and verify authentication health status.
 
+    Uses ensure_ready() for automatic retry/recovery on browser failures.
+
     Args:
         ctx: Optional FastMCP Context.
 
@@ -209,11 +211,12 @@ async def _ensure_session(ctx: Optional[Context] = None) -> tuple[SessionManager
             _default_session = SessionManager()
         session = _default_session
 
-    if not session._initialized:
-        await session.initialize()
-
-    is_healthy = await session.check_session_health()
-    return session, is_healthy
+    try:
+        await session.ensure_ready(max_retries=3)
+        return session, True
+    except RuntimeError:
+        logger.warning("Session could not be made ready after retries.")
+        return session, False
 
 
 @mcp.tool()

@@ -127,6 +127,7 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         mock_session = AsyncMock(spec=SessionManager)
         mock_session._initialized = True
         mock_session.check_session_health.return_value = False
+        mock_session.ensure_ready.side_effect = RuntimeError("Session unauthenticated")
         ctx = self._create_mock_context(mock_session, cache)
 
         res = await get_job_matches(force_refresh=True, ctx=ctx)

@@ -162,6 +162,82 @@ class SessionManager:
 
         return await self.check_session_health()
 
+    async def recover(self) -> bool:
+        """Tear down browser state and re-initialize from scratch.
+
+        Returns:
+            bool: True if session is healthy after recovery, False otherwise.
+        """
+        logger.warning("Starting full session recovery...")
+        try:
+            await self.shutdown()
+        except Exception as exc:
+            logger.debug("Error during recovery shutdown: %s", exc)
+
+        self._initialized = False
+
+        try:
+            await self.initialize()
+        except Exception as exc:
+            logger.error("Recovery re-initialization failed: %s", exc)
+            return False
+
+        healthy = await self.check_session_health()
+        if healthy:
+            logger.info("Session recovery succeeded.")
+        else:
+            logger.warning("Session recovery completed but health check failed.")
+        return healthy
+
+    async def ensure_ready(self, max_retries: int = 3) -> Page:
+        """Initialize, health-check, and auto-recover the browser session.
+
+        Retries up to max_retries times, performing full recovery between attempts.
+
+        Args:
+            max_retries: Maximum number of initialization/recovery attempts.
+
+        Returns:
+            Page: A healthy, ready-to-use Playwright Page.
+
+        Raises:
+            RuntimeError: If all retries are exhausted.
+        """
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                if not self._initialized:
+                    await self.initialize()
+
+                if await self.check_session_health():
+                    return await self.get_page()
+
+                # Unhealthy — try recovery
+                logger.warning(
+                    "Session unhealthy on attempt %d/%d, recovering...",
+                    attempt,
+                    max_retries,
+                )
+                if await self.recover():
+                    return await self.get_page()
+
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Session attempt %d/%d failed: %s",
+                    attempt,
+                    max_retries,
+                    exc,
+                )
+                # Reset state for next attempt
+                self._initialized = False
+
+        raise RuntimeError(
+            f"Browser session failed after {max_retries} attempts. "
+            f"Last error: {last_error}"
+        )
+
     async def inject_session_storage(self, state: dict[str, Any]) -> None:
         """Set sessionStorage items (e.g. jobBoardState) in the active page.
 
