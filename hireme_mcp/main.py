@@ -327,6 +327,7 @@ async def filter_jobs_by_preferences(
         except ValueError:
             logger.debug("Unknown work mode: '%s'. Proceeding with string match.", work_mode)
 
+    effective_cv_path = cv_path or os.getenv("DEFAULT_CV_PATH")
     prefs = JobPreferences(
         tech_stack=tech_stack or [],
         work_mode=parsed_work_mode,
@@ -334,7 +335,7 @@ async def filter_jobs_by_preferences(
         min_salary=min_salary,
         keywords=keywords or [],
         exclude_keywords=exclude_keywords or [],
-        cv_path=cv_path,
+        cv_path=effective_cv_path,
     )
 
     try:
