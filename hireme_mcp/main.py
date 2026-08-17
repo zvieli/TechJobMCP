@@ -102,6 +102,25 @@ mcp = FastMCP(
 )
 
 
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request):
+    """Health check endpoint for containers and reverse proxies."""
+    from starlette.responses import JSONResponse
+    return JSONResponse({"status": "ok", "server": "HireMeTech MCP"})
+
+
+@mcp.custom_route("/", methods=["GET"])
+async def root_endpoint(request):
+    """Root status endpoint directing to /mcp."""
+    from starlette.responses import JSONResponse
+    return JSONResponse({
+        "status": "ok",
+        "server": "HireMeTech FastMCP Server",
+        "mcp_endpoint": "/mcp",
+        "sse_endpoint": "/sse",
+    })
+
+
 def _get_cache(ctx: Optional[Context] = None) -> JobCache:
     """Retrieve JobCache instance from Context lifespan state or global default."""
     global _default_cache
