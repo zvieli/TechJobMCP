@@ -244,7 +244,7 @@ class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(cache.get_all()), 1)
         self.assertEqual(cache.get_all()[0].job_id, "job-warmup-1")
-        mock_page.goto.assert_called_once_with(f"{BASE_URL}{DASHBOARD_PATH}", wait_until="commit", timeout=8000)
+        mock_page.goto.assert_called_once_with(f"{BASE_URL}{DASHBOARD_PATH}", wait_until="commit", timeout=30000)
         mock_extract.assert_called_once_with(mock_page)
 
     @patch("hireme_mcp.main.browser_extract_jobs")

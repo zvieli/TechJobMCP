@@ -99,6 +99,7 @@ _operation_mode: OperationMode = OperationMode.SUPERVISED
 
 # Timeout constant for live scraping operations to avoid proxy / tunnel timeouts (e.g. DevTunnel 10s limit)
 _SCRAPE_TIMEOUT_SECONDS: float = 8.0
+_WARMUP_TIMEOUT_SECONDS: float = 30.0
 
 
 async def _warm_cache(session: SessionManager, cache: JobCache) -> None:
@@ -117,13 +118,13 @@ async def _warm_cache(session: SessionManager, cache: JobCache) -> None:
     try:
         target_url = f"{BASE_URL}{DASHBOARD_PATH}"
         if DASHBOARD_PATH not in (page.url or ""):
-            await page.goto(target_url, wait_until="commit", timeout=int(_SCRAPE_TIMEOUT_SECONDS * 1000))
+            await page.goto(target_url, wait_until="commit", timeout=int(_WARMUP_TIMEOUT_SECONDS * 1000))
             if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
                 t = page.wait_for_timeout(2000)
                 if asyncio.iscoroutine(t):
                     await t
 
-        jobs = await asyncio.wait_for(browser_extract_jobs(page), timeout=_SCRAPE_TIMEOUT_SECONDS)
+        jobs = await asyncio.wait_for(browser_extract_jobs(page), timeout=_WARMUP_TIMEOUT_SECONDS)
         cache.update(jobs)
         logger.info("Cache warmup completed with %d jobs.", len(jobs))
     except asyncio.CancelledError:
@@ -229,10 +230,39 @@ class GeminiProbeMiddleware(BaseHTTPMiddleware):
             )
 
         # Handle OAuth discovery probes
-        if path.startswith("/.well-known/oauth-protected-resource"):
-            return JSONResponse({}, status_code=200, headers={"Access-Control-Allow-Origin": "*"})
+        if (
+            path.startswith("/.well-known/oauth-protected-resource")
+            or path.startswith("/.well-known/oauth-authorization-server")
+        ):
+            oauth_metadata = {
+                "resource": str(request.base_url).rstrip("/"),
+                "authorization_servers": [],
+                "scopes_supported": ["mcp"],
+                "response_types_supported": ["code"],
+                "grant_types_supported": ["authorization_code"],
+                "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+            }
+            return JSONResponse(
+                oauth_metadata,
+                status_code=200,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
 
-        return await call_next(request)
+        response = await call_next(request)
+
+        # Intercept downstream 409 Conflict responses on MCP/SSE endpoints and map to 200 OK
+        if response.status_code == 409 and path in ("/mcp", "/sse"):
+            logger.info("Intercepted 409 Conflict on %s %s, returning clean 200 OK.", method, path)
+            return Response(
+                b"MCP Session Reset",
+                status_code=200,
+                headers={
+                    "Content-Type": "text/plain",
+                    "Access-Control-Allow-Origin": "*",
+                },
+            )
+
+        return response
 
 
 

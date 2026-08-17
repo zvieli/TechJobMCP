@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastmcp import FastMCP
 
+from starlette.applications import Starlette
+from starlette.responses import Response
+from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from hireme_mcp import mcp
@@ -59,16 +62,61 @@ class TestGeminiProbeMiddleware(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
 
-    def test_oauth_protected_resource_probe(self):
-        """Verify .well-known/oauth-protected-resource returns 200 JSON object with CORS headers."""
+    def test_oauth_metadata_discovery_probes(self):
+        """Verify .well-known/oauth-* endpoints return standard OAuth metadata with CORS headers."""
         for path in (
             "/.well-known/oauth-protected-resource",
             "/.well-known/oauth-protected-resource/v1",
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/oauth-authorization-server/default",
         ):
             response = self.client.get(path)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {})
+            data = response.json()
+            self.assertIn("resource", data)
+            self.assertEqual(data.get("authorization_servers"), [])
+            self.assertEqual(data.get("scopes_supported"), ["mcp"])
+            self.assertEqual(data.get("response_types_supported"), ["code"])
+            self.assertEqual(data.get("grant_types_supported"), ["authorization_code"])
+            self.assertEqual(
+                data.get("token_endpoint_auth_methods_supported"),
+                ["none", "client_secret_post"],
+            )
             self.assertEqual(response.headers.get("access-control-allow-origin"), "*")
+
+    def test_intercept_409_conflict_on_mcp_endpoints(self):
+        """Verify downstream 409 Conflict on /mcp or /sse is intercepted and converted to 200 OK."""
+        async def conflict_route(request):
+            return Response(b"Downstream conflict", status_code=409)
+
+        async def other_route(request):
+            return Response(b"Other conflict", status_code=409)
+
+        app = Starlette(
+            routes=[
+                Route("/mcp", conflict_route, methods=["GET", "POST"]),
+                Route("/sse", conflict_route, methods=["GET", "POST"]),
+                Route("/other", other_route, methods=["GET", "POST"]),
+            ]
+        )
+        app.add_middleware(GeminiProbeMiddleware)
+        client = TestClient(app)
+
+        # /mcp 409 should be intercepted and mapped to 200 OK
+        resp_mcp = client.post("/mcp")
+        self.assertEqual(resp_mcp.status_code, 200)
+        self.assertEqual(resp_mcp.text, "MCP Session Reset")
+        self.assertEqual(resp_mcp.headers.get("access-control-allow-origin"), "*")
+
+        # /sse 409 should be intercepted and mapped to 200 OK
+        resp_sse = client.get("/sse")
+        self.assertEqual(resp_sse.status_code, 200)
+        self.assertEqual(resp_sse.headers.get("access-control-allow-origin"), "*")
+
+        # Non-MCP path /other 409 should NOT be intercepted
+        resp_other = client.get("/other")
+        self.assertEqual(resp_other.status_code, 409)
+        self.assertEqual(resp_other.text, "Other conflict")
 
     def test_passthrough_custom_routes(self):
         """Verify regular routes like /health and / pass through to the FastMCP route handlers."""
