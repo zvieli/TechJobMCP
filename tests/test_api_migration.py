@@ -372,3 +372,127 @@ async def test_fetch_user_resume_profile_error():
 
     with pytest.raises(RuntimeError, match="HireMe resume profile fetch returned status 401"):
         await fetch_user_resume_profile(mock_request_context)
+
+
+# ==========================================
+# 5. Tests for SessionManager.check_session_health
+# ==========================================
+
+
+@pytest.mark.asyncio
+async def test_check_session_health_fast_api_success():
+    """Test fast API health check succeeds via /api/auth/me without full page navigation."""
+    from hireme_mcp.core.auth import SessionManager
+
+    manager = SessionManager(user_data_dir="/tmp/test_profile")
+    mock_page = AsyncMock()
+    mock_page.url = "https://hiremetech.com/he-il/jobs-app"
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value={
+        "user": {
+            "id": "usr_987",
+            "email": "test@example.com",
+            "name": "Test User",
+        }
+    })
+    mock_page.request.get = AsyncMock(return_value=mock_resp)
+    manager.get_page = AsyncMock(return_value=mock_page)
+
+    result = await manager.check_session_health()
+
+    assert result is True
+    mock_page.request.get.assert_awaited_once()
+    called_url = mock_page.request.get.call_args[0][0]
+    assert "/api/auth/me" in called_url
+    mock_page.goto.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_session_health_fast_api_unauthenticated_401():
+    """Test fast API health check returns False immediately on HTTP 401."""
+    from hireme_mcp.core.auth import SessionManager
+
+    manager = SessionManager(user_data_dir="/tmp/test_profile")
+    mock_page = AsyncMock()
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 401
+    mock_page.request.get = AsyncMock(return_value=mock_resp)
+    manager.get_page = AsyncMock(return_value=mock_page)
+
+    result = await manager.check_session_health()
+
+    assert result is False
+    mock_page.request.get.assert_awaited_once()
+    mock_page.goto.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_session_health_fast_api_unauthenticated_403():
+    """Test fast API health check returns False immediately on HTTP 403."""
+    from hireme_mcp.core.auth import SessionManager
+
+    manager = SessionManager(user_data_dir="/tmp/test_profile")
+    mock_page = AsyncMock()
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 403
+    mock_page.request.get = AsyncMock(return_value=mock_resp)
+    manager.get_page = AsyncMock(return_value=mock_page)
+
+    result = await manager.check_session_health()
+
+    assert result is False
+    mock_page.request.get.assert_awaited_once()
+    mock_page.goto.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_check_session_health_api_error_fallback_to_page_goto():
+    """Test fallback to page.goto navigation when /api/auth/me request throws network/timeout error."""
+    from hireme_mcp.core.auth import SessionManager
+
+    manager = SessionManager(user_data_dir="/tmp/test_profile")
+    mock_page = AsyncMock()
+    mock_page.request.get = AsyncMock(side_effect=Exception("Connection timeout"))
+
+    mock_goto_resp = AsyncMock()
+    mock_goto_resp.status = 200
+    mock_page.goto = AsyncMock(return_value=mock_goto_resp)
+    mock_page.url = "https://hiremetech.com/he-il/jobs-app"
+    manager.get_page = AsyncMock(return_value=mock_page)
+
+    result = await manager.check_session_health()
+
+    assert result is True
+    mock_page.request.get.assert_awaited_once()
+    mock_page.goto.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_check_session_health_api_200_missing_user_fallback():
+    """Test fallback to page.goto navigation when /api/auth/me returns 200 without valid user dict."""
+    from hireme_mcp.core.auth import SessionManager
+
+    manager = SessionManager(user_data_dir="/tmp/test_profile")
+    mock_page = AsyncMock()
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value={"user": None})
+    mock_page.request.get = AsyncMock(return_value=mock_resp)
+
+    mock_goto_resp = AsyncMock()
+    mock_goto_resp.status = 200
+    mock_page.goto = AsyncMock(return_value=mock_goto_resp)
+    mock_page.url = "https://hiremetech.com/he-il/jobs-app"
+    manager.get_page = AsyncMock(return_value=mock_page)
+
+    result = await manager.check_session_health()
+
+    assert result is True
+    mock_page.request.get.assert_awaited_once()
+    mock_page.goto.assert_awaited_once()
+

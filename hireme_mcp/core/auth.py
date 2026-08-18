@@ -107,12 +107,40 @@ class SessionManager:
         return self.page
 
     async def check_session_health(self) -> bool:
-        """Navigate to dashboard and check if session is authenticated.
+        """Check if session is authenticated, attempting fast /api/auth/me probe first.
 
         Returns:
-            bool: True if session is valid and on dashboard, False if redirected to login or unauthorized.
+            bool: True if session is valid, False if unauthenticated or redirected to login.
         """
         page = await self.get_page()
+
+        # 1. Fast API health check probe (<50ms)
+        try:
+            auth_me_url = f"{BASE_URL}/api/auth/me"
+            resp = await page.request.get(auth_me_url, timeout=5000)
+            if resp.status == 200:
+                data = await resp.json()
+                if isinstance(data, dict) and "user" in data and isinstance(data["user"], dict) and data["user"].get("id"):
+                    user = data["user"]
+                    user_label = user.get("email") or user.get("name") or user.get("id")
+                    logger.info(
+                        "Session health check passed via /api/auth/me for user %s",
+                        user_label,
+                    )
+                    return True
+            elif resp.status in (401, 403):
+                logger.warning(
+                    "Session unauthenticated (HTTP %d on /api/auth/me)",
+                    resp.status,
+                )
+                return False
+        except Exception as exc:
+            logger.debug(
+                "Fast /api/auth/me check failed with error: %s. Falling back to page navigation.",
+                exc,
+            )
+
+        # 2. Fallback: Standard page navigation check
         target_url = f"{BASE_URL}{DASHBOARD_PATH}"
         logger.info("Checking session health at %s", target_url)
 
@@ -120,7 +148,7 @@ class SessionManager:
             response = await page.goto(
                 target_url,
                 wait_until="commit",
-                timeout=20000,
+                timeout=10000,
             )
             await page.wait_for_timeout(2500)
 
