@@ -240,25 +240,43 @@ class GeminiProbeMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        # Handle GET probes on /mcp or /sse when not establishing an active SSE stream
-        if method == "GET" and path in ("/mcp", "/sse"):
-            accept_header = request.headers.get("accept", "")
-            if "text/event-stream" not in accept_header:
-                return Response(
-                    b"MCP Server Active",
-                    status_code=200,
-                    headers={
-                        "Content-Type": "text/plain",
-                        "Access-Control-Allow-Origin": "*",
-                    },
-                )
+        # Handle POST probes on /sse that are sent by clients checking endpoint availability
+        if method == "POST" and path == "/sse":
+            return Response(
+                b"SSE Endpoint Ready",
+                status_code=200,
+                headers={
+                    "Content-Type": "text/plain",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
+
+        # Handle GET probes on /mcp or /sse when no active session ID is provided
+        has_session = bool(request.headers.get("mcp-session-id") or request.query_params.get("session_id"))
+        if method == "GET" and path in ("/mcp", "/sse") and not has_session:
+            return Response(
+                b"MCP Server Active",
+                status_code=200,
+                headers={
+                    "Content-Type": "text/plain",
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
+            )
 
         # Handle DELETE probes on MCP endpoints
         if method == "DELETE" and path in ("/mcp", "/sse"):
             return Response(
                 b"",
                 status_code=200,
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
             )
 
         # Handle OAuth discovery probes
@@ -277,10 +295,19 @@ class GeminiProbeMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 oauth_metadata,
                 status_code=200,
-                headers={"Access-Control-Allow-Origin": "*"},
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
+                },
             )
 
         response = await call_next(request)
+
+        # Ensure CORS headers are on every response
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
 
         # Intercept downstream 409 Conflict responses on MCP/SSE endpoints and map to 200 OK
         if response.status_code == 409 and path in ("/mcp", "/sse"):
@@ -291,6 +318,8 @@ class GeminiProbeMiddleware(BaseHTTPMiddleware):
                 headers={
                     "Content-Type": "text/plain",
                     "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "*",
+                    "Access-Control-Allow-Headers": "*",
                 },
             )
 

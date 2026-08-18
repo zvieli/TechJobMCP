@@ -1,209 +1,157 @@
-# HireMeTech FastMCP Server
+# Universal Multi-Source Job Search FastMCP Server (`job-mcp`)
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP 2.0+](https://img.shields.io/badge/FastMCP-2.0+-green.svg)](https://github.com/jlowin/fastmcp)
-[![Playwright](https://img.shields.io/badge/Playwright-Chromium-orange.svg)](https://playwright.dev/python/)
+[![Tests Passing](https://img.shields.io/badge/tests-239%20passed-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
-An enterprise-grade **FastMCP** server providing intelligent job matching, filtering, bookmarking, and automated job applications on **HireMeTech** using headless Playwright browser automation and persistent session state.
+An enterprise-grade **FastMCP** server providing intelligent, multi-source tech job aggregation, smart deduplication, CV keyword matching, and automated job applications across **HireMeTech**, **Comeet ATS**, and **AllJobs Israel**.
 
 ---
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      MCP Client                             │
-│     (Claude Desktop / Gemini Spark / Antigravity / Cursor)   │
-└──────────────────────────────┬──────────────────────────────┘
-                               │ JSON-RPC (stdio / HTTP / SSE)
-┌──────────────────────────────▼──────────────────────────────┐
-│                  HireMeTech FastMCP Server                  │
-│                                                             │
-│  ┌───────────────────────┐      ┌────────────────────────┐  │
-│  │   Lifespan Manager    │      │       Job Cache        │  │
-│  │  (Session & Health)   │      │    (TTL In-Memory)     │  │
-│  └───────────┬───────────┘      └───────────▲────────────┘  │
-│              │                              │               │
-│  ┌───────────▼──────────────────────────────┴────────────┐  │
-│  │                 6 Core MCP Tools                      │  │
-│  │  • get_job_matches        • bookmark_job              │  │
-│  │  • filter_jobs_by_prefs   • delete_job                │  │
-│  │  • auto_apply_job (Step 1)• confirm_auto_apply(Step 2)│  │
-│  └───────────────────────────┬───────────────────────────┘  │
-│                              │                              │
-│  ┌───────────────────────────▼───────────────────────────┐  │
-│  │      Playwright Automation & Self-Healing Engine      │  │
-│  │  • Primary / Fallback Selectors Registry              │  │
-│  │  • Persistent Chromium Profile Store                  │  │
-│  └───────────────────────────┬───────────────────────────┘  │
-└──────────────────────────────┼──────────────────────────────┘
-                               │ Chromium (Headless/Headed)
-┌──────────────────────────────▼──────────────────────────────┐
-│                    https://hiremetech.com                   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    Client([MCP Client: Gemini Spark / Claude / Cursor / Antigravity]) --> Tools[FastMCP Server Layer]
+    Tools --> Aggregator[JobAggregator]
+    Aggregator --> Registry[SourceRegistry]
+
+    subgraph Parallel Pluggable Sources Layer
+        Registry --> S1[HireMeTechSource<br/>Direct REST API + Session Fallback]
+        Registry --> S2[ComeetSource<br/>Direct ATS API + Concurrency Semaphore]
+        Registry --> S3[AllJobsSource<br/>Category Feeds + Anti-Blocking Headers]
+    end
+
+    subgraph Processing & Normalization Engine
+        S1 --> Dedup[Deduplication & Entity Merger]
+        S2 --> Dedup
+        S3 --> Dedup
+        
+        Dedup --> NormKey["Key = slug(title) + '@' + slug(company)"]
+        NormKey --> Merge[Metadata & Links Merger]
+        Merge --> Scorer[Unified CV / Skill Matcher]
+    end
+
+    Scorer --> Cache[Unified JobCache - 1h TTL]
+    Cache --> Tools
 ```
 
 ---
 
 ## Key Features
 
-1. **Persistent Browser Session**: Reusable user profile directory storing login cookies, tokens, and session state across runs.
-2. **Self-Healing Selectors**: Primary data-testid selectors with automatic fallbacks for resilient DOM navigation.
-3. **Smart Job Matching & Scoring**: Weighted scoring engine (0-100) evaluating tech stack overlap, keywords, work mode, and CV text.
-4. **CV / Resume Parser**: Automatically extracts technologies and skill keywords from `.pdf`, `.docx`, and `.txt` files.
-5. **Safe 2-Step Application Workflow**:
-   - **Step 1 (`auto_apply_job`)**: Non-destructive inspection of form fields and generation of application preview.
-   - **Step 2 (`confirm_auto_apply`)**: Explicit user confirmation before submission.
-6. **Multi-Transport Support**: Run over `stdio`, `http`, or `sse`.
+1. **Pluggable Multi-Source Architecture**:
+   - **HireMeTech**: Direct REST API integration (`/api/jobs/search`, `/api/auth/me`, `/api/resume/profile`) with automated DOM fallback.
+   - **Comeet (Direct ATS)**: Direct integration with Comeet Careers API (`/careers-api/2.0/company/{id}/positions`) with `asyncio.Semaphore(5)` rate-limiting, top tech directory (Comm-IT and more), and per-company TTL caching.
+   - **AllJobs Israel**: Israel's largest tech index integration with realistic browser headers and source-level error isolation.
+2. **Cross-Source Deduplication & Entity Merger**:
+   - Eliminates duplicate postings when companies post on multiple platforms.
+   - Merges source lists (`sources: ["hiremetech", "comeet"]`), unions tech stacks, selects the richest description, and prioritizes direct ATS application links.
+3. **Smart Job Matching & CV Scoring**:
+   - Weighted scoring (0–100) based on tech stack overlap, work mode (`remote`/`hybrid`/`onsite`), location, salary, and CV extraction (`.pdf`, `.docx`, `.txt`).
+4. **Autonomous & Supervised Operation Modes**:
+   - **Supervised Mode**: Standard MCP confirmation for each tool.
+   - **Autonomous Mode**: Safe read/filter/bookmark chaining without manual prompts; safety barrier on application submission.
+5. **Observability & Resilience**:
+   - Structured JSON logging (`structlog`) writing to `stderr` with secret/token sanitization.
+   - Automatic trace ID tracking across all `ToolResponse` payloads.
 
 ---
 
-## Tool Reference
+## Tool Reference (9 Tools)
 
 | Tool Name | Parameters | Description |
 |---|---|---|
-| `get_job_matches` | `force_refresh: bool = False` | Fetches jobs from HireMeTech dashboard. Uses cache if fresh. |
-| `filter_jobs_by_preferences` | `tech_stack: list[str]`, `work_mode: str`, `location: str`, `min_salary: int`, `keywords: list[str]`, `exclude_keywords: list[str]`, `cv_path: str` | Filters and ranks cached jobs with match scoring (0-100). |
-| `bookmark_job` | `job_id: str` | Bookmarks/favorites a job listing on the platform and in cache. |
-| `delete_job` | `job_id: str` | Dismisses/hides a job listing from view and removes from cache. |
+| `list_job_sources` | *none* | Lists all registered job sources (`hiremetech`, `comeet`, `alljobs`), capabilities, and real-time health. |
+| `get_job_matches` | `sources: list[str] = None`, `force_refresh: bool = False` | Fetches matched listings across all or specified platforms with deduplication. |
+| `filter_jobs_by_preferences` | `tech_stack: list[str]`, `work_mode: str`, `location: str`, `min_salary: int`, `keywords: list[str]`, `exclude_keywords: list[str]`, `cv_path: str` | Scores and filters aggregated jobs against CV and preference parameters. |
+| `bookmark_job` | `job_id: str` | Saves/favorites a job listing on the originating platform. |
+| `delete_job` | `job_id: str` | Dismisses/hides a job listing from view and removes it from cache. |
 | `auto_apply_job` | `job_id: str` | **Step 1**: Inspects application modal, stages preview, reports warnings. |
-| `confirm_auto_apply` | `job_id: str` | **Step 2**: Executes application submission for a previously staged preview. |
+| `confirm_auto_apply` | `job_id: str` | **Step 2**: Executes application submission. Always requires explicit confirmation. |
+| `calibrate_selectors` | *none* | Discovers and calibrates DOM selectors against live pages with self-healing heuristics. |
+| `set_operation_mode` | `mode: 'supervised' \| 'autonomous'` | Switches server execution mode. |
 
 ---
 
-## Installation & Quick Start
+## Quick Start & Setup
 
 ### 1. Clone & Install Dependencies
 
 ```bash
-git clone https://github.com/your-username/hireme_mcp.git
+git clone https://github.com/zvieli/hireme_mcp.git
 cd hireme_mcp
 
 # Using uv (recommended)
 uv venv .venv
 uv pip install -e ".[dev]"
-
-# Install Playwright browser dependencies
 playwright install chromium
 ```
 
-### 2. First-Time Authentication Setup
-
-Run the interactive setup utility to open a headed Chromium window and log in to your HireMeTech account:
+### 2. (Optional) First-Time Authentication Setup for HireMeTech
+*Comeet and AllJobs work automatically without login.* To authenticate your HireMeTech account for direct API access and auto-apply:
 
 ```bash
-# Using CLI entry point
-python -m hireme_mcp.setup
-
-# Or via console script
-hireme-mcp-setup
+.venv/bin/python -m job_mcp.setup
 ```
-
-1. Log in to your HireMeTech account in the opened browser window (complete any 2FA/SSO if prompted).
-2. Once on the Dashboard, return to the terminal and press `[Enter]`.
-3. Your session cookies and tokens are securely saved to `~/.hireme_mcp/browser_profile`.
+1. A Chromium browser window will open.
+2. Log in with your credentials.
+3. Return to the terminal and press `[Enter]` to save the session to `~/.hireme_mcp/browser_profile`.
 
 ---
 
 ## Running the Server
 
-### Stdio Mode (Default for MCP Clients)
+### Option A: Using Docker (Recommended)
 
 ```bash
-python -m hireme_mcp
+# Build and run in background
+docker compose up -d
+
+# View live multi-source aggregation logs
+docker compose logs -f hireme-mcp
 ```
 
-### HTTP Transport Mode
+### Option B: Local Execution
 
 ```bash
-export MCP_TRANSPORT=http
-export MCP_HOST=0.0.0.0
-export MCP_PORT=8000
-python -m hireme_mcp
-```
+# Streamable HTTP (Default for Web & Cloud Clients)
+.venv/bin/python -m job_mcp --transport http --host 0.0.0.0 --port 8000
 
-### SSE Transport Mode
-
-```bash
-export MCP_TRANSPORT=sse
-export MCP_HOST=0.0.0.0
-export MCP_PORT=8000
-python -m hireme_mcp
+# Stdio (Default for Desktop Clients)
+.venv/bin/python -m job_mcp --transport stdio
 ```
 
 ---
 
 ## MCP Client Configuration
 
-### Claude Desktop (`claude_desktop_config.json`)
+### 1. Gemini Spark (Google Custom MCP Server)
+- **Endpoint URL**: `https://<your-devtunnel-id>.devtunnels.ms/mcp`
+- **Transport**: `Streamable HTTP`
+- **Authentication**: None / No Auth
 
-**On Linux/macOS:** `~/.config/Claude/claude_desktop_config.json`  
+### 2. Claude Desktop (`claude_desktop_config.json`)
+
+**On Linux:** `~/.config/Claude/claude_desktop_config.json`  
+**On macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`  
 **On Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
-    "hireme-tech": {
+    "job-search-mcp": {
       "command": "/home/lior/data/projects/hireme_mcp/.venv/bin/python",
-      "args": ["-m", "hireme_mcp"],
+      "args": ["-m", "job_mcp", "--transport", "stdio"],
       "env": {
         "BROWSER_HEADLESS": "true",
-        "BROWSER_PROFILE_DIR": "/home/lior/.hireme_mcp/browser_profile",
-        "CACHE_TTL_MINUTES": "60",
+        "DEFAULT_CV_PATH": "/home/lior/data/projects/hireme_mcp/lior_zvieli_cv.pdf",
         "LOG_LEVEL": "INFO"
       }
     }
   }
 }
-```
-
-### Gemini Spark / Antigravity / Cursor (`mcp_config.json`)
-
-```json
-{
-  "mcpServers": {
-    "hireme-tech": {
-      "command": "python",
-      "args": ["-m", "hireme_mcp"],
-      "transport": "stdio",
-      "env": {
-        "BROWSER_HEADLESS": "true",
-        "BROWSER_PROFILE_DIR": "~/.hireme_mcp/browser_profile"
-      }
-    }
-  }
-}
-```
-
----
-
-## Docker Deployment
-
-### Using Docker Compose
-
-```bash
-# 1. Build and run
-docker compose up -d
-
-# 2. View logs
-docker compose logs -f hireme-mcp
-```
-
-### Using Docker Directly
-
-```bash
-# Build image
-docker build -t hireme-mcp .
-
-# Run container with mapped persistent profile
-docker run -d \
-  --name hireme-mcp-server \
-  -p 8000:8000 \
-  -v $(pwd)/browser_profile:/app/browser_profile \
-  -e MCP_TRANSPORT=http \
-  -e BROWSER_HEADLESS=true \
-  hireme-mcp
 ```
 
 ---
@@ -212,58 +160,23 @@ docker run -d \
 
 | Variable | Default | Description |
 |---|---|---|
-| `MCP_TRANSPORT` | `stdio` | Transport protocol (`stdio`, `http`, `sse`). |
+| `MCP_TRANSPORT` | `http` | Transport protocol (`http`, `sse`, `stdio`). |
 | `MCP_HOST` | `0.0.0.0` | Host binding for HTTP/SSE transport. |
 | `MCP_PORT` | `8000` | Port for HTTP/SSE transport. |
 | `BROWSER_HEADLESS` | `true` | Run browser in headless mode (`true`/`false`). |
-| `BROWSER_PROFILE_DIR` | `~/.hireme_mcp/browser_profile` | Directory for persistent Chromium storage. |
-| `CACHE_TTL_MINUTES` | `60` | In-memory job cache expiration time in minutes. |
-| `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `BROWSER_PROFILE_DIR` | `/app/browser_profile` | Directory for persistent Chromium storage. |
+| `DEFAULT_CV_PATH` | `/app/cv.pdf` | Default CV file path for automatic skill matching. |
+| `CACHE_TTL_MINUTES` | `60` | In-memory cache TTL in minutes. |
+| `LOG_LEVEL` | `INFO` | Structured logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
 
 ---
 
 ## Running Tests
 
-Run the full automated test suite with pytest:
+Run the full automated test suite (239 tests):
 
 ```bash
 .venv/bin/pytest tests/ -v
-```
-
-Output:
-```
-tests/test_core.py::TestAuth::test_auth_constants PASSED
-tests/test_core.py::TestAuth::test_session_manager_custom_init PASSED
-tests/test_core.py::TestAuth::test_session_manager_init_defaults PASSED
-tests/test_core.py::TestAuth::test_session_manager_lifecycle PASSED
-tests/test_core.py::TestBrowser::test_bookmark_and_delete_job PASSED
-tests/test_core.py::TestBrowser::test_extract_jobs_mock PASSED
-tests/test_core.py::TestBrowser::test_helper_extractors PASSED
-tests/test_core.py::TestBrowser::test_preview_and_execute_application PASSED
-tests/test_core.py::TestBrowser::test_resolve_selector_primary PASSED
-tests/test_core.py::TestBrowser::test_selectors_registry PASSED
-tests/test_core.py::TestApiClient::test_extract_cv_keywords_docx PASSED
-tests/test_core.py::TestApiClient::test_extract_cv_keywords_txt PASSED
-tests/test_core.py::TestApiClient::test_filter_jobs PASSED
-tests/test_core.py::TestApiClient::test_job_cache PASSED
-tests/test_server.py::TestServerRegistration::test_all_tools_registered PASSED
-tests/test_server.py::TestServerRegistration::test_browser_lifespan PASSED
-tests/test_server.py::TestServerRegistration::test_server_metadata PASSED
-tests/test_server.py::TestCliAndSetup::test_main_http PASSED
-tests/test_server.py::TestCliAndSetup::test_main_sse PASSED
-tests/test_server.py::TestCliAndSetup::test_main_stdio PASSED
-tests/test_server.py::TestCliAndSetup::test_run_setup_failure PASSED
-tests/test_server.py::TestCliAndSetup::test_run_setup_success PASSED
-tests/test_tools.py::TestMcpTools::test_bookmark_job_flow PASSED
-tests/test_tools.py::TestMcpTools::test_confirm_auto_apply_without_preview_error PASSED
-tests/test_tools.py::TestMcpTools::test_delete_job_flow PASSED
-tests/test_tools.py::TestMcpTools::test_filter_jobs_by_cv_file PASSED
-tests/test_tools.py::TestMcpTools::test_filter_jobs_by_stack_and_work_mode PASSED
-tests/test_tools.py::TestMcpTools::test_filter_jobs_no_cached_jobs PASSED
-tests/test_tools.py::TestMcpTools::test_get_job_matches_cache_hit PASSED
-tests/test_tools.py::TestMcpTools::test_get_job_matches_live_fetch_and_force_refresh PASSED
-tests/test_tools.py::TestMcpTools::test_get_job_matches_unauthenticated PASSED
-tests/test_tools.py::TestMcpTools::test_two_step_auto_apply_flow PASSED
 ```
 
 ---
