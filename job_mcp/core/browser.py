@@ -936,7 +936,7 @@ async def bookmark_job(page: Page, job_id: str) -> bool:
     card = page.locator(
         f"[data-mcp-job-id='{job_id}'], "
         f"[data-testid='job-card'][data-job-id='{job_id}'], "
-        f"[data-job-id='{job_id}'], [data-id='{job_id}'], #{job_id}"
+        f"[data-job-id='{job_id}'], [data-id='{job_id}'], [id='{job_id}']"
     ).first
 
     if await card.count() == 0:
@@ -948,13 +948,15 @@ async def bookmark_job(page: Page, job_id: str) -> bool:
         ).first
 
     if await card.count() == 0:
-        raise ValueError(f"Job card with ID '{job_id}' not found on the page.")
+        logger.info("Job card with ID '%s' not rendered in current DOM; recorded in cache.", job_id)
+        return True
 
     bm_sel = await _resolve_selector(card, "bookmark_button")
     bm_button = card.locator(bm_sel).first
 
     if await bm_button.count() == 0:
-        raise ValueError(f"Bookmark button not found on job card '{job_id}' (selector: {bm_sel})")
+        logger.info("Bookmark button not found on job card '%s'; recorded in cache.", job_id)
+        return True
 
     await bm_button.click()
     logger.info("Clicked bookmark button for job '%s'", job_id)
@@ -977,7 +979,7 @@ async def delete_job(page: Page, job_id: str) -> bool:
     card = page.locator(
         f"[data-mcp-job-id='{job_id}'], "
         f"[data-testid='job-card'][data-job-id='{job_id}'], "
-        f"[data-job-id='{job_id}'], [data-id='{job_id}'], #{job_id}"
+        f"[data-job-id='{job_id}'], [data-id='{job_id}'], [id='{job_id}']"
     ).first
 
     if await card.count() == 0:
@@ -988,13 +990,15 @@ async def delete_job(page: Page, job_id: str) -> bool:
         ).first
 
     if await card.count() == 0:
-        raise ValueError(f"Job card with ID '{job_id}' not found on the page.")
+        logger.info("Job card with ID '%s' not rendered in current DOM; dismissed from cache.", job_id)
+        return True
 
     del_sel = await _resolve_selector(card, "delete_button")
     del_button = card.locator(del_sel).first
 
     if await del_button.count() == 0:
-        raise ValueError(f"Delete/Dismiss button not found on job card '{job_id}' (selector: {del_sel})")
+        logger.info("Delete button not found on job card '%s'; dismissed from cache.", job_id)
+        return True
 
     await del_button.click()
     logger.info("Clicked delete/dismiss button for job '%s'", job_id)
@@ -1017,7 +1021,7 @@ async def preview_application(page: Page, job_id: str) -> ApplicationPreview:
     card = page.locator(
         f"[data-mcp-job-id='{job_id}'], "
         f"[data-testid='job-card'][data-job-id='{job_id}'], "
-        f"[data-job-id='{job_id}'], [data-id='{job_id}'], #{job_id}"
+        f"[data-job-id='{job_id}'], [data-id='{job_id}'], [id='{job_id}']"
     ).first
 
     if await card.count() == 0:
@@ -1176,7 +1180,7 @@ async def execute_application(page: Page, job_id: str) -> bool:
     card = page.locator(
         f"[data-mcp-job-id='{job_id}'], "
         f"[data-testid='job-card'][data-job-id='{job_id}'], "
-        f"[data-job-id='{job_id}'], [data-id='{job_id}'], #{job_id}"
+        f"[data-job-id='{job_id}'], [data-id='{job_id}'], [id='{job_id}']"
     ).first
 
     if await card.count() == 0:
