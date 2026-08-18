@@ -13,3 +13,7 @@ Task 3: complete (commits bd52f1b..9a76b01, review clean)
 Task 4: complete (commits 9a76b01..9bee629, review clean)
 Hardening Task 1: complete (commits 8e727ad..e3eb74d, review clean)
 Hardening Task 2: complete (commits e3eb74d..3ac84b4, review clean)
+Direct API Task 1: complete (commits 45bf33e..88fa2be, review clean)
+Direct API Task 2: complete (commits 88fa2be..925d0f2, review clean)
+Direct API Task 3: complete (in progress for commit)
+

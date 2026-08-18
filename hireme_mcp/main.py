@@ -11,7 +11,12 @@ from fastmcp import Context, FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
-from hireme_mcp.core.api_client import JobCache, filter_jobs
+from hireme_mcp.core.api_client import (
+    JobCache,
+    fetch_jobs_via_api,
+    fetch_user_resume_profile,
+    filter_jobs,
+)
 from hireme_mcp.core.auth import (
     BASE_URL,
     DASHBOARD_PATH,
@@ -106,7 +111,9 @@ async def _warm_cache(session: SessionManager, cache: JobCache) -> None:
     """Warm up the job cache asynchronously in the background during startup.
 
     Checks session health via `ensure_ready()`. If authenticated and healthy,
-    navigates to the dashboard, extracts current jobs, and populates the cache.
+    attempts to fetch jobs via direct API first. If API fetch fails or returns
+    empty, navigates to the dashboard, extracts current jobs via DOM scraping,
+    and populates the cache.
     Catches all exceptions gracefully so background warmup never crashes the server.
     """
     try:
@@ -115,6 +122,20 @@ async def _warm_cache(session: SessionManager, cache: JobCache) -> None:
         logger.info("Cache warmup skipped (session not ready / unauthenticated): %s", exc)
         return
 
+    # 1. Primary data source: Direct API fetch (~100-200ms)
+    try:
+        jobs = await fetch_jobs_via_api(page.request, size=50)
+        if jobs:
+            cache.update(jobs)
+            logger.info("Cache warmup completed via API with %d jobs.", len(jobs))
+            return
+    except asyncio.CancelledError:
+        logger.debug("Cache warmup task cancelled.")
+        raise
+    except Exception as api_exc:
+        logger.debug("API warmup fallback: %s", api_exc)
+
+    # 2. Fallback: Browser DOM scraping
     try:
         target_url = f"{BASE_URL}{DASHBOARD_PATH}"
         if DASHBOARD_PATH not in (page.url or ""):
@@ -415,18 +436,29 @@ async def get_job_matches(
                 error_code="UNAUTHENTICATED",
             )
 
-        async def _scrape_live() -> list[Job]:
-            page = await session.get_page()
-            target_url = f"{BASE_URL}{DASHBOARD_PATH}"
-            if DASHBOARD_PATH not in (page.url or ""):
-                await page.goto(target_url, wait_until="commit", timeout=int(_SCRAPE_TIMEOUT_SECONDS * 1000))
-                if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
-                    t = page.wait_for_timeout(2500)
-                    if asyncio.iscoroutine(t):
-                        await t
-            return await browser_extract_jobs(page)
+        page = await session.get_page()
+        jobs: list[Job] = []
 
-        jobs = await asyncio.wait_for(_scrape_live(), timeout=_SCRAPE_TIMEOUT_SECONDS)
+        # 1. Primary data source: Direct API fetch (~100-200ms)
+        try:
+            jobs = await asyncio.wait_for(fetch_jobs_via_api(page.request, size=50), timeout=5.0)
+        except Exception as api_exc:
+            logger.debug("Direct API fetch failed or timed out, falling back to DOM scraping: %s", api_exc)
+
+        # 2. Fallback: Browser DOM scraping
+        if not jobs:
+            async def _scrape_live() -> list[Job]:
+                target_url = f"{BASE_URL}{DASHBOARD_PATH}"
+                if DASHBOARD_PATH not in (page.url or ""):
+                    await page.goto(target_url, wait_until="commit", timeout=int(_SCRAPE_TIMEOUT_SECONDS * 1000))
+                    if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
+                        t = page.wait_for_timeout(2500)
+                        if asyncio.iscoroutine(t):
+                            await t
+                return await browser_extract_jobs(page)
+
+            jobs = await asyncio.wait_for(_scrape_live(), timeout=_SCRAPE_TIMEOUT_SECONDS)
+
         cache.update(jobs)
 
         return _response(
@@ -496,12 +528,29 @@ async def filter_jobs_by_preferences(
             logger.debug("Unknown work mode: '%s'. Proceeding with string match.", work_mode)
 
     effective_cv_path = cv_path or os.getenv("DEFAULT_CV_PATH")
+    effective_tech_stack = list(tech_stack or [])
+    effective_keywords = list(keywords or [])
+
+    # If no local CV path is provided, attempt to supplement skills from online user resume profile
+    if not effective_cv_path and not effective_tech_stack and not effective_keywords:
+        try:
+            session, is_healthy = await _ensure_session(ctx)
+            if is_healthy:
+                page = await session.get_page()
+                profile = await asyncio.wait_for(fetch_user_resume_profile(page.request), timeout=3.0)
+                if isinstance(profile, dict):
+                    skills = profile.get("technical_skills") or profile.get("skills") or []
+                    if isinstance(skills, list) and skills:
+                        effective_tech_stack = [s for s in skills if isinstance(s, str) and s.strip()]
+        except Exception as exc:
+            logger.debug("Optional resume profile fetch skipped or failed: %s", exc)
+
     prefs = JobPreferences(
-        tech_stack=tech_stack or [],
+        tech_stack=effective_tech_stack,
         work_mode=parsed_work_mode,
         location=location,
         min_salary=min_salary,
-        keywords=keywords or [],
+        keywords=effective_keywords,
         exclude_keywords=exclude_keywords or [],
         cv_path=effective_cv_path,
     )

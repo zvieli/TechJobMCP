@@ -1,7 +1,7 @@
 """Comprehensive tests for direct API client and payload mapping."""
 
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from hireme_mcp.core.api_client import (
     fetch_jobs_via_api,
@@ -495,4 +495,173 @@ async def test_check_session_health_api_200_missing_user_fallback():
     assert result is True
     mock_page.request.get.assert_awaited_once()
     mock_page.goto.assert_awaited_once()
+
+
+# ==========================================
+# 6. Tests for Tool Integration & Seamless Fallback
+# ==========================================
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_api_success():
+    """Verify _warm_cache attempts API first and populates cache without DOM navigation."""
+    from hireme_mcp.core.api_client import JobCache
+    from hireme_mcp.main import _warm_cache
+
+    sample_jobs = [
+        Job(job_id="api-1", title="API Engineer", company="API Corp", tech_stack=["Python"])
+    ]
+
+    mock_session = AsyncMock()
+    mock_page = AsyncMock()
+    mock_session.ensure_ready.return_value = mock_page
+
+    cache = JobCache(ttl_minutes=15)
+
+    with patch("hireme_mcp.main.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("hireme_mcp.main.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+        mock_api.return_value = sample_jobs
+
+        await _warm_cache(mock_session, cache)
+
+        assert len(cache.get_all()) == 1
+        assert cache.get_all()[0].job_id == "api-1"
+        mock_api.assert_awaited_once_with(mock_page.request, size=50)
+        mock_dom.assert_not_called()
+        mock_page.goto.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_warm_cache_api_failure_fallback_to_dom():
+    """Verify _warm_cache falls back to DOM scraping when API fetch fails."""
+    from hireme_mcp.core.api_client import JobCache
+    from hireme_mcp.main import _warm_cache
+
+    sample_jobs = [
+        Job(job_id="dom-1", title="DOM Engineer", company="DOM Corp", tech_stack=["React"])
+    ]
+
+    mock_session = AsyncMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://hiremetech.com/login"
+    mock_session.ensure_ready.return_value = mock_page
+
+    cache = JobCache(ttl_minutes=15)
+
+    with patch("hireme_mcp.main.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("hireme_mcp.main.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+        mock_api.side_effect = RuntimeError("API 500 Error")
+        mock_dom.return_value = sample_jobs
+
+        await _warm_cache(mock_session, cache)
+
+        assert len(cache.get_all()) == 1
+        assert cache.get_all()[0].job_id == "dom-1"
+        mock_api.assert_awaited_once_with(mock_page.request, size=50)
+        mock_dom.assert_awaited_once_with(mock_page)
+        mock_page.goto.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_job_matches_api_success():
+    """Verify get_job_matches fetches via API and skips DOM scraping when API succeeds."""
+    from fastmcp import Context
+    from hireme_mcp.core.api_client import JobCache
+    from hireme_mcp.main import get_job_matches
+
+    sample_jobs = [
+        Job(job_id="api-201", title="Cloud Architect", company="CloudCo", tech_stack=["AWS", "Terraform"])
+    ]
+
+    cache = JobCache(ttl_minutes=10)
+    mock_session = AsyncMock()
+    mock_session.ensure_ready.return_value = AsyncMock()
+    mock_page = AsyncMock()
+    mock_session.get_page.return_value = mock_page
+
+    ctx = MagicMock(spec=Context)
+    ctx.lifespan_context = {"session": mock_session, "cache": cache}
+
+    with patch("hireme_mcp.main.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("hireme_mcp.main.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+        mock_api.return_value = sample_jobs
+
+        res = await get_job_matches(force_refresh=True, ctx=ctx)
+
+        assert res["success"] is True
+        assert len(res["data"]) == 1
+        assert res["data"][0]["job_id"] == "api-201"
+        mock_api.assert_awaited_once_with(mock_page.request, size=50)
+        mock_dom.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_job_matches_api_failure_fallback_to_dom():
+    """Verify get_job_matches seamlessly falls back to DOM scraping when API fetch throws an error."""
+    from fastmcp import Context
+    from hireme_mcp.core.api_client import JobCache
+    from hireme_mcp.main import get_job_matches
+
+    sample_jobs = [
+        Job(job_id="dom-301", title="Frontend Specialist", company="UI Corp", tech_stack=["Vue"])
+    ]
+
+    cache = JobCache(ttl_minutes=10)
+    mock_session = AsyncMock()
+    mock_session.ensure_ready.return_value = AsyncMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://hiremetech.com/login"
+    mock_session.get_page.return_value = mock_page
+
+    ctx = MagicMock(spec=Context)
+    ctx.lifespan_context = {"session": mock_session, "cache": cache}
+
+    with patch("hireme_mcp.main.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("hireme_mcp.main.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+        mock_api.side_effect = RuntimeError("API service unavailable")
+        mock_dom.return_value = sample_jobs
+
+        res = await get_job_matches(force_refresh=True, ctx=ctx)
+
+        assert res["success"] is True
+        assert len(res["data"]) == 1
+        assert res["data"][0]["job_id"] == "dom-301"
+        mock_api.assert_awaited_once_with(mock_page.request, size=50)
+        mock_dom.assert_awaited_once_with(mock_page)
+        mock_page.goto.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_filter_jobs_by_preferences_supplements_skills_from_resume_profile():
+    """Verify filter_jobs_by_preferences queries online resume profile when cv_path & tech_stack are omitted."""
+    from fastmcp import Context
+    from hireme_mcp.core.api_client import JobCache
+    from hireme_mcp.main import filter_jobs_by_preferences
+
+    cache = JobCache(ttl_minutes=10)
+    cache.update([
+        Job(job_id="job-py", title="Python Backend", company="Alpha", tech_stack=["Python", "FastAPI"]),
+        Job(job_id="job-php", title="PHP Maintenance", company="Beta", tech_stack=["PHP"]),
+    ])
+
+    mock_session = AsyncMock()
+    mock_session.ensure_ready.return_value = AsyncMock()
+    mock_page = AsyncMock()
+    mock_session.get_page.return_value = mock_page
+
+    ctx = MagicMock(spec=Context)
+    ctx.lifespan_context = {"session": mock_session, "cache": cache}
+
+    with patch("hireme_mcp.main.fetch_user_resume_profile", new_callable=AsyncMock) as mock_profile:
+        mock_profile.return_value = {"technical_skills": ["Python", "FastAPI"]}
+
+        res = await filter_jobs_by_preferences(ctx=ctx)
+
+        assert res["success"] is True
+        assert len(res["data"]) == 2
+        # Python job should rank higher due to matched score from online resume profile
+        assert res["data"][0]["job_id"] == "job-py"
+        assert res["data"][0]["match_score"] > res["data"][1]["match_score"]
+        mock_profile.assert_awaited_once_with(mock_page.request)
+
 

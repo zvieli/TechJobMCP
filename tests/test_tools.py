@@ -120,6 +120,26 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(res2["success"])
         mock_extract.assert_called_once()
 
+    @patch("hireme_mcp.main.fetch_jobs_via_api")
+    @patch("hireme_mcp.main.browser_extract_jobs")
+    async def test_get_job_matches_api_first(self, mock_extract, mock_api):
+        """Test get_job_matches uses API data when available and avoids DOM extraction."""
+        cache = JobCache(ttl_minutes=10)
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session._initialized = True
+        mock_session.check_session_health.return_value = True
+        mock_page = AsyncMock()
+        mock_session.get_page.return_value = mock_page
+
+        mock_api.return_value = self.mock_jobs
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await get_job_matches(force_refresh=True, ctx=ctx)
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["data"]), 3)
+        mock_api.assert_called_once_with(mock_page.request, size=50)
+        mock_extract.assert_not_called()
+
     @patch("hireme_mcp.main.browser_extract_jobs")
     async def test_get_job_matches_unauthenticated(self, mock_extract):
         """Test get_job_matches returns UNAUTHENTICATED error when session is invalid."""
