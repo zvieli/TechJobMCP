@@ -32,3 +32,11 @@ E2E Mock LLM Task 3: complete
 E2E Mock LLM Task 3: complete (commits acd61fb..5d3692a, review clean)
 Explainable Scoring Task 1: complete (in progress)
 
+Task 1 (Workday ATS Source): complete (commits d1ab228..613c71d, review clean)
+Task 2 (Eightfold AI ATS Source): complete (commits 613c71d..8609afc, review clean)
+Task 3 (Direct Tech Company Sources): complete (commits 8609afc..c6cedb2, review clean)
+Task 4 (Lightweight LinkedIn Job Source): complete (commit 12f4a00, review clean)
+
+Task 4 (Lightweight LinkedIn Job Source): complete (commits c6cedb2..12f4a00, review clean)
+Task 5 (Alert Notification Engine & Job Tracker): complete (commits 12f4a00..7c3538c, review clean)
+Task 6 (Registry Integration & MCP Server Tools): complete (commits 7c3538c..488f091, review clean)

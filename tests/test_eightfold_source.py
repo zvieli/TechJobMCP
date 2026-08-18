@@ -474,10 +474,18 @@ class TestEightfoldSourceHealthCheck:
 class TestCreateDefaultRegistryWithEightfold:
     """Tests for create_default_registry with ENABLE_EIGHTFOLD env var."""
 
-    def test_default_registration_without_eightfold(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_registration_with_eightfold(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from job_mcp.sources import create_default_registry
 
         monkeypatch.delenv("ENABLE_EIGHTFOLD", raising=False)
+        reg = create_default_registry()
+        assert "eightfold" in reg
+        assert isinstance(reg.get("eightfold"), EightfoldAISource)
+
+    def test_registration_with_disabled_eightfold(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from job_mcp.sources import create_default_registry
+
+        monkeypatch.setenv("ENABLE_EIGHTFOLD", "false")
         reg = create_default_registry()
         assert "eightfold" not in reg
 

@@ -165,13 +165,17 @@ def create_default_registry(
 ) -> SourceRegistry:
     """Create and return a SourceRegistry pre-populated with standard job sources.
 
+    By default, all enterprise sources (HireMeTech, Comeet, Workday, Eightfold AI,
+    Direct Tech, and LinkedIn) are enabled out-of-the-box.
+    AllJobs is disabled by default and can be enabled via ENABLE_ALLJOBS=true.
+
     Args:
         session_manager: Optional Playwright SessionManager for authenticated sources.
-        enable_alljobs: Explicitly enable/disable AllJobsSource. Defaults to ENABLE_ALLJOBS env var.
-        enable_workday: Explicitly enable/disable WorkdaySource. Defaults to ENABLE_WORKDAY env var.
-        enable_eightfold: Explicitly enable/disable EightfoldAISource. Defaults to ENABLE_EIGHTFOLD env var.
-        enable_direct_tech: Explicitly enable/disable DirectTechSource. Defaults to ENABLE_DIRECT_TECH env var.
-        enable_linkedin: Explicitly enable/disable LinkedInSource. Defaults to ENABLE_LINKEDIN env var.
+        enable_alljobs: Explicitly enable/disable AllJobsSource. Defaults to ENABLE_ALLJOBS env var (default: False).
+        enable_workday: Explicitly enable/disable WorkdaySource. Defaults to ENABLE_WORKDAY env var (default: True).
+        enable_eightfold: Explicitly enable/disable EightfoldAISource. Defaults to ENABLE_EIGHTFOLD env var (default: True).
+        enable_direct_tech: Explicitly enable/disable DirectTechSource. Defaults to ENABLE_DIRECT_TECH env var (default: True).
+        enable_linkedin: Explicitly enable/disable LinkedInSource. Defaults to ENABLE_LINKEDIN env var (default: True).
 
     Returns:
         SourceRegistry: Populated registry instance.
@@ -180,24 +184,25 @@ def create_default_registry(
     reg.register(HireMeTechSource(session_manager=session_manager))
     reg.register(ComeetSource())
 
-    def _is_enabled(flag_name: str, explicit: Optional[bool]) -> bool:
+    def _is_enabled(flag_name: str, explicit: Optional[bool], default_enabled: bool = True) -> bool:
         if explicit is not None:
             return bool(explicit)
-        return os.getenv(flag_name, "false").strip().lower() in ("true", "1", "yes")
+        default_str = "true" if default_enabled else "false"
+        return os.getenv(flag_name, default_str).strip().lower() in ("true", "1", "yes")
 
-    if _is_enabled("ENABLE_ALLJOBS", enable_alljobs):
+    if _is_enabled("ENABLE_ALLJOBS", enable_alljobs, default_enabled=False):
         reg.register(AllJobsSource())
 
-    if _is_enabled("ENABLE_WORKDAY", enable_workday):
+    if _is_enabled("ENABLE_WORKDAY", enable_workday, default_enabled=True):
         reg.register(WorkdaySource())
 
-    if _is_enabled("ENABLE_EIGHTFOLD", enable_eightfold):
+    if _is_enabled("ENABLE_EIGHTFOLD", enable_eightfold, default_enabled=True):
         reg.register(EightfoldAISource())
 
-    if _is_enabled("ENABLE_DIRECT_TECH", enable_direct_tech):
+    if _is_enabled("ENABLE_DIRECT_TECH", enable_direct_tech, default_enabled=True):
         reg.register(DirectTechSource())
 
-    if _is_enabled("ENABLE_LINKEDIN", enable_linkedin):
+    if _is_enabled("ENABLE_LINKEDIN", enable_linkedin, default_enabled=True):
         reg.register(LinkedInSource(session_manager=session_manager))
     return reg
 

@@ -424,9 +424,13 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.delenv("ENABLE_ALLJOBS", raising=False)
         reg = create_default_registry()
-        assert len(reg) == 2
+        assert len(reg) == 6
         assert "hiremetech" in reg
         assert "comeet" in reg
+        assert "workday" in reg
+        assert "eightfold" in reg
+        assert "direct_tech" in reg
+        assert "linkedin" in reg
         assert "alljobs" not in reg
 
     @pytest.mark.parametrize("env_val", ["true", "1", "yes", "TRUE", "True"])
@@ -435,9 +439,13 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
         reg = create_default_registry()
-        assert len(reg) == 3
+        assert len(reg) == 7
         assert "hiremetech" in reg
         assert "comeet" in reg
+        assert "workday" in reg
+        assert "eightfold" in reg
+        assert "direct_tech" in reg
+        assert "linkedin" in reg
         assert "alljobs" in reg
 
     @pytest.mark.parametrize("env_val", ["false", "0", "no", "", "invalid"])
@@ -446,7 +454,7 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
         reg = create_default_registry()
-        assert len(reg) == 2
+        assert len(reg) == 6
         assert "hiremetech" in reg
         assert "comeet" in reg
         assert "alljobs" not in reg
@@ -466,14 +474,14 @@ class TestCreateDefaultRegistry:
         ("ENABLE_DIRECT_TECH", "direct_tech"),
         ("ENABLE_LINKEDIN", "linkedin"),
     ])
-    def test_registration_with_all_enterprise_flags(
+    def test_registration_with_disable_individual_flags(
         self, monkeypatch: pytest.MonkeyPatch, flag: str, source_id: str
     ) -> None:
         from job_mcp.sources import create_default_registry
 
-        monkeypatch.setenv(flag, "true")
+        monkeypatch.setenv(flag, "false")
         reg = create_default_registry()
-        assert source_id in reg
+        assert source_id not in reg
 
     def test_programmatic_flags(self) -> None:
         from job_mcp.sources import create_default_registry
