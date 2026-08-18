@@ -92,6 +92,7 @@ class MockLLMAgent:
         tool_name: str,
         arguments: Optional[dict[str, Any]] = None,
         thought: Optional[str] = None,
+        step_callback: Optional[Callable[[StepTrace], Any]] = None,
     ) -> dict[str, Any]:
         """Execute a tool function by name, measure duration, and log a StepTrace.
 
@@ -99,6 +100,7 @@ class MockLLMAgent:
             tool_name: Name of tool to execute.
             arguments: Dictionary of arguments to pass to the tool.
             thought: Optional reasoning thought string for this step.
+            step_callback: Optional callback invoked with the recorded StepTrace.
 
         Returns:
             dict[str, Any]: Response dictionary returned by the tool.
@@ -106,47 +108,78 @@ class MockLLMAgent:
         args = dict(arguments or {})
         start_time = time.perf_counter()
 
-        func = TOOL_DISPATCH.get(tool_name)
-        if func is None:
-            duration_ms = (time.perf_counter() - start_time) * 1000.0
-            error_response = {
-                "success": False,
-                "message": f"Unknown tool: '{tool_name}'",
-                "error_code": "UNKNOWN_TOOL",
-            }
-            trace = StepTrace(
-                step_number=len(self.history) + 1,
-                thought=thought or f"Calling tool {tool_name}",
-                tool_name=tool_name,
-                arguments=args,
-                response=error_response,
-                duration_ms=round(duration_ms, 2),
-            )
-            self.history.append(trace)
-            return error_response
+        if self.mcp_server is not None and hasattr(self.mcp_server, "call_tool"):
+            try:
+                raw_res = await self.mcp_server.call_tool(name=tool_name, arguments=args)
+                if hasattr(raw_res, "model_dump"):
+                    res = raw_res.model_dump()
+                elif hasattr(raw_res, "data"):
+                    res = raw_res.data if isinstance(raw_res.data, dict) else {"data": raw_res.data, "success": True}
+                elif isinstance(raw_res, dict):
+                    res = raw_res
+                elif isinstance(raw_res, list) and len(raw_res) > 0 and hasattr(raw_res[0], "text"):
+                    import json
+                    try:
+                        res = json.loads(raw_res[0].text)
+                    except Exception:
+                        res = {"data": raw_res[0].text, "success": True}
+                else:
+                    res = {"data": raw_res, "success": True}
+            except Exception as exc:
+                res = {
+                    "success": False,
+                    "message": f"Error executing tool '{tool_name}' on remote MCP: {exc}",
+                    "error_code": "REMOTE_TOOL_EXECUTION_ERROR",
+                }
+        else:
+            func = TOOL_DISPATCH.get(tool_name)
+            if func is None:
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                error_response = {
+                    "success": False,
+                    "message": f"Unknown tool: '{tool_name}'",
+                    "error_code": "UNKNOWN_TOOL",
+                }
+                trace = StepTrace(
+                    step_number=len(self.history) + 1,
+                    thought=thought or f"Calling tool {tool_name}",
+                    tool_name=tool_name,
+                    arguments=args,
+                    response=error_response,
+                    duration_ms=round(duration_ms, 2),
+                )
+                self.history.append(trace)
+                if step_callback:
+                    try:
+                        cb_res = step_callback(trace)
+                        if asyncio.iscoroutine(cb_res):
+                            await cb_res
+                    except Exception:
+                        pass
+                return error_response
 
-        # Pass context if provided and not explicitly set in args
-        call_kwargs = dict(args)
-        if "ctx" not in call_kwargs and self.context is not None:
-            call_kwargs["ctx"] = self.context
+            # Pass context if provided and not explicitly set in args
+            call_kwargs = dict(args)
+            if "ctx" not in call_kwargs and self.context is not None:
+                call_kwargs["ctx"] = self.context
 
-        try:
-            raw_res = func(**call_kwargs)
-            if asyncio.iscoroutine(raw_res):
-                res = await raw_res
-            else:
-                res = raw_res
+            try:
+                raw_res = func(**call_kwargs)
+                if asyncio.iscoroutine(raw_res):
+                    res = await raw_res
+                else:
+                    res = raw_res
 
-            if hasattr(res, "model_dump"):
-                res = res.model_dump()
-            elif not isinstance(res, dict):
-                res = {"data": res, "success": True}
-        except Exception as exc:
-            res = {
-                "success": False,
-                "message": f"Error executing tool '{tool_name}': {exc}",
-                "error_code": "TOOL_EXECUTION_ERROR",
-            }
+                if hasattr(res, "model_dump"):
+                    res = res.model_dump()
+                elif not isinstance(res, dict):
+                    res = {"data": res, "success": True}
+            except Exception as exc:
+                res = {
+                    "success": False,
+                    "message": f"Error executing tool '{tool_name}': {exc}",
+                    "error_code": "TOOL_EXECUTION_ERROR",
+                }
 
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         trace = StepTrace(
@@ -158,6 +191,13 @@ class MockLLMAgent:
             duration_ms=round(duration_ms, 2),
         )
         self.history.append(trace)
+        if step_callback:
+            try:
+                cb_res = step_callback(trace)
+                if asyncio.iscoroutine(cb_res):
+                    await cb_res
+            except Exception:
+                pass
         return res
 
     async def run_pipeline(
@@ -175,16 +215,19 @@ class MockLLMAgent:
         keywords: Optional[list[str]] = None,
         force_refresh: bool = False,
         disqualify_threshold: int = 50,
+        mode: Optional[str] = None,
+        step_callback: Optional[Callable[[StepTrace], Any]] = None,
     ) -> PipelineResult:
         """Run an end-to-end autonomous job hunting pipeline.
 
         Pipeline workflow:
-        1. Discover available job platforms via `list_job_sources`.
-        2. Fetch aggregated job listings across platforms via `get_job_matches`.
-        3. Score and rank jobs against user preferences and CV via `filter_jobs_by_preferences`.
-        4. Bookmark and auto-apply (preview + confirm) to Top-Tier jobs (score >= top_tier_threshold).
-        5. Bookmark Strong Match jobs (strong_match_threshold <= score < top_tier_threshold).
-        6. Delete/dismiss disqualified jobs (score < disqualify_threshold or excluded).
+        1. Set operation mode if requested (`set_operation_mode`).
+        2. Discover available job platforms via `list_job_sources`.
+        3. Fetch aggregated job listings across platforms via `get_job_matches`.
+        4. Score and rank jobs against user preferences and CV via `filter_jobs_by_preferences`.
+        5. Bookmark and auto-apply (preview + confirm) to Top-Tier jobs (score >= top_tier_threshold).
+        6. Bookmark Strong Match jobs (strong_match_threshold <= score < top_tier_threshold).
+        7. Delete/dismiss disqualified jobs (score < disqualify_threshold or excluded).
 
         Args:
             tech_stack: Target technologies (e.g. ['Python', 'FastAPI']).
@@ -200,12 +243,23 @@ class MockLLMAgent:
             keywords: Additional keywords to match.
             force_refresh: Force refresh scraping from live sources.
             disqualify_threshold: Score below which jobs are considered disqualified (default: 50).
+            mode: Optional operation mode ('autonomous' or 'supervised').
+            step_callback: Optional callback invoked with each StepTrace.
 
         Returns:
             PipelineResult: Comprehensive execution results and traces.
         """
         pipeline_start_step_idx = len(self.history)
         pipeline_start_time = time.perf_counter()
+
+        # Step 0: Set operation mode if requested
+        if mode:
+            await self.call_tool(
+                "set_operation_mode",
+                arguments={"mode": mode},
+                thought=f"Setting operation mode to '{mode}'...",
+                step_callback=step_callback,
+            )
 
         effective_cv = cv_path or self.cv_path
         combined_keywords = list(keywords or [])
@@ -228,6 +282,7 @@ class MockLLMAgent:
             "list_job_sources",
             arguments={},
             thought="Discovering available job platforms...",
+            step_callback=step_callback,
         )
         if res1.get("success"):
             data1 = res1.get("data")
@@ -245,6 +300,7 @@ class MockLLMAgent:
             "get_job_matches",
             arguments={"force_refresh": force_refresh},
             thought="Fetching aggregated jobs across sources...",
+            step_callback=step_callback,
         )
         raw_jobs: list[dict[str, Any]] = []
         if res2.get("success"):
@@ -274,6 +330,7 @@ class MockLLMAgent:
             "filter_jobs_by_preferences",
             arguments=filter_args,
             thought="Scoring jobs against preferences and CV...",
+            step_callback=step_callback,
         )
         scored_jobs: list[dict[str, Any]] = []
         if res3.get("success"):
@@ -323,6 +380,7 @@ class MockLLMAgent:
                 "bookmark_job",
                 arguments={"job_id": jid},
                 thought=f"Processing Top-Tier jobs (score >= {top_tier_threshold}): bookmarking '{jid}' ({title} at {company})...",
+                step_callback=step_callback,
             )
             if b_res.get("success"):
                 bookmarked_job_ids.append(jid)
@@ -332,6 +390,7 @@ class MockLLMAgent:
                     "auto_apply_job",
                     arguments={"job_id": jid},
                     thought=f"Generating application preview for Top-Tier job '{jid}'...",
+                    step_callback=step_callback,
                 )
                 if a_res.get("success"):
                     staged_apply_ids.append(jid)
@@ -339,6 +398,7 @@ class MockLLMAgent:
                         "confirm_auto_apply",
                         arguments={"job_id": jid},
                         thought=f"Confirming auto-apply for Top-Tier job '{jid}'...",
+                        step_callback=step_callback,
                     )
                     if c_res.get("success"):
                         confirmed_apply_ids.append(jid)
@@ -354,6 +414,7 @@ class MockLLMAgent:
                 "bookmark_job",
                 arguments={"job_id": jid},
                 thought=f"Processing Strong Match jobs (score {strong_match_threshold}-{top_tier_threshold - 1}): bookmarking '{jid}' ({title} at {company})...",
+                step_callback=step_callback,
             )
             if b_res.get("success"):
                 bookmarked_job_ids.append(jid)
@@ -367,6 +428,7 @@ class MockLLMAgent:
                 "delete_job",
                 arguments={"job_id": jid},
                 thought=f"Cleaning up disqualified jobs (score < {disqualify_threshold} or excluded): deleting '{jid}'...",
+                step_callback=step_callback,
             )
             if d_res.get("success"):
                 deleted_job_ids.append(jid)
