@@ -11,13 +11,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastmcp import Context
 
-from hireme_mcp.core.auth import SessionManager
-from hireme_mcp.core.browser import (
+from job_mcp.core.auth import SessionManager
+from job_mcp.core.browser import (
     SELECTORS,
     _resolve_selector,
     dynamic_registry,
 )
-from hireme_mcp.core.discovery import (
+from job_mcp.core.discovery import (
     CHILD_ROLE_CANDIDATES,
     DEFAULT_DYNAMIC_SELECTORS_PATH,
     DynamicSelectorRegistry,
@@ -25,7 +25,7 @@ from hireme_mcp.core.discovery import (
     discover_card_selector,
     discover_child_selector,
 )
-from hireme_mcp.main import calibrate_selectors
+from job_mcp.main import calibrate_selectors
 
 
 class MockLocator:

@@ -11,18 +11,18 @@ from fastmcp import Context, FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
-from hireme_mcp.core.api_client import (
+from job_mcp.core.api_client import (
     JobCache,
     fetch_jobs_via_api,
     fetch_user_resume_profile,
     filter_jobs,
 )
-from hireme_mcp.core.auth import (
+from job_mcp.core.auth import (
     BASE_URL,
     DASHBOARD_PATH,
     SessionManager,
 )
-from hireme_mcp.core.browser import (
+from job_mcp.core.browser import (
     bookmark_job as browser_bookmark_job,
     delete_job as browser_delete_job,
     dynamic_registry,
@@ -30,22 +30,22 @@ from hireme_mcp.core.browser import (
     extract_jobs as browser_extract_jobs,
     preview_application as browser_preview_application,
 )
-from hireme_mcp.core.discovery import calibrate_all_selectors
-from hireme_mcp.models.schemas import (
+from job_mcp.core.discovery import calibrate_all_selectors
+from job_mcp.models.schemas import (
     Job,
     JobPreferences,
     OperationMode,
     ToolResponse,
     WorkMode,
 )
-from hireme_mcp.sources import (
+from job_mcp.sources import (
     BaseJobSource,
     JobAggregator,
     SourceRegistry,
     create_default_registry,
 )
-from hireme_mcp.sources.hiremetech import HireMeTechSource
-from hireme_mcp.utils.logger import generate_trace_id, get_logger
+from job_mcp.sources.hiremetech import HireMeTechSource
+from job_mcp.utils.logger import generate_trace_id, get_logger
 
 logger = get_logger(__name__)
 

@@ -10,10 +10,10 @@ from typing import Any, Optional
 
 import httpx
 
-from hireme_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
-from hireme_mcp.models.schemas import Job, JobPreferences, WorkMode
-from hireme_mcp.sources.base import BaseJobSource
-from hireme_mcp.utils.logger import get_logger
+from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.sources.base import BaseJobSource
+from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

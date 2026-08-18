@@ -1,8 +1,8 @@
 """Tests for Data Models Extension & Deduplication / Entity Merger Engine."""
 
 import pytest
-from hireme_mcp.models.schemas import Job, WorkMode
-from hireme_mcp.sources.dedup import (
+from job_mcp.models.schemas import Job, WorkMode
+from job_mcp.sources.dedup import (
     normalize_title,
     normalize_company,
     compute_dedup_key,

@@ -6,8 +6,8 @@ import uuid
 
 import pytest
 
-from hireme_mcp.utils.logger import get_logger, generate_trace_id
-from hireme_mcp.models.schemas import ToolResponse
+from job_mcp.utils.logger import get_logger, generate_trace_id
+from job_mcp.models.schemas import ToolResponse
 
 
 class TestStructuredLogger:

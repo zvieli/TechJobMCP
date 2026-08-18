@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from hireme_mcp.models.schemas import JobPreferences, WorkMode
-from hireme_mcp.sources import BaseJobSource, SourceRegistry
-from hireme_mcp.sources.comeet import (
+from job_mcp.models.schemas import JobPreferences, WorkMode
+from job_mcp.sources import BaseJobSource, SourceRegistry
+from job_mcp.sources.comeet import (
     DEFAULT_COMEET_COMPANIES,
     ComeetCompany,
     ComeetSource,

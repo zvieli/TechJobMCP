@@ -1,6 +1,6 @@
 """Models package for HireMeTech MCP server."""
 
-from hireme_mcp.models.schemas import (
+from job_mcp.models.schemas import (
     ApplicationPreview,
     Job,
     JobPreferences,

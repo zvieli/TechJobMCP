@@ -13,12 +13,12 @@ from starlette.responses import Response
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from hireme_mcp import mcp
-from hireme_mcp.__main__ import main as server_main
-from hireme_mcp.core.api_client import JobCache
-from hireme_mcp.core.auth import SessionManager
-from hireme_mcp.main import GeminiProbeMiddleware, browser_lifespan
-from hireme_mcp.setup import main as setup_main, run_setup
+from job_mcp import mcp
+from job_mcp.__main__ import main as server_main
+from job_mcp.core.api_client import JobCache
+from job_mcp.core.auth import SessionManager
+from job_mcp.main import GeminiProbeMiddleware, browser_lifespan
+from job_mcp.setup import main as setup_main, run_setup
 
 
 class TestGeminiProbeMiddleware(unittest.TestCase):
@@ -181,7 +181,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
 
     async def test_tool_response_contains_trace_id(self):
         """Verify that tool responses include an auto-generated trace_id."""
-        from hireme_mcp.main import set_operation_mode
+        from job_mcp.main import set_operation_mode
         res = await set_operation_mode(mode="autonomous")
         self.assertTrue(res["success"])
         self.assertIn("trace_id", res)

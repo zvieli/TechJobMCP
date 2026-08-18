@@ -4,29 +4,29 @@ from __future__ import annotations
 
 from typing import Optional
 
-from hireme_mcp.sources.base import BaseJobSource, SourceMetadata
-from hireme_mcp.sources.dedup import (
+from job_mcp.sources.base import BaseJobSource, SourceMetadata
+from job_mcp.sources.dedup import (
     compute_dedup_key,
     deduplicate_jobs,
     merge_job_entities,
     normalize_company,
     normalize_title,
 )
-from hireme_mcp.sources.alljobs import (
+from job_mcp.sources.alljobs import (
     ALLJOBS_BASE_URL,
     ALLJOBS_HEADERS,
     DEFAULT_TECH_CATEGORIES,
     AllJobsSource,
     parse_alljobs_position,
 )
-from hireme_mcp.sources.comeet import (
+from job_mcp.sources.comeet import (
     DEFAULT_COMEET_COMPANIES,
     ComeetCompany,
     ComeetSource,
     parse_comeet_position,
 )
-from hireme_mcp.sources.hiremetech import HireMeTechSource
-from hireme_mcp.sources.aggregator import JobAggregator
+from job_mcp.sources.hiremetech import HireMeTechSource
+from job_mcp.sources.aggregator import JobAggregator
 
 
 class SourceRegistry:

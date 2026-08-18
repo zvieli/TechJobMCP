@@ -2,7 +2,7 @@
 
 import re
 from typing import Optional
-from hireme_mcp.models.schemas import Job
+from job_mcp.models.schemas import Job
 
 ATS_DOMAINS = (
     "comeet.com",

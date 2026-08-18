@@ -6,18 +6,18 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 import zipfile
 
-from hireme_mcp.core.api_client import (
+from job_mcp.core.api_client import (
     JobCache,
     extract_cv_keywords,
     filter_jobs,
 )
-from hireme_mcp.core.auth import (
+from job_mcp.core.auth import (
     BASE_URL,
     DASHBOARD_PATH,
     LOGIN_PATH,
     SessionManager,
 )
-from hireme_mcp.core.browser import (
+from job_mcp.core.browser import (
     SELECTORS,
     _extract_tech_from_text,
     _parse_work_mode,
@@ -29,7 +29,7 @@ from hireme_mcp.core.browser import (
     preview_application,
     execute_application,
 )
-from hireme_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 
 
 class TestAuth(unittest.IsolatedAsyncioTestCase):

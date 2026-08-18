@@ -9,14 +9,14 @@ from typing import Any, Optional
 from playwright.async_api import Locator, Page
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from hireme_mcp.core.discovery import (
+from job_mcp.core.discovery import (
     SELECTORS,
     DynamicSelectorRegistry,
     discover_card_selector,
     discover_child_selector,
 )
-from hireme_mcp.models.schemas import ApplicationPreview, Job, WorkMode
-from hireme_mcp.utils.logger import get_logger
+from job_mcp.models.schemas import ApplicationPreview, Job, WorkMode
+from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

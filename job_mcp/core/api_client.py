@@ -10,9 +10,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Optional
 
-from hireme_mcp.core.auth import BASE_URL
-from hireme_mcp.models.schemas import Job, JobPreferences, WorkMode
-from hireme_mcp.utils.logger import get_logger
+from job_mcp.core.auth import BASE_URL
+from job_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

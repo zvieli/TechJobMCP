@@ -5,15 +5,15 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from hireme_mcp.core.api_client import fetch_jobs_via_api, filter_jobs
-from hireme_mcp.core.auth import BASE_URL, DASHBOARD_PATH, SessionManager
-from hireme_mcp.core.browser import (
+from job_mcp.core.api_client import fetch_jobs_via_api, filter_jobs
+from job_mcp.core.auth import BASE_URL, DASHBOARD_PATH, SessionManager
+from job_mcp.core.browser import (
     bookmark_job as browser_bookmark_job,
     extract_jobs as browser_extract_jobs,
 )
-from hireme_mcp.models.schemas import Job, JobPreferences
-from hireme_mcp.sources.base import BaseJobSource
-from hireme_mcp.utils.logger import get_logger
+from job_mcp.models.schemas import Job, JobPreferences
+from job_mcp.sources.base import BaseJobSource
+from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

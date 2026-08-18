@@ -8,11 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp import Context
 
-from hireme_mcp.core.api_client import JobCache
-from hireme_mcp.core.auth import SessionManager
-from hireme_mcp.main import get_job_matches, list_job_sources
-from hireme_mcp.models.schemas import Job, JobPreferences, WorkMode
-from hireme_mcp.sources import (
+from job_mcp.core.api_client import JobCache
+from job_mcp.core.auth import SessionManager
+from job_mcp.main import get_job_matches, list_job_sources
+from job_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.sources import (
     BaseJobSource,
     ComeetCompany,
     ComeetSource,

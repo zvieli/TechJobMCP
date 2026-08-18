@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from hireme_mcp.models.schemas import Job, JobPreferences, WorkMode
-from hireme_mcp.sources import (
+from job_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.sources import (
     BaseJobSource,
     HireMeTechSource,
     SourceMetadata,

@@ -3,7 +3,7 @@
 import unittest
 from playwright.async_api import async_playwright
 
-from hireme_mcp.core.browser import (
+from job_mcp.core.browser import (
     JS_EXTRACT_ALL_JOBS,
     SELECTORS,
     _extract_jobs_via_locators,
@@ -12,12 +12,12 @@ from hireme_mcp.core.browser import (
     extract_jobs,
     _resolve_selector,
 )
-from hireme_mcp.core.discovery import (
+from job_mcp.core.discovery import (
     CHILD_ROLE_CANDIDATES,
     calibrate_all_selectors,
     discover_child_selector,
 )
-from hireme_mcp.models.schemas import WorkMode
+from job_mcp.models.schemas import WorkMode
 
 
 LIVE_CARD_HTML = """

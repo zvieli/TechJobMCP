@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 import pytest
 
-from hireme_mcp.core.auth import SessionManager
+from job_mcp.core.auth import SessionManager
 
 
 class TestSessionManagerRecovery:
@@ -99,7 +99,7 @@ class TestLifespanRecovery:
     @pytest.mark.asyncio
     async def test_lifespan_logs_warning_on_init_failure(self):
         """Lifespan should not crash if initial browser launch fails."""
-        from hireme_mcp.main import browser_lifespan, mcp
+        from job_mcp.main import browser_lifespan, mcp
 
         with patch.object(SessionManager, "initialize", new_callable=AsyncMock) as mock_init:
             mock_init.side_effect = RuntimeError("no display")

@@ -10,13 +10,13 @@ from typing import Optional
 
 from playwright.async_api import async_playwright
 
-from hireme_mcp.core.auth import (
+from job_mcp.core.auth import (
     BASE_URL,
     DASHBOARD_PATH,
     DEFAULT_PROFILE_DIR,
     LOGIN_PATH,
 )
-from hireme_mcp.utils.logger import get_logger
+from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

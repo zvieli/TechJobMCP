@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from playwright.async_api import Locator, Page
 
-from hireme_mcp.utils.logger import get_logger
+from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

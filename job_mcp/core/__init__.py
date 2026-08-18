@@ -1,6 +1,6 @@
 """Core package for HireMeTech MCP server."""
 
-from hireme_mcp.core.api_client import (
+from job_mcp.core.api_client import (
     JobCache,
     extract_cv_keywords,
     fetch_jobs_via_api,
@@ -9,14 +9,14 @@ from hireme_mcp.core.api_client import (
     filter_jobs,
     parse_api_job_dict,
 )
-from hireme_mcp.core.auth import (
+from job_mcp.core.auth import (
     BASE_URL,
     DASHBOARD_PATH,
     DEFAULT_PROFILE_DIR,
     LOGIN_PATH,
     SessionManager,
 )
-from hireme_mcp.core.browser import (
+from job_mcp.core.browser import (
     SELECTORS,
     _resolve_selector,
     bookmark_job,
@@ -26,7 +26,7 @@ from hireme_mcp.core.browser import (
     extract_jobs,
     preview_application,
 )
-from hireme_mcp.core.discovery import (
+from job_mcp.core.discovery import (
     DynamicSelectorRegistry,
     calibrate_all_selectors,
     discover_card_selector,

@@ -3,13 +3,13 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from hireme_mcp.core.api_client import (
+from job_mcp.core.api_client import (
     fetch_jobs_via_api,
     fetch_saved_jobs_batch,
     fetch_user_resume_profile,
     parse_api_job_dict,
 )
-from hireme_mcp.models.schemas import Job, WorkMode
+from job_mcp.models.schemas import Job, WorkMode
 
 
 # ==========================================
@@ -382,7 +382,7 @@ async def test_fetch_user_resume_profile_error():
 @pytest.mark.asyncio
 async def test_check_session_health_fast_api_success():
     """Test fast API health check succeeds via /api/auth/me without full page navigation."""
-    from hireme_mcp.core.auth import SessionManager
+    from job_mcp.core.auth import SessionManager
 
     manager = SessionManager(user_data_dir="/tmp/test_profile")
     mock_page = AsyncMock()
@@ -412,7 +412,7 @@ async def test_check_session_health_fast_api_success():
 @pytest.mark.asyncio
 async def test_check_session_health_fast_api_unauthenticated_401():
     """Test fast API health check returns False immediately on HTTP 401."""
-    from hireme_mcp.core.auth import SessionManager
+    from job_mcp.core.auth import SessionManager
 
     manager = SessionManager(user_data_dir="/tmp/test_profile")
     mock_page = AsyncMock()
@@ -432,7 +432,7 @@ async def test_check_session_health_fast_api_unauthenticated_401():
 @pytest.mark.asyncio
 async def test_check_session_health_fast_api_unauthenticated_403():
     """Test fast API health check returns False immediately on HTTP 403."""
-    from hireme_mcp.core.auth import SessionManager
+    from job_mcp.core.auth import SessionManager
 
     manager = SessionManager(user_data_dir="/tmp/test_profile")
     mock_page = AsyncMock()
@@ -452,7 +452,7 @@ async def test_check_session_health_fast_api_unauthenticated_403():
 @pytest.mark.asyncio
 async def test_check_session_health_api_error_fallback_to_page_goto():
     """Test fallback to page.goto navigation when /api/auth/me request throws network/timeout error."""
-    from hireme_mcp.core.auth import SessionManager
+    from job_mcp.core.auth import SessionManager
 
     manager = SessionManager(user_data_dir="/tmp/test_profile")
     mock_page = AsyncMock()
@@ -474,7 +474,7 @@ async def test_check_session_health_api_error_fallback_to_page_goto():
 @pytest.mark.asyncio
 async def test_check_session_health_api_200_missing_user_fallback():
     """Test fallback to page.goto navigation when /api/auth/me returns 200 without valid user dict."""
-    from hireme_mcp.core.auth import SessionManager
+    from job_mcp.core.auth import SessionManager
 
     manager = SessionManager(user_data_dir="/tmp/test_profile")
     mock_page = AsyncMock()
@@ -505,8 +505,8 @@ async def test_check_session_health_api_200_missing_user_fallback():
 @pytest.mark.asyncio
 async def test_warm_cache_api_success():
     """Verify _warm_cache attempts API first and populates cache without DOM navigation."""
-    from hireme_mcp.core.api_client import JobCache
-    from hireme_mcp.main import _warm_cache
+    from job_mcp.core.api_client import JobCache
+    from job_mcp.main import _warm_cache
 
     sample_jobs = [
         Job(job_id="api-1", title="API Engineer", company="API Corp", tech_stack=["Python"])
@@ -535,8 +535,8 @@ async def test_warm_cache_api_success():
 @pytest.mark.asyncio
 async def test_warm_cache_api_failure_fallback_to_dom():
     """Verify _warm_cache falls back to DOM scraping when API fetch fails."""
-    from hireme_mcp.core.api_client import JobCache
-    from hireme_mcp.main import _warm_cache
+    from job_mcp.core.api_client import JobCache
+    from job_mcp.main import _warm_cache
 
     sample_jobs = [
         Job(job_id="dom-1", title="DOM Engineer", company="DOM Corp", tech_stack=["React"])
@@ -568,10 +568,10 @@ async def test_warm_cache_api_failure_fallback_to_dom():
 async def test_get_job_matches_api_success():
     """Verify get_job_matches fetches via API and skips DOM scraping when API succeeds."""
     from fastmcp import Context
-    from hireme_mcp.core.api_client import JobCache
-    from hireme_mcp.main import get_job_matches
-    from hireme_mcp.sources import JobAggregator, SourceRegistry
-    from hireme_mcp.sources.hiremetech import HireMeTechSource
+    from job_mcp.core.api_client import JobCache
+    from job_mcp.main import get_job_matches
+    from job_mcp.sources import JobAggregator, SourceRegistry
+    from job_mcp.sources.hiremetech import HireMeTechSource
 
     sample_jobs = [
         Job(job_id="api-201", title="Cloud Architect", company="CloudCo", tech_stack=["AWS", "Terraform"])
@@ -612,10 +612,10 @@ async def test_get_job_matches_api_success():
 async def test_get_job_matches_api_failure_fallback_to_dom():
     """Verify get_job_matches seamlessly falls back to DOM scraping when API fetch throws an error."""
     from fastmcp import Context
-    from hireme_mcp.core.api_client import JobCache
-    from hireme_mcp.main import get_job_matches
-    from hireme_mcp.sources import JobAggregator, SourceRegistry
-    from hireme_mcp.sources.hiremetech import HireMeTechSource
+    from job_mcp.core.api_client import JobCache
+    from job_mcp.main import get_job_matches
+    from job_mcp.sources import JobAggregator, SourceRegistry
+    from job_mcp.sources.hiremetech import HireMeTechSource
 
     sample_jobs = [
         Job(job_id="dom-301", title="Frontend Specialist", company="UI Corp", tech_stack=["Vue"])
@@ -659,8 +659,8 @@ async def test_get_job_matches_api_failure_fallback_to_dom():
 async def test_filter_jobs_by_preferences_supplements_skills_from_resume_profile():
     """Verify filter_jobs_by_preferences queries online resume profile when cv_path & tech_stack are omitted."""
     from fastmcp import Context
-    from hireme_mcp.core.api_client import JobCache
-    from hireme_mcp.main import filter_jobs_by_preferences
+    from job_mcp.core.api_client import JobCache
+    from job_mcp.main import filter_jobs_by_preferences
 
     cache = JobCache(ttl_minutes=10)
     cache.update([

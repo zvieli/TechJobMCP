@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from hireme_mcp.models.schemas import Job, JobPreferences, WorkMode
-from hireme_mcp.sources import (
+from job_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.sources import (
     BaseJobSource,
     SourceRegistry,
 )
-from hireme_mcp.sources.alljobs import (
+from job_mcp.sources.alljobs import (
     ALLJOBS_BASE_URL,
     ALLJOBS_HEADERS,
     DEFAULT_TECH_CATEGORIES,

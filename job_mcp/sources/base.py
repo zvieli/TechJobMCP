@@ -7,7 +7,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from hireme_mcp.models.schemas import Job, JobPreferences
+from job_mcp.models.schemas import Job, JobPreferences
 
 
 class SourceMetadata(BaseModel):

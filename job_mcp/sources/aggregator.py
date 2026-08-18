@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, Optional
 
-from hireme_mcp.core.api_client import JobCache, filter_jobs
-from hireme_mcp.models.schemas import Job, JobPreferences
-from hireme_mcp.sources.base import BaseJobSource
-from hireme_mcp.sources.dedup import deduplicate_jobs
-from hireme_mcp.utils.logger import get_logger
+from job_mcp.core.api_client import JobCache, filter_jobs
+from job_mcp.models.schemas import Job, JobPreferences
+from job_mcp.sources.base import BaseJobSource
+from job_mcp.sources.dedup import deduplicate_jobs
+from job_mcp.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from hireme_mcp.sources import SourceRegistry
+    from job_mcp.sources import SourceRegistry
 
 logger = get_logger(__name__)
 
@@ -32,7 +32,7 @@ class JobAggregator:
             cache: Optional JobCache instance for storing aggregated jobs.
         """
         if registry is None:
-            from hireme_mcp.sources import registry as default_registry
+            from job_mcp.sources import registry as default_registry
 
             self.registry = default_registry
         else:

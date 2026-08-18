@@ -5,9 +5,9 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastmcp import Context, FastMCP
-from hireme_mcp.core.api_client import JobCache
-from hireme_mcp.core.auth import BASE_URL, DASHBOARD_PATH, SessionManager
-from hireme_mcp.core.browser import (
+from job_mcp.core.api_client import JobCache
+from job_mcp.core.auth import BASE_URL, DASHBOARD_PATH, SessionManager
+from job_mcp.core.browser import (
     _resolve_selector,
     bookmark_job,
     delete_job,
@@ -15,9 +15,9 @@ from hireme_mcp.core.browser import (
     extract_jobs,
     preview_application,
 )
-from hireme_mcp.core.discovery import CHILD_ROLE_CANDIDATES, SELECTORS, DynamicSelectorRegistry
-from hireme_mcp.main import _warm_cache, browser_lifespan, get_job_matches
-from hireme_mcp.models.schemas import Job, WorkMode
+from job_mcp.core.discovery import CHILD_ROLE_CANDIDATES, SELECTORS, DynamicSelectorRegistry
+from job_mcp.main import _warm_cache, browser_lifespan, get_job_matches
+from job_mcp.models.schemas import Job, WorkMode
 
 
 class MockLocator:
@@ -326,8 +326,8 @@ class TestScrapingTimeoutSafeguards(unittest.IsolatedAsyncioTestCase):
             return []
         mock_extract.side_effect = slow_scrape
 
-        from hireme_mcp.sources import JobAggregator, SourceRegistry
-        from hireme_mcp.sources.hiremetech import HireMeTechSource
+        from job_mcp.sources import JobAggregator, SourceRegistry
+        from job_mcp.sources.hiremetech import HireMeTechSource
         reg = SourceRegistry()
         reg.register(HireMeTechSource(session_manager=mock_session))
         agg = JobAggregator(registry=reg, cache=cache)

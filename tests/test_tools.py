@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastmcp import Context
 
-from hireme_mcp.core.api_client import JobCache
-from hireme_mcp.core.auth import SessionManager
-from hireme_mcp.main import (
+from job_mcp.core.api_client import JobCache
+from job_mcp.core.auth import SessionManager
+from job_mcp.main import (
     _ensure_session,
     _get_cache,
     _pending_applications,
@@ -22,13 +22,13 @@ from hireme_mcp.main import (
     filter_jobs_by_preferences,
     get_job_matches,
 )
-from hireme_mcp.models.schemas import (
+from job_mcp.models.schemas import (
     ApplicationPreview,
     Job,
     WorkMode,
 )
-from hireme_mcp.sources import JobAggregator, SourceRegistry
-from hireme_mcp.sources.hiremetech import HireMeTechSource
+from job_mcp.sources import JobAggregator, SourceRegistry
+from job_mcp.sources.hiremetech import HireMeTechSource
 
 
 class TestMcpTools(unittest.IsolatedAsyncioTestCase):
