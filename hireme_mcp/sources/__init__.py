@@ -26,6 +26,7 @@ from hireme_mcp.sources.comeet import (
     parse_comeet_position,
 )
 from hireme_mcp.sources.hiremetech import HireMeTechSource
+from hireme_mcp.sources.aggregator import JobAggregator
 
 
 class SourceRegistry:
@@ -115,8 +116,17 @@ class SourceRegistry:
         return len(self._sources)
 
 
-# Global default registry
-registry = SourceRegistry()
+def create_default_registry(session_manager: Optional[Any] = None) -> SourceRegistry:
+    """Create and return a SourceRegistry pre-populated with standard job sources."""
+    reg = SourceRegistry()
+    reg.register(HireMeTechSource(session_manager=session_manager))
+    reg.register(ComeetSource())
+    reg.register(AllJobsSource())
+    return reg
+
+
+# Global default registry with standard sources
+registry = create_default_registry()
 
 __all__ = [
     # Metadata & Base
@@ -133,9 +143,11 @@ __all__ = [
     "ALLJOBS_HEADERS",
     "DEFAULT_TECH_CATEGORIES",
     "parse_alljobs_position",
-    # Registry
+    # Registry & Aggregator
     "SourceRegistry",
+    "create_default_registry",
     "registry",
+    "JobAggregator",
     # Deduplication & Merging
     "normalize_title",
     "normalize_company",

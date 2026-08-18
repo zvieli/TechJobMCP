@@ -515,11 +515,12 @@ async def test_warm_cache_api_success():
     mock_session = AsyncMock()
     mock_page = AsyncMock()
     mock_session.ensure_ready.return_value = mock_page
+    mock_session.get_page.return_value = mock_page
 
     cache = JobCache(ttl_minutes=15)
 
-    with patch("hireme_mcp.main.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-         patch("hireme_mcp.main.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+    with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.return_value = sample_jobs
 
         await _warm_cache(mock_session, cache)
@@ -545,11 +546,12 @@ async def test_warm_cache_api_failure_fallback_to_dom():
     mock_page = AsyncMock()
     mock_page.url = "https://hiremetech.com/login"
     mock_session.ensure_ready.return_value = mock_page
+    mock_session.get_page.return_value = mock_page
 
     cache = JobCache(ttl_minutes=15)
 
-    with patch("hireme_mcp.main.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-         patch("hireme_mcp.main.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+    with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.side_effect = RuntimeError("API 500 Error")
         mock_dom.return_value = sample_jobs
 
@@ -568,6 +570,8 @@ async def test_get_job_matches_api_success():
     from fastmcp import Context
     from hireme_mcp.core.api_client import JobCache
     from hireme_mcp.main import get_job_matches
+    from hireme_mcp.sources import JobAggregator, SourceRegistry
+    from hireme_mcp.sources.hiremetech import HireMeTechSource
 
     sample_jobs = [
         Job(job_id="api-201", title="Cloud Architect", company="CloudCo", tech_stack=["AWS", "Terraform"])
@@ -579,11 +583,20 @@ async def test_get_job_matches_api_success():
     mock_page = AsyncMock()
     mock_session.get_page.return_value = mock_page
 
-    ctx = MagicMock(spec=Context)
-    ctx.lifespan_context = {"session": mock_session, "cache": cache}
+    reg = SourceRegistry()
+    reg.register(HireMeTechSource(session_manager=mock_session))
+    agg = JobAggregator(registry=reg, cache=cache)
 
-    with patch("hireme_mcp.main.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-         patch("hireme_mcp.main.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+    ctx = MagicMock(spec=Context)
+    ctx.lifespan_context = {
+        "session": mock_session,
+        "cache": cache,
+        "registry": reg,
+        "aggregator": agg,
+    }
+
+    with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.return_value = sample_jobs
 
         res = await get_job_matches(force_refresh=True, ctx=ctx)
@@ -601,6 +614,8 @@ async def test_get_job_matches_api_failure_fallback_to_dom():
     from fastmcp import Context
     from hireme_mcp.core.api_client import JobCache
     from hireme_mcp.main import get_job_matches
+    from hireme_mcp.sources import JobAggregator, SourceRegistry
+    from hireme_mcp.sources.hiremetech import HireMeTechSource
 
     sample_jobs = [
         Job(job_id="dom-301", title="Frontend Specialist", company="UI Corp", tech_stack=["Vue"])
@@ -613,11 +628,20 @@ async def test_get_job_matches_api_failure_fallback_to_dom():
     mock_page.url = "https://hiremetech.com/login"
     mock_session.get_page.return_value = mock_page
 
-    ctx = MagicMock(spec=Context)
-    ctx.lifespan_context = {"session": mock_session, "cache": cache}
+    reg = SourceRegistry()
+    reg.register(HireMeTechSource(session_manager=mock_session))
+    agg = JobAggregator(registry=reg, cache=cache)
 
-    with patch("hireme_mcp.main.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-         patch("hireme_mcp.main.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+    ctx = MagicMock(spec=Context)
+    ctx.lifespan_context = {
+        "session": mock_session,
+        "cache": cache,
+        "registry": reg,
+        "aggregator": agg,
+    }
+
+    with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.side_effect = RuntimeError("API service unavailable")
         mock_dom.return_value = sample_jobs
 

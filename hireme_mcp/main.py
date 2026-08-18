@@ -38,6 +38,13 @@ from hireme_mcp.models.schemas import (
     ToolResponse,
     WorkMode,
 )
+from hireme_mcp.sources import (
+    BaseJobSource,
+    JobAggregator,
+    SourceRegistry,
+    create_default_registry,
+)
+from hireme_mcp.sources.hiremetech import HireMeTechSource
 from hireme_mcp.utils.logger import generate_trace_id, get_logger
 
 logger = get_logger(__name__)
@@ -61,7 +68,7 @@ def _response(
 
 # Server system instructions
 SERVER_INSTRUCTIONS = """
-HireMeTech MCP Server enables intelligent job matching, filtering, bookmarking, and automated job applications on HireMeTech.
+HireMeTech MCP Server enables intelligent job matching, filtering, bookmarking, and automated job applications across multiple sources (HireMeTech, Comeet, AllJobs).
 
 ## Operation Modes
 
@@ -72,19 +79,20 @@ The server supports two operation modes, controlled via `set_operation_mode`:
 - Standard behavior matching typical MCP tool usage.
 
 ### Autonomous Mode
-- Execute read-only and safe-action tools (`get_job_matches`, `filter_jobs_by_preferences`, `bookmark_job`, `delete_job`, `calibrate_selectors`) WITHOUT asking the user for per-tool confirmation.
-- Chain operations freely: scan -> filter -> bookmark matching jobs -> report results.
+- Execute read-only and safe-action tools (`list_job_sources`, `get_job_matches`, `filter_jobs_by_preferences`, `bookmark_job`, `delete_job`, `calibrate_selectors`) WITHOUT asking the user for per-tool confirmation.
+- Chain operations freely: list sources -> scan -> filter -> bookmark matching jobs -> report results.
 - The ONLY action that ALWAYS requires explicit user confirmation is `confirm_auto_apply` — actual job application submission. This is a safety-critical action.
 
 ## Available Tools
-1. `get_job_matches`: Fetch matched job listings from your HireMeTech dashboard. Uses caching for high performance.
-2. `filter_jobs_by_preferences`: Filter cached job listings based on tech stack, work mode (remote/hybrid/onsite), location, minimum salary, keywords, exclusion criteria, or CV keyword extraction.
-3. `bookmark_job`: Save/favorite a specific job listing by its ID.
-4. `delete_job`: Dismiss or hide a job listing from view by its ID.
-5. `auto_apply_job`: Step 1 of safe auto-application. Inspects the job application form, generates a preview of fields to submit and warnings, and stages the application.
-6. `confirm_auto_apply`: Step 2 of safe auto-application. Submits the staged job application after user confirmation. ALWAYS requires explicit user confirmation, even in autonomous mode.
-7. `calibrate_selectors`: Test, discover, and calibrate DOM selectors against the live HireMeTech page with self-healing heuristics.
-8. `set_operation_mode`: Switch between 'supervised' and 'autonomous' operation modes.
+1. `list_job_sources`: List all registered job sources (HireMeTech, Comeet, AllJobs), their capabilities, and current health status.
+2. `get_job_matches`: Fetch matched job listings across all or specified job sources. Uses caching for high performance.
+3. `filter_jobs_by_preferences`: Filter cached job listings based on tech stack, work mode (remote/hybrid/onsite), location, minimum salary, keywords, exclusion criteria, or CV keyword extraction.
+4. `bookmark_job`: Save/favorite a specific job listing by its ID.
+5. `delete_job`: Dismiss or hide a job listing from view by its ID.
+6. `auto_apply_job`: Step 1 of safe auto-application. Inspects the job application form, generates a preview of fields to submit and warnings, and stages the application.
+7. `confirm_auto_apply`: Step 2 of safe auto-application. Submits the staged job application after user confirmation. ALWAYS requires explicit user confirmation, even in autonomous mode.
+8. `calibrate_selectors`: Test, discover, and calibrate DOM selectors against the live HireMeTech page with self-healing heuristics.
+9. `set_operation_mode`: Switch between 'supervised' and 'autonomous' operation modes.
 
 ## Safety Rules
 - Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2). This rule applies in ALL modes.
@@ -95,6 +103,8 @@ The server supports two operation modes, controlled via `set_operation_mode`:
 # Global singletons for direct tool execution or when context is omitted in tests
 _default_session: Optional[SessionManager] = None
 _default_cache: Optional[JobCache] = None
+_default_registry: Optional[SourceRegistry] = None
+_default_aggregator: Optional[JobAggregator] = None
 
 # Staged pending applications store: job_id -> application preview dict
 _pending_applications: dict[str, dict[str, Any]] = {}
@@ -107,47 +117,39 @@ _SCRAPE_TIMEOUT_SECONDS: float = 8.0
 _WARMUP_TIMEOUT_SECONDS: float = 30.0
 
 
-async def _warm_cache(session: SessionManager, cache: JobCache) -> None:
+async def _warm_cache(
+    session: Optional[SessionManager] = None,
+    cache: Optional[JobCache] = None,
+    aggregator: Optional[JobAggregator] = None,
+) -> None:
     """Warm up the job cache asynchronously in the background during startup.
 
-    Checks session health via `ensure_ready()`. If authenticated and healthy,
-    attempts to fetch jobs via direct API first. If API fetch fails or returns
-    empty, navigates to the dashboard, extracts current jobs via DOM scraping,
-    and populates the cache.
     Catches all exceptions gracefully so background warmup never crashes the server.
     """
     try:
-        page = await session.ensure_ready(max_retries=2)
-    except Exception as exc:
-        logger.info("Cache warmup skipped (session not ready / unauthenticated): %s", exc)
-        return
+        if aggregator is not None:
+            agg = aggregator
+        elif session is not None:
+            reg = SourceRegistry()
+            reg.register(HireMeTechSource(session_manager=session))
+            agg = JobAggregator(registry=reg, cache=cache)
+        else:
+            agg = _get_aggregator()
 
-    # 1. Primary data source: Direct API fetch (~100-200ms)
-    try:
-        jobs = await fetch_jobs_via_api(page.request, size=50)
-        if jobs:
+        if cache is not None:
+            agg.cache = cache
+
+        if session is not None:
+            try:
+                await session.ensure_ready(max_retries=2)
+            except Exception as exc:
+                logger.info("Cache warmup session note: %s", exc)
+                return
+
+        jobs = await agg.fetch_all_jobs(force_refresh=True)
+        if cache is not None and jobs:
             cache.update(jobs)
-            logger.info("Cache warmup completed via API with %d jobs.", len(jobs))
-            return
-    except asyncio.CancelledError:
-        logger.debug("Cache warmup task cancelled.")
-        raise
-    except Exception as api_exc:
-        logger.debug("API warmup fallback: %s", api_exc)
-
-    # 2. Fallback: Browser DOM scraping
-    try:
-        target_url = f"{BASE_URL}{DASHBOARD_PATH}"
-        if DASHBOARD_PATH not in (page.url or ""):
-            await page.goto(target_url, wait_until="commit", timeout=int(_WARMUP_TIMEOUT_SECONDS * 1000))
-            if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
-                t = page.wait_for_timeout(2000)
-                if asyncio.iscoroutine(t):
-                    await t
-
-        jobs = await asyncio.wait_for(browser_extract_jobs(page), timeout=_WARMUP_TIMEOUT_SECONDS)
-        cache.update(jobs)
-        logger.info("Cache warmup completed with %d jobs.", len(jobs))
+        logger.info("Cache warmup completed with %d jobs across sources.", len(jobs))
     except asyncio.CancelledError:
         logger.debug("Cache warmup task cancelled.")
         raise
@@ -158,23 +160,33 @@ async def _warm_cache(session: SessionManager, cache: JobCache) -> None:
 @asynccontextmanager
 async def browser_lifespan(server: FastMCP):
     """Lifespan context manager to manage browser session and job cache across server lifecycle."""
-    global _default_session, _default_cache
+    global _default_session, _default_cache, _default_registry, _default_aggregator
     logger.info("Starting HireMeTech FastMCP lifespan...")
 
     session_mgr = SessionManager()
     job_cache = JobCache()
+    registry = create_default_registry(session_manager=session_mgr)
+    aggregator = JobAggregator(registry=registry, cache=job_cache)
+
     _default_session = session_mgr
     _default_cache = job_cache
+    _default_registry = registry
+    _default_aggregator = aggregator
 
     try:
         await session_mgr.initialize()
     except Exception as exc:
         logger.warning("SessionManager initial start notice: %s", exc)
 
-    warmup_task = asyncio.create_task(_warm_cache(session_mgr, job_cache))
+    warmup_task = asyncio.create_task(_warm_cache(session_mgr, job_cache, aggregator=aggregator))
 
     try:
-        yield {"session": session_mgr, "cache": job_cache}
+        yield {
+            "session": session_mgr,
+            "cache": job_cache,
+            "registry": registry,
+            "aggregator": aggregator,
+        }
     finally:
         logger.info("Shutting down HireMeTech FastMCP lifespan...")
         if warmup_task and not warmup_task.done():
@@ -316,6 +328,50 @@ def _get_cache(ctx: Optional[Context] = None) -> JobCache:
     return _default_cache
 
 
+def _get_registry(ctx: Optional[Context] = None) -> SourceRegistry:
+    """Retrieve SourceRegistry instance from Context lifespan state or global default."""
+    global _default_registry
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict):
+            if "registry" in lifespan_ctx:
+                return lifespan_ctx["registry"]
+            if "session" in lifespan_ctx and "aggregator" not in lifespan_ctx and _default_registry is None:
+                reg = SourceRegistry()
+                reg.register(HireMeTechSource(session_manager=lifespan_ctx["session"]))
+                return reg
+    if _default_registry is None:
+        _default_registry = create_default_registry()
+    return _default_registry
+
+
+def _get_aggregator(ctx: Optional[Context] = None) -> JobAggregator:
+    """Retrieve JobAggregator instance from Context lifespan state or global default."""
+    global _default_aggregator
+    cache = _get_cache(ctx)
+    registry = _get_registry(ctx)
+
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict):
+            if "session" in lifespan_ctx:
+                hmt = registry.get("hiremetech")
+                if isinstance(hmt, HireMeTechSource):
+                    hmt.session_manager = lifespan_ctx["session"]
+            if "aggregator" in lifespan_ctx:
+                agg = lifespan_ctx["aggregator"]
+                agg.cache = cache
+                return agg
+
+    if _default_aggregator is None:
+        _default_aggregator = JobAggregator(registry=registry, cache=cache)
+    else:
+        _default_aggregator.cache = cache
+        _default_aggregator.registry = registry
+
+    return _default_aggregator
+
+
 async def _ensure_session(ctx: Optional[Context] = None) -> tuple[SessionManager, bool]:
     """Retrieve SessionManager and verify authentication health status.
 
@@ -397,16 +453,55 @@ async def set_operation_mode(
 
 
 @mcp.tool()
+async def list_job_sources(
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """List all registered job sources, their capabilities, and current health status.
+
+    Args:
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse with registered sources metadata and real-time health checks.
+    """
+    registry = _get_registry(ctx)
+    aggregator = _get_aggregator(ctx)
+
+    try:
+        sources_meta = [m.model_dump() for m in registry.list_sources()]
+        health_status = await aggregator.check_all_health()
+        return _response(
+            success=True,
+            message=f"Retrieved {len(sources_meta)} registered job sources.",
+            data={
+                "sources": sources_meta,
+                "health": health_status,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Error in list_job_sources: %s", exc)
+        return _response(
+            success=False,
+            message=f"Failed to list job sources: {exc}",
+            error_code="SOURCES_ERROR",
+        )
+
+
+@mcp.tool()
 async def get_job_matches(
+    sources: Optional[list[str]] = None,
     force_refresh: bool = False,
     ctx: Optional[Context] = None,
 ) -> dict[str, Any]:
-    """Fetch matched job listings from HireMeTech dashboard.
+    """Fetch matched job listings from registered sources (HireMeTech, Comeet, AllJobs).
 
     Uses cached job listings unless cache is stale or force_refresh is True.
+    Optionally filters by specific source IDs (e.g. ['hiremetech', 'comeet', 'alljobs']).
 
     Args:
-        force_refresh: Force a live scrape from the browser even if cache is fresh.
+        sources: Optional list of source IDs to query (e.g. ['hiremetech', 'alljobs']).
+                 If None, queries all active registered sources.
+        force_refresh: Force a live scrape/fetch from sources even if cache is fresh.
         ctx: FastMCP Context object.
 
     Returns:
@@ -417,6 +512,13 @@ async def get_job_matches(
     if not force_refresh and not cache.is_stale:
         cached_jobs = cache.get_all()
         if cached_jobs:
+            if sources is not None:
+                source_set = set(sources)
+                cached_jobs = [
+                    j
+                    for j in cached_jobs
+                    if j.source in source_set or any(s in source_set for s in getattr(j, "sources", []))
+                ]
             logger.info("Returning %d jobs from cache.", len(cached_jobs))
             return _response(
                 success=True,
@@ -424,7 +526,20 @@ async def get_job_matches(
                 data=[job.model_dump() for job in cached_jobs],
             )
 
-    try:
+    aggregator = _get_aggregator(ctx)
+    aggregator.cache = cache
+
+    # Ensure HireMeTechSource has current session if provided
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict) and "session" in lifespan_ctx:
+            hmt = aggregator.registry.get("hiremetech")
+            if isinstance(hmt, HireMeTechSource):
+                hmt.session_manager = lifespan_ctx["session"]
+
+    # If single-source HireMeTech is requested or only HireMeTech is in registry, verify session auth
+    active = aggregator.registry.get_active(sources)
+    if len(active) == 1 and active[0].source_id == "hiremetech":
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
             return _response(
@@ -436,37 +551,16 @@ async def get_job_matches(
                 error_code="UNAUTHENTICATED",
             )
 
-        page = await session.get_page()
-        jobs: list[Job] = []
-
-        # 1. Primary data source: Direct API fetch (~100-200ms)
-        try:
-            jobs = await asyncio.wait_for(fetch_jobs_via_api(page.request, size=50), timeout=5.0)
-        except Exception as api_exc:
-            logger.debug("Direct API fetch failed or timed out, falling back to DOM scraping: %s", api_exc)
-
-        # 2. Fallback: Browser DOM scraping
-        if not jobs:
-            async def _scrape_live() -> list[Job]:
-                target_url = f"{BASE_URL}{DASHBOARD_PATH}"
-                if DASHBOARD_PATH not in (page.url or ""):
-                    await page.goto(target_url, wait_until="commit", timeout=int(_SCRAPE_TIMEOUT_SECONDS * 1000))
-                    if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
-                        t = page.wait_for_timeout(2500)
-                        if asyncio.iscoroutine(t):
-                            await t
-                return await browser_extract_jobs(page)
-
-            jobs = await asyncio.wait_for(_scrape_live(), timeout=_SCRAPE_TIMEOUT_SECONDS)
-
-        cache.update(jobs)
-
+    try:
+        jobs = await asyncio.wait_for(
+            aggregator.fetch_all_jobs(sources=sources, force_refresh=force_refresh),
+            timeout=_SCRAPE_TIMEOUT_SECONDS,
+        )
         return _response(
             success=True,
             message=f"Successfully fetched {len(jobs)} live job matches.",
             data=[job.model_dump() for job in jobs],
         )
-
     except (asyncio.TimeoutError, TimeoutError):
         logger.warning("Scraping jobs timed out after %.1fs.", _SCRAPE_TIMEOUT_SECONDS)
         return _response(

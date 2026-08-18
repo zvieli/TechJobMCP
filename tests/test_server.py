@@ -143,6 +143,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
         tool_names = [t.name for t in tools]
 
         expected_tools = [
+            "list_job_sources",
             "get_job_matches",
             "filter_jobs_by_preferences",
             "bookmark_job",
@@ -170,6 +171,8 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
         async with browser_lifespan(mock_server) as state:
             self.assertIn("session", state)
             self.assertIn("cache", state)
+            self.assertIn("registry", state)
+            self.assertIn("aggregator", state)
             self.assertIsInstance(state["session"], SessionManager)
             self.assertIsInstance(state["cache"], JobCache)
             mock_init.assert_called_once()

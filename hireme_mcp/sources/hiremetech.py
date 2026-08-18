@@ -91,7 +91,7 @@ class HireMeTechSource(BaseJobSource):
         if not jobs:
             try:
                 target_url = f"{BASE_URL}{DASHBOARD_PATH}"
-                if DASHBOARD_PATH not in (page.url or ""):
+                if hasattr(page, "url") and DASHBOARD_PATH not in (page.url or ""):
                     await page.goto(target_url, wait_until="commit", timeout=10000)
                     if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
                         t = page.wait_for_timeout(2500)
@@ -99,6 +99,8 @@ class HireMeTechSource(BaseJobSource):
                             await t
 
                 jobs = await browser_extract_jobs(page)
+            except (asyncio.TimeoutError, TimeoutError):
+                raise
             except Exception as exc:
                 logger.warning("DOM extraction fallback failed: %s", exc)
                 jobs = []

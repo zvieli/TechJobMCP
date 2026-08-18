@@ -19,4 +19,6 @@ Direct API Task 3: complete (commits 925d0f2..d229063, review clean)
 Multi-Source Task 1: complete (commits d229063..8c49dc8, review clean)
 Multi-Source Task 2: complete (commits 8c49dc8..ce8a391, review clean)
 Multi-Source Task 3: complete (commits ce8a391..b848292, review clean)
-Multi-Source Task 4: complete (in progress for commit)
+Multi-Source Task 4: complete (commits b848292..75dc3ff, review clean)
+Multi-Source Task 5: complete, review clean
+

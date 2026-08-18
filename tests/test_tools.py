@@ -12,8 +12,8 @@ from fastmcp import Context
 from hireme_mcp.core.api_client import JobCache
 from hireme_mcp.core.auth import SessionManager
 from hireme_mcp.main import (
-    _get_cache,
     _ensure_session,
+    _get_cache,
     _pending_applications,
     auto_apply_job,
     bookmark_job,
@@ -27,6 +27,8 @@ from hireme_mcp.models.schemas import (
     Job,
     WorkMode,
 )
+from hireme_mcp.sources import JobAggregator, SourceRegistry
+from hireme_mcp.sources.hiremetech import HireMeTechSource
 
 
 class TestMcpTools(unittest.IsolatedAsyncioTestCase):
@@ -73,11 +75,19 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
 
     def _create_mock_context(self, session_mgr: SessionManager, cache: JobCache) -> MagicMock:
         """Create a mock FastMCP Context with lifespan state."""
+        registry = SourceRegistry()
+        registry.register(HireMeTechSource(session_manager=session_mgr))
+        aggregator = JobAggregator(registry=registry, cache=cache)
         ctx = MagicMock(spec=Context)
-        ctx.lifespan_context = {"session": session_mgr, "cache": cache}
+        ctx.lifespan_context = {
+            "session": session_mgr,
+            "cache": cache,
+            "registry": registry,
+            "aggregator": aggregator,
+        }
         return ctx
 
-    @patch("hireme_mcp.main.browser_extract_jobs")
+    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_cache_hit(self, mock_extract):
         """Test get_job_matches returns cached data without calling browser extraction."""
         cache = JobCache(ttl_minutes=10)
@@ -92,7 +102,7 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(res["data"]), 3)
         mock_extract.assert_not_called()
 
-    @patch("hireme_mcp.main.browser_extract_jobs")
+    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_live_fetch_and_force_refresh(self, mock_extract):
         """Test live extraction when cache is empty or force_refresh is True."""
         cache = JobCache(ttl_minutes=10)
@@ -120,8 +130,8 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(res2["success"])
         mock_extract.assert_called_once()
 
-    @patch("hireme_mcp.main.fetch_jobs_via_api")
-    @patch("hireme_mcp.main.browser_extract_jobs")
+    @patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api")
+    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_api_first(self, mock_extract, mock_api):
         """Test get_job_matches uses API data when available and avoids DOM extraction."""
         cache = JobCache(ttl_minutes=10)
@@ -140,7 +150,7 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         mock_api.assert_called_once_with(mock_page.request, size=50)
         mock_extract.assert_not_called()
 
-    @patch("hireme_mcp.main.browser_extract_jobs")
+    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_unauthenticated(self, mock_extract):
         """Test get_job_matches returns UNAUTHENTICATED error when session is invalid."""
         cache = JobCache(ttl_minutes=10)
