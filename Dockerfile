@@ -18,7 +18,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Copy dependency definition
 COPY pyproject.toml README.md ./
-COPY hireme_mcp ./hireme_mcp
+COPY job_mcp ./job_mcp
 
 # Build virtual environment
 RUN uv venv /app/.venv && \
@@ -70,7 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy virtualenv and application from builder
 COPY --from=builder /app/.venv /app/.venv
-COPY hireme_mcp ./hireme_mcp
+COPY job_mcp ./job_mcp
 COPY pyproject.toml README.md ./
 
 # Put virtualenv on PATH
@@ -98,4 +98,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
 # Start MCP Server
-CMD ["python", "-m", "hireme_mcp"]
+CMD ["python", "-m", "job_mcp"]

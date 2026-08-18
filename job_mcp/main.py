@@ -141,10 +141,9 @@ async def _warm_cache(
 
         if session is not None:
             try:
-                await session.ensure_ready(max_retries=2)
+                await session.ensure_ready(max_retries=1)
             except Exception as exc:
-                logger.info("Cache warmup session note: %s", exc)
-                return
+                logger.info("Cache warmup browser session note: %s. Continuing with public sources.", exc)
 
         jobs = await agg.fetch_all_jobs(force_refresh=True)
         if cache is not None and jobs:

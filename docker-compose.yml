@@ -9,7 +9,7 @@ services:
       - "8000:8000"
     volumes:
       - /home/lior/.hireme_mcp/browser_profile:/app/browser_profile
-      - ./hireme_mcp:/app/hireme_mcp
+      - ./job_mcp:/app/job_mcp
       - ./lior_zvieli_cv.pdf:/app/cv.pdf:ro
     environment:
       - MCP_TRANSPORT=http
