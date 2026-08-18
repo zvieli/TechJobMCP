@@ -26,6 +26,13 @@ from job_mcp.sources.comeet import (
     ComeetSource,
     parse_comeet_position,
 )
+from job_mcp.sources.workday import (
+    DEFAULT_WORKDAY_COMPANIES,
+    WORKDAY_COMPANIES,
+    WorkdayCompany,
+    WorkdaySource,
+    parse_workday_position,
+)
 from job_mcp.sources.hiremetech import HireMeTechSource
 from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
 
@@ -126,6 +133,10 @@ def create_default_registry(session_manager: Optional[Any] = None) -> SourceRegi
     enable_alljobs = os.getenv("ENABLE_ALLJOBS", "false").strip().lower() in ("true", "1", "yes")
     if enable_alljobs:
         reg.register(AllJobsSource())
+
+    enable_workday = os.getenv("ENABLE_WORKDAY", "false").strip().lower() in ("true", "1", "yes")
+    if enable_workday:
+        reg.register(WorkdaySource())
     return reg
 
 
@@ -142,6 +153,11 @@ __all__ = [
     "ComeetCompany",
     "DEFAULT_COMEET_COMPANIES",
     "parse_comeet_position",
+    "WorkdaySource",
+    "WorkdayCompany",
+    "WORKDAY_COMPANIES",
+    "DEFAULT_WORKDAY_COMPANIES",
+    "parse_workday_position",
     "AllJobsSource",
     "ALLJOBS_BASE_URL",
     "ALLJOBS_HEADERS",
