@@ -26,28 +26,66 @@ CURATED_TECH_KEYWORDS = [
     "Scala", "C++", "C#", "C", ".NET", "Ruby", "PHP", "Swift", "Objective-C",
     "SQL", "HTML", "CSS", "Bash", "Shell", "R", "Dart", "Elixir", "Clojure",
     # Web3 & Blockchain
-    "Solidity", "Web3", "Smart Contracts", "EVM", "Hardhat", "Foundry", "Ethers.js", "Viem",
+    "Solidity", "Noir", "Web3", "Smart Contracts", "Smart Contract Development",
+    "EVM", "Hardhat", "Foundry", "Ethers.js", "Viem", "IPFS", "ZK", "MPT",
+    "Keccak256", "Merkle Patricia Trie",
     # Frameworks & Libraries
     "React", "Next.js", "Vue", "Vue.js", "Nuxt", "Angular", "Svelte",
     "Node.js", "Node", "Express", "FastAPI", "Django", "Flask", "Spring", "Spring Boot",
     "Ruby on Rails", "Rails", "Laravel", "ASP.NET", "GraphQL", "gRPC", "REST", "RESTful",
     "Redux", "Zustand", "TailwindCSS", "Bootstrap", "Prisma", "SQLAlchemy", "Pydantic",
-    "Supabase", "TRPC", "AsyncIO",
+    "Supabase", "TRPC", "AsyncIO", "Vite", "UltraHonk", "bb.js",
     # Databases & Storage
     "PostgreSQL", "Postgres", "MySQL", "MongoDB", "Redis", "Elasticsearch", "Cassandra",
     "DynamoDB", "SQLite", "MariaDB", "Neo4j", "Kafka", "RabbitMQ", "Celery",
+    "Azure Cosmos DB", "Cosmos DB", "Gremlin API", "Blob Storage", "Azure Blob Storage",
     # DevOps, Cloud & Infrastructure
     "Docker", "Kubernetes", "K8s", "AWS", "Amazon Web Services", "GCP", "Google Cloud",
-    "Azure", "Terraform", "Ansible", "Helm", "CI/CD", "GitHub Actions", "GitLab CI",
+    "Azure", "Azure Functions", "Azure Durable Functions", "Container Apps", "Azure Container Apps",
+    "Terraform", "Ansible", "Helm", "CI/CD", "GitHub Actions", "GitLab CI",
     "Jenkins", "CircleCI", "Linux", "Git", "Nginx", "Prometheus", "Grafana",
     # AI / LLM / Agentic / ML / Data
     "PyTorch", "TensorFlow", "Keras", "Scikit-Learn", "Pandas", "NumPy",
-    "OpenAI", "LLM", "LangChain", "LlamaIndex", "Hugging Face", "NLP",
+    "OpenAI", "LLM", "LangChain", "LlamaIndex", "Hugging Face", "NLP", "OCR",
     "GraphRAG", "LangGraph", "RAG", "Agentic", "Vector DB", "ChromaDB", "Chroma",
     "Pinecone", "Qdrant", "Weaviate", "CrewAI", "Autogen", "vLLM", "Ollama",
     "LangSmith", "Semantic Kernel", "Transformers", "Fine-Tuning", "Embeddings",
     "FastMCP", "Playwright", "Selenium", "Airflow", "Spark", "Hadoop",
+    "Azure AI Search", "Azure Document Intelligence", "Azure AI Document Intelligence",
+    "Document Intelligence", "ClinicalBERT", "NetworkX", "Cytoscape", "Leiden",
+    "Machine Learning", "Operating Systems", "Data Structures",
 ]
+
+RESUME_STOPWORDS: set[str] = {
+    "THE", "AND", "FOR", "WITH", "FROM", "PRESENT", "MARCH", "FEBRUARY", "JANUARY", "APRIL",
+    "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+    "SUMMER", "WINTER", "FALL", "SPRING", "COMPUTER", "SCIENCE", "EXPERIENCE", "PROJECTS",
+    "EDUCATION", "CLIENT", "PROJECT", "SYSTEMS", "SUMMARY", "EXPECTED", "COURSES",
+    "DEVELOPER", "ARCHITECT", "ENGINEER", "LEGAL", "HEBREW", "MAINNET", "KEY", "ALL",
+    "NEW", "OUR", "WHO", "HOW", "WHY", "LINKEDIN", "GITHUB", "EMAIL", "PHONE", "TEL",
+    "AVIV", "ISRAEL", "UNIVERSITY", "COLLEGE", "DEGREE", "BSC", "MSC", "PHD", "HIT",
+    "IDF", "PROFESSIONAL", "WORK", "STRONG", "BACKGROUND", "SCRIPT", "LEVEL",
+}
+
+MULTI_TOKEN_TECH_PHRASES: list[str] = [
+    "Azure AI Search", "Azure Cosmos DB", "Azure Functions", "Azure Durable Functions",
+    "Azure AI Document Intelligence", "Azure Document Intelligence", "Document Intelligence",
+    "Azure Container Apps", "Container Apps", "Azure Blob Storage", "Blob Storage",
+    "Smart Contract Development", "Smart Contracts", "Gremlin API",
+    "Solidity", "Noir", "Foundry", "Hardhat", "Viem", "Ollama", "Pandas", "Python", "Rust",
+    "React", "Docker", "Linux", "Git", "C#", "C++", ".NET", "ClinicalBERT", "NetworkX",
+    "TailwindCSS", "Vite", "UltraHonk", "Axiom", "Axiom V3", "Cytoscape", "Leiden",
+    "Merkle Patricia Trie", "Hugging Face", "Scikit-Learn", "Operating Systems", "Data Structures",
+    "Machine Learning", "Ethers.js", "Node.js", "bb.js", "IPFS", "Keccak256",
+]
+
+MONTHS_AND_NOISE: set[str] = {
+    "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST",
+    "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER", "PRESENT", "DEVELOPER",
+    "ENGINEER", "ARCHITECT", "HOLON", "TELAVIV", "ISRAEL", "SUMMER", "WINTER",
+    "FALL", "SPRING", "SUMMARY", "EXPERIENCE", "EDUCATION", "CLASSIFICATION",
+    "PLATFORM",
+}
 
 
 class JobCache:
@@ -245,8 +283,173 @@ def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
     return None
 
 
+def _clean_and_canonicalize_token(tok: str, canonical_map: dict[str, str]) -> Optional[str]:
+    """Clean and canonicalize a potential skill token, filtering out noise and stopwords.
+
+    Args:
+        tok: Raw token candidate.
+        canonical_map: Dictionary mapping lowercase terms to canonical display strings.
+
+    Returns:
+        Optional[str]: Canonicalized skill name or None if filtered as noise/stopword.
+    """
+    tok = tok.strip()
+    # Strip leading/trailing bullets, quotes, dashes, brackets, parens
+    tok = re.sub(r"^[•*—\-\s\"'()\[\]{}]+|[•*—\-\s\"'()\[\]{}]+$", "", tok).strip()
+    if not tok:
+        return None
+    if tok.upper() in RESUME_STOPWORDS:
+        return None
+    # Remove single character items (except valid language names like C, R)
+    if len(tok) == 1 and tok.upper() not in ("C", "R"):
+        return None
+    # Filter pure numbers or floating numbers
+    if re.match(r"^\d+(\.\d+)?$", tok):
+        return None
+
+    tok_lower = tok.lower()
+    if tok_lower in canonical_map:
+        return canonical_map[tok_lower]
+
+    # Filter glued PascalCase noise (e.g. OracleMarch, ClassificationDeveloper, ScienceHolon)
+    if re.match(r"^[A-Z][a-z0-9]+[A-Z][a-zA-Z0-9]*$", tok):
+        subwords = re.findall(r"[A-Z]+[a-z0-9]*", tok)
+        if any(sw.upper() in MONTHS_AND_NOISE for sw in subwords):
+            return None
+
+    # Retain original casing if mixed/upper, or Title Case if all lower
+    if tok.islower():
+        return tok.title()
+    return tok
+
+
+def extract_dynamic_cv_skills(text_content: str) -> list[str]:
+    """Discovers skills, technologies, frameworks, tools, libraries, and languages dynamically from text.
+
+    Args:
+        text_content: Raw text content from CV or resume.
+
+    Returns:
+        list[str]: Sorted, deduplicated list of dynamic skills.
+    """
+    if not text_content:
+        return []
+
+    # Build canonical casing map
+    canonical_map: dict[str, str] = {kw.lower(): kw for kw in CURATED_TECH_KEYWORDS}
+    for phrase in MULTI_TOKEN_TECH_PHRASES:
+        canonical_map[phrase.lower()] = phrase
+
+    canonical_map.update({
+        "zk": "ZK", "rag": "RAG", "nlp": "NLP", "ocr": "OCR", "llm": "LLM", "llms": "LLM",
+        "mpt": "MPT", "evm": "EVM", "ipfs": "IPFS", "gpt": "GPT", "gpt-4o": "GPT-4o",
+        "json": "JSON", "bb.js": "bb.js", "ethers.js": "Ethers.js", "node.js": "Node.js",
+        "vue.js": "Vue.js", "next.js": "Next.js", "vite": "Vite", "noir": "Noir",
+        "viem": "Viem", "foundry": "Foundry", "hardhat": "Hardhat", "ollama": "Ollama",
+        "ultrahonk": "UltraHonk", "clinicalbert": "ClinicalBERT", "networkx": "NetworkX",
+        "cytoscape": "Cytoscape", "leiden": "Leiden", "scikit-learn": "Scikit-Learn",
+        "tailwindcss": "TailwindCSS", "c#": "C#", "c++": "C++", ".net": ".NET",
+        "c": "C", "r": "R", "sql": "SQL", "html": "HTML", "css": "CSS", "bash": "Bash",
+        "api": "API", "sdk": "SDK", "rest": "REST", "grpc": "gRPC", "k8s": "K8s",
+        "ci/cd": "CI/CD", "aws": "AWS", "gcp": "GCP", "ui": "UI", "ux": "UX",
+    })
+
+    discovered: set[str] = set()
+
+    # a) Section-based parsing
+    lines = text_content.splitlines()
+    in_skills_section = False
+
+    section_start_re = re.compile(
+        r"^\s*(?:[#*•\-\s]*)(?:Technical\s+Skills|Skills|Technologies|Tech\s+Stack|Core\s+Competencies|Technical\s+Competencies)\s*[:\-]?\s*(.*)$",
+        re.IGNORECASE,
+    )
+    section_end_re = re.compile(
+        r"^\s*(?:[#*•\-\s]*)(?:Experience|Work\s+Experience|Projects|Education|Certifications|Professional\s+Summary|Summary|Publications|Awards)\s*[:\-]?\s*$",
+        re.IGNORECASE,
+    )
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        m_start = section_start_re.match(stripped)
+        if m_start:
+            in_skills_section = True
+            after = m_start.group(1).strip()
+            if after:
+                cleaned_line = after.replace("(", ",").replace(")", ",")
+                tokens = re.split(r"[,;•\n\r|]+", cleaned_line)
+                for tok in tokens:
+                    c = _clean_and_canonicalize_token(tok, canonical_map)
+                    if c:
+                        discovered.add(c)
+            continue
+        elif in_skills_section and section_end_re.match(stripped) and not stripped.lower().startswith("languages:"):
+            in_skills_section = False
+            continue
+
+        if in_skills_section:
+            cleaned_line = re.sub(r"^[•*—\-\s]*[A-Za-z0-9\s&/\\+,\-]+?:\s*", "", stripped)
+            cleaned_line = cleaned_line.replace("(", ",").replace(")", ",")
+            tokens = re.split(r"[,;•\n\r|]+", cleaned_line)
+            for tok in tokens:
+                c = _clean_and_canonicalize_token(tok, canonical_map)
+                if c:
+                    discovered.add(c)
+
+    # b) Pattern-based entity discovery across the entire text
+    # 1. PascalCase / CamelCase frameworks & libraries
+    for m in re.finditer(r"\b[A-Z][a-z0-9]+[A-Z][a-zA-Z0-9]*\b", text_content):
+        c = _clean_and_canonicalize_token(m.group(0), canonical_map)
+        if c:
+            discovered.add(c)
+
+    # 2. Package / runtime notations
+    for m in re.finditer(r"\b[A-Za-z0-9]+\.(?:js|ts|py|rs|io)\b", text_content, re.IGNORECASE):
+        c = _clean_and_canonicalize_token(m.group(0), canonical_map)
+        if c:
+            discovered.add(c)
+
+    # 3. Acronyms & technical terms (including plurals like LLMs, APIs, SDKs)
+    for m in re.finditer(r"\b([A-Z]{2,6})(?:s)?\b", text_content):
+        c = _clean_and_canonicalize_token(m.group(1), canonical_map)
+        if c:
+            discovered.add(c)
+        c_full = _clean_and_canonicalize_token(m.group(0), canonical_map)
+        if c_full:
+            discovered.add(c_full)
+
+    # 4. Multi-token tech phrases & key tech keywords
+    all_phrases = sorted(list(set(MULTI_TOKEN_TECH_PHRASES + CURATED_TECH_KEYWORDS)), key=lambda s: len(s), reverse=True)
+    text_lower = text_content.lower()
+    for phrase in all_phrases:
+        if phrase in (".NET", "C#", "C++", "C", "R"):
+            pattern = r"(?<![a-zA-Z0-9_])" + re.escape(phrase) + r"(?![a-zA-Z0-9_])"
+            if re.search(pattern, text_content, re.IGNORECASE):
+                c = _clean_and_canonicalize_token(phrase, canonical_map)
+                if c:
+                    discovered.add(c)
+        else:
+            pattern = r"(?<![a-zA-Z0-9_])" + re.escape(phrase.lower()) + r"(?![a-zA-Z0-9_])"
+            if re.search(pattern, text_lower):
+                c = _clean_and_canonicalize_token(phrase, canonical_map)
+                if c:
+                    discovered.add(c)
+
+    # e) Return sorted, deduplicated list of dynamic skills
+    seen: dict[str, str] = {}
+    for skill in discovered:
+        low = skill.lower()
+        if low not in seen:
+            seen[low] = skill
+
+    return sorted(list(seen.values()), key=lambda s: s.lower())
+
+
 def extract_cv_keywords(cv_path: Optional[str] = None) -> list[str]:
-    """Read a CV/resume file (text, pdf, docx) and extract technology keywords.
+    """Read a CV/resume file (text, pdf, docx) and extract dynamic technology keywords.
 
     Args:
         cv_path: Optional path to the resume/CV file. If not provided, resolved automatically.
@@ -280,17 +483,8 @@ def extract_cv_keywords(cv_path: Optional[str] = None) -> list[str]:
         logger.warning("No readable text could be extracted from '%s'.", path)
         return []
 
-    found_keywords: set[str] = set()
-    text_lower = text_content.lower()
-
-    for tech in CURATED_TECH_KEYWORDS:
-        # Regex matching with word boundaries
-        pattern = r"(?<![a-zA-Z0-9_])" + re.escape(tech.lower()) + r"(?![a-zA-Z0-9_])"
-        if re.search(pattern, text_lower):
-            found_keywords.add(tech)
-
-    result = sorted(list(found_keywords), key=lambda s: s.lower())
-    logger.info("Extracted %d keywords from CV '%s': %s", len(result), path.name, result)
+    result = extract_dynamic_cv_skills(text_content)
+    logger.info("Extracted %d dynamic skills from CV '%s': %s", len(result), path.name, result)
     return result
 
 
@@ -597,23 +791,32 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
                         matched_job_skills = matched_cv & job_skills
                         job_coverage = len(matched_job_skills) / len(job_skills)
                         coverage_points = job_coverage * 55.0
-                        count_points = min(45.0, len(matched_cv) * 15.0)
+                        count_points = min(45.0, len(matched_cv) * 8.0)
                         cv_score = min(100.0, coverage_points + count_points)
                     else:
-                        cv_score = min(50.0, len(matched_cv) * 15.0)
+                        cv_score = min(50.0, len(matched_cv) * 8.0)
                 else:
                     cv_score = 0.0
 
-            active_weights = (50.0 if desired_tech else 0.0) + (30.0 if desired_keywords else 0.0) + (20.0 if cv_keywords else 0.0)
+            if cv_keywords:
+                w_tech = 45.0 if desired_tech else 0.0
+                w_kw = 25.0 if desired_keywords else 0.0
+                w_cv = 30.0 if (desired_tech or desired_keywords) else 100.0
+            else:
+                w_tech = 60.0 if desired_tech else 0.0
+                w_kw = 40.0 if desired_keywords else 0.0
+                w_cv = 0.0
+
+            active_weights = w_tech + w_kw + w_cv
             if active_weights > 0:
-                weighted_sum = (
-                    tech_score * (50.0 if desired_tech else 0.0)
-                    + kw_score * (30.0 if desired_keywords else 0.0)
-                    + cv_score * (20.0 if cv_keywords else 0.0)
-                )
+                weighted_sum = (tech_score * w_tech) + (kw_score * w_kw) + (cv_score * w_cv)
                 score = weighted_sum / active_weights
             else:
                 score = 100.0
+
+            # Bonus for high coverage / skill affinity on CV
+            if cv_keywords and cv_score >= 75.0 and len(matched_cv) >= 4 and score > 0:
+                score = min(100.0, score + 8.0)
 
             # Bonus for exact title match (only if base score > 0)
             if score > 0:

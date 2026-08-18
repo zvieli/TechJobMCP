@@ -10,6 +10,7 @@ import zipfile
 from job_mcp.core.api_client import (
     JobCache,
     extract_cv_keywords,
+    extract_dynamic_cv_skills,
     filter_jobs,
     resolve_cv_path,
 )
@@ -785,6 +786,96 @@ class TestApiClient(unittest.TestCase):
             self.assertEqual(results[1].match_reasons, [])
         finally:
             os.unlink(cv_path)
+
+    def test_extract_dynamic_cv_skills_section_based(self):
+        """Test extract_dynamic_cv_skills with structured section-based skills text."""
+        section_text = """
+Technical Skills
+•Languages:Python, Rust, Solidity, Noir, JavaScript, TypeScript, C, C#
+•AI & Data Engineering:GraphRAG, LangGraph, LangChain, Azure AI Search, Azure Document Intelligence,
+Hugging Face, Scikit-Learn, NetworkX, Pandas, Ollama
+•Web & Decentralized:React, Node.js, Foundry, Hardhat, Ethers.js, Viem, IPFS, Smart Contract Development
+•DevOps & Cloud:Azure (Container Apps, Cosmos DB, Azure Functions, Blob Storage), Docker, Linux, Git
+"""
+        skills = extract_dynamic_cv_skills(section_text)
+        expected_skills = [
+            "Python", "Rust", "Solidity", "Noir", "JavaScript", "TypeScript", "C", "C#",
+            "GraphRAG", "LangGraph", "LangChain", "Azure AI Search", "Azure Document Intelligence",
+            "Hugging Face", "Scikit-Learn", "NetworkX", "Pandas", "Ollama",
+            "React", "Node.js", "Foundry", "Hardhat", "Ethers.js", "Viem", "IPFS",
+            "Smart Contract Development", "Azure", "Container Apps", "Cosmos DB",
+            "Azure Functions", "Blob Storage", "Docker", "Linux", "Git"
+        ]
+        for skill in expected_skills:
+            self.assertIn(skill, skills, f"Expected skill '{skill}' was not extracted from section.")
+
+    def test_extract_dynamic_cv_skills_bulleted_project_descriptions(self):
+        """Test extract_dynamic_cv_skills with unstructured bulleted project descriptions."""
+        project_text = """
+Projects
+ZK Credit Agent – Privacy-Preserving Credit Oracle
+• Architected a decentralized credit oracle bridging verified Ethereum Mainnet account history to L2s, utilizing Axiom V3 for historical query orchestration and Noir ZK circuits for privacy-preserving computations.
+• Developed Noir circuits to verify Merkle Patricia Trie (MPT) membership proofs, validating storage slots against Mainnet state roots using custom Keccak256 hash constraints.
+• Authored Solidity smart contracts utilizing Foundry for rigorous testing, establishing a self-sustaining prover marketplace.
+• Engineered a TypeScript prover agent integrating Viem and Node.js to monitor on-chain requests, automate UltraHonk proof generation (bb.js).
+• Built a React-based frontend powered by Vite and TailwindCSS, incorporating single-signature session key architectures.
+• Developed a multi-label classification system for telemedicine utilizing ClinicalBERT and Hugging Face.
+• Engineered a synthetic data generation pipeline using Ollama (LLMs) to mitigate class imbalance.
+"""
+        skills = extract_dynamic_cv_skills(project_text)
+        expected_skills = [
+            "ZK", "Noir", "Axiom", "Axiom V3", "MPT", "Merkle Patricia Trie", "Keccak256",
+            "Solidity", "Smart Contracts", "Foundry", "TypeScript", "Viem", "Node.js",
+            "UltraHonk", "bb.js", "React", "Vite", "TailwindCSS", "ClinicalBERT",
+            "Hugging Face", "Ollama", "LLM"
+        ]
+        for skill in expected_skills:
+            self.assertIn(skill, skills, f"Expected skill '{skill}' was not extracted from project text.")
+
+    def test_extract_dynamic_cv_skills_stopword_rejection(self):
+        """Test stopword rejection ensures resume structural words, dates, and noise are filtered out."""
+        noisy_text = """
+Lior Zvieli
+liorzvieli@gmail.com — LinkedIn — GitHub — +972-52-2276810
+Professional Summary
+Computer Science student at HIT with a strong background in engineering high-performance decentralized protocols.
+March 2026 – Present, Summer 2025, Winter, Fall, Spring
+Education
+B.Sc. in Computer Science, Holon Institute of Technology (HIT), Degree, Expected: Summer 2026
+Experience at Client Project MAG Corps IDF, Senior Architect & Developer
+Key Courses: 100, 94, 92, 87, 0.8
+"""
+        skills = extract_dynamic_cv_skills(noisy_text)
+        forbidden_stopwords = [
+            "LinkedIn", "March", "Education", "Summary", "Hit", "Developer", "Architect",
+            "Engineer", "BSc", "Computer", "Science", "Professional", "Student", "Israel",
+            "Summer", "Winter", "Fall", "Spring", "Present", "Experience", "Projects",
+            "Client", "Project", "Systems", "Expected", "Courses", "Legal", "Hebrew",
+            "Mainnet", "Key", "Github", "Email", "Phone", "University", "College", "Degree",
+            "Idf", "Work", "Strong", "Background", "Script", "Level"
+        ]
+        for word in forbidden_stopwords:
+            self.assertNotIn(word, skills, f"Stopword '{word}' should have been filtered out but was present in: {skills}")
+            self.assertNotIn(word.upper(), skills, f"Stopword '{word.upper()}' should have been filtered out.")
+
+    def test_extract_cv_keywords_lior_zvieli_pdf(self):
+        """Test extract_cv_keywords extracts 40+ dynamic skills from real lior_zvieli_cv.pdf."""
+        cv_path = Path("lior_zvieli_cv.pdf")
+        if not cv_path.is_file():
+            self.skipTest("lior_zvieli_cv.pdf not present in workspace")
+
+        keywords = extract_cv_keywords(str(cv_path))
+        self.assertGreaterEqual(len(keywords), 40, f"Expected 40+ skills, got {len(keywords)}: {keywords}")
+
+        expected_skills = [
+            "GraphRAG", "LangGraph", "LangChain", "LlamaIndex", "FastAPI",
+            "AI Search", "Azure", "NetworkX", "Ollama", "React", "Node.js",
+            "Docker", "Linux", "Git", "Python", "TypeScript", "JavaScript",
+            "Solidity", "Noir", "Foundry", "TailwindCSS", "Vite", "ZK",
+            "Scikit-Learn", "Hugging Face", "Elasticsearch", "SQL"
+        ]
+        for s in expected_skills:
+            self.assertIn(s, keywords, f"Expected skill '{s}' not found in extracted CV keywords.")
 
 
 if __name__ == "__main__":
