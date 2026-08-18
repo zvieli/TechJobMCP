@@ -470,6 +470,104 @@ class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(src_hmt.fetch_call_count, 1)
         self.assertEqual(src_comeet.fetch_call_count, 1)
 
+    async def test_all_seven_sources_aggregation_and_deduplication(self) -> None:
+        """Test aggregation and deduplication across all 7 supported sources simultaneously."""
+        job_hmt = Job(job_id="hmt_1", title="Staff Engineer", company="GlobalCorp", tech_stack=["Python"], source="hiremetech", sources=["hiremetech"])
+        job_comeet = Job(job_id="cmt_1", title="Frontend Architect", company="WebCo", tech_stack=["React"], source="comeet", sources=["comeet"])
+        job_aj = Job(job_id="aj_1", title="Data Engineer", company="DataInc", tech_stack=["SQL"], source="alljobs", sources=["alljobs"])
+        # Workday job duplicates HireMeTech job
+        job_wd = Job(job_id="wd_1", title="Staff Engineer", company="GlobalCorp", tech_stack=["AWS", "Docker"], source="workday", sources=["workday"])
+        job_eightfold = Job(job_id="ef_1", title="AI Researcher", company="AILab", tech_stack=["PyTorch"], source="eightfold", sources=["eightfold"])
+        job_direct = Job(job_id="dt_1", title="Cloud Architect", company="Google", tech_stack=["GCP", "Go"], source="direct_tech", sources=["direct_tech"])
+        # LinkedIn job duplicates Comeet job
+        job_li = Job(job_id="li_1", title="Frontend Architect", company="WebCo", tech_stack=["TypeScript", "Next.js"], source="linkedin", sources=["linkedin"])
+
+        reg = SourceRegistry()
+        reg.register(MockSource("hiremetech", jobs=[job_hmt]))
+        reg.register(MockSource("comeet", jobs=[job_comeet]))
+        reg.register(MockSource("alljobs", jobs=[job_aj]))
+        reg.register(MockSource("workday", jobs=[job_wd]))
+        reg.register(MockSource("eightfold", jobs=[job_eightfold]))
+        reg.register(MockSource("direct_tech", jobs=[job_direct]))
+        reg.register(MockSource("linkedin", jobs=[job_li]))
+
+        agg = JobAggregator(registry=reg)
+        jobs = await agg.fetch_all_jobs(force_refresh=True)
+
+        # 7 jobs across 7 sources -> 5 unique jobs after deduplication
+        self.assertEqual(len(jobs), 5)
+
+        # Verify merged Staff Engineer job
+        staff_job = next(j for j in jobs if j.title == "Staff Engineer")
+        self.assertEqual(staff_job.company, "GlobalCorp")
+        self.assertIn("hiremetech", staff_job.sources)
+        self.assertIn("workday", staff_job.sources)
+        self.assertIn("Python", staff_job.tech_stack)
+        self.assertIn("AWS", staff_job.tech_stack)
+
+        # Verify merged Frontend Architect job
+        fe_job = next(j for j in jobs if j.title == "Frontend Architect")
+        self.assertEqual(fe_job.company, "WebCo")
+        self.assertIn("comeet", fe_job.sources)
+        self.assertIn("linkedin", fe_job.sources)
+        self.assertIn("React", fe_job.tech_stack)
+        self.assertIn("TypeScript", fe_job.tech_stack)
+
+    async def test_all_seven_sources_health_checks(self) -> None:
+        """Test health checking across all 7 sources concurrently."""
+        reg = SourceRegistry()
+        reg.register(MockSource("hiremetech", is_healthy=True))
+        reg.register(MockSource("comeet", is_healthy=True))
+        reg.register(MockSource("alljobs", is_healthy=False))
+        reg.register(MockSource("workday", is_healthy=True))
+        reg.register(MockSource("eightfold", is_healthy=False))
+        reg.register(MockSource("direct_tech", is_healthy=True))
+        reg.register(MockSource("linkedin", raise_on_health=RuntimeError("LinkedIn rate limit")))
+
+        agg = JobAggregator(registry=reg)
+        health_map = await agg.check_all_health()
+
+        self.assertEqual(len(health_map), 7)
+        self.assertTrue(health_map["hiremetech"])
+        self.assertTrue(health_map["comeet"])
+        self.assertFalse(health_map["alljobs"])
+        self.assertTrue(health_map["workday"])
+        self.assertFalse(health_map["eightfold"])
+        self.assertTrue(health_map["direct_tech"])
+        self.assertFalse(health_map["linkedin"])
+
+    def test_create_default_registry_all_flags(self) -> None:
+        """Test create_default_registry supports enabling all 7 sources."""
+        # 1. Default (only HireMeTech + Comeet)
+        reg_default = create_default_registry(
+            enable_alljobs=False,
+            enable_workday=False,
+            enable_eightfold=False,
+            enable_direct_tech=False,
+            enable_linkedin=False,
+        )
+        self.assertEqual(len(reg_default), 2)
+        self.assertIn("hiremetech", reg_default)
+        self.assertIn("comeet", reg_default)
+
+        # 2. All 7 enabled
+        reg_all = create_default_registry(
+            enable_alljobs=True,
+            enable_workday=True,
+            enable_eightfold=True,
+            enable_direct_tech=True,
+            enable_linkedin=True,
+        )
+        self.assertEqual(len(reg_all), 7)
+        self.assertIn("hiremetech", reg_all)
+        self.assertIn("comeet", reg_all)
+        self.assertIn("alljobs", reg_all)
+        self.assertIn("workday", reg_all)
+        self.assertIn("eightfold", reg_all)
+        self.assertIn("direct_tech", reg_all)
+        self.assertIn("linkedin", reg_all)
+
 
 if __name__ == "__main__":
     unittest.main()
+

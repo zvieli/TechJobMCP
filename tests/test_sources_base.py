@@ -460,4 +460,34 @@ class TestCreateDefaultRegistry:
         assert hmt_src is not None
         assert hmt_src.session_manager is mock_sm
 
+    @pytest.mark.parametrize("flag,source_id", [
+        ("ENABLE_WORKDAY", "workday"),
+        ("ENABLE_EIGHTFOLD", "eightfold"),
+        ("ENABLE_DIRECT_TECH", "direct_tech"),
+        ("ENABLE_LINKEDIN", "linkedin"),
+    ])
+    def test_registration_with_all_enterprise_flags(
+        self, monkeypatch: pytest.MonkeyPatch, flag: str, source_id: str
+    ) -> None:
+        from job_mcp.sources import create_default_registry
+
+        monkeypatch.setenv(flag, "true")
+        reg = create_default_registry()
+        assert source_id in reg
+
+    def test_programmatic_flags(self) -> None:
+        from job_mcp.sources import create_default_registry
+
+        reg = create_default_registry(
+            enable_alljobs=True,
+            enable_workday=True,
+            enable_eightfold=True,
+            enable_direct_tech=True,
+            enable_linkedin=True,
+        )
+        assert len(reg) == 7
+        for sid in ("hiremetech", "comeet", "alljobs", "workday", "eightfold", "direct_tech", "linkedin"):
+            assert sid in reg
+
+
 

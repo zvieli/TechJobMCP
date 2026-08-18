@@ -155,30 +155,49 @@ class SourceRegistry:
         return len(self._sources)
 
 
-def create_default_registry(session_manager: Optional[Any] = None) -> SourceRegistry:
-    """Create and return a SourceRegistry pre-populated with standard job sources."""
+def create_default_registry(
+    session_manager: Optional[Any] = None,
+    enable_alljobs: Optional[bool] = None,
+    enable_workday: Optional[bool] = None,
+    enable_eightfold: Optional[bool] = None,
+    enable_direct_tech: Optional[bool] = None,
+    enable_linkedin: Optional[bool] = None,
+) -> SourceRegistry:
+    """Create and return a SourceRegistry pre-populated with standard job sources.
+
+    Args:
+        session_manager: Optional Playwright SessionManager for authenticated sources.
+        enable_alljobs: Explicitly enable/disable AllJobsSource. Defaults to ENABLE_ALLJOBS env var.
+        enable_workday: Explicitly enable/disable WorkdaySource. Defaults to ENABLE_WORKDAY env var.
+        enable_eightfold: Explicitly enable/disable EightfoldAISource. Defaults to ENABLE_EIGHTFOLD env var.
+        enable_direct_tech: Explicitly enable/disable DirectTechSource. Defaults to ENABLE_DIRECT_TECH env var.
+        enable_linkedin: Explicitly enable/disable LinkedInSource. Defaults to ENABLE_LINKEDIN env var.
+
+    Returns:
+        SourceRegistry: Populated registry instance.
+    """
     reg = SourceRegistry()
     reg.register(HireMeTechSource(session_manager=session_manager))
     reg.register(ComeetSource())
 
-    enable_alljobs = os.getenv("ENABLE_ALLJOBS", "false").strip().lower() in ("true", "1", "yes")
-    if enable_alljobs:
+    def _is_enabled(flag_name: str, explicit: Optional[bool]) -> bool:
+        if explicit is not None:
+            return bool(explicit)
+        return os.getenv(flag_name, "false").strip().lower() in ("true", "1", "yes")
+
+    if _is_enabled("ENABLE_ALLJOBS", enable_alljobs):
         reg.register(AllJobsSource())
 
-    enable_workday = os.getenv("ENABLE_WORKDAY", "false").strip().lower() in ("true", "1", "yes")
-    if enable_workday:
+    if _is_enabled("ENABLE_WORKDAY", enable_workday):
         reg.register(WorkdaySource())
 
-    enable_eightfold = os.getenv("ENABLE_EIGHTFOLD", "false").strip().lower() in ("true", "1", "yes")
-    if enable_eightfold:
+    if _is_enabled("ENABLE_EIGHTFOLD", enable_eightfold):
         reg.register(EightfoldAISource())
 
-    enable_direct_tech = os.getenv("ENABLE_DIRECT_TECH", "false").strip().lower() in ("true", "1", "yes")
-    if enable_direct_tech:
+    if _is_enabled("ENABLE_DIRECT_TECH", enable_direct_tech):
         reg.register(DirectTechSource())
 
-    enable_linkedin = os.getenv("ENABLE_LINKEDIN", "false").strip().lower() in ("true", "1", "yes")
-    if enable_linkedin:
+    if _is_enabled("ENABLE_LINKEDIN", enable_linkedin):
         reg.register(LinkedInSource(session_manager=session_manager))
     return reg
 

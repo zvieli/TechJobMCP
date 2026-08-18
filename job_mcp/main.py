@@ -38,6 +38,9 @@ from job_mcp.models.schemas import (
     ToolResponse,
     WorkMode,
 )
+from job_mcp.notifiers.base import BaseNotifier
+from job_mcp.notifiers.telegram import TelegramNotifier
+from job_mcp.notifiers.tracker import JobTracker
 from job_mcp.sources import (
     BaseJobSource,
     JobAggregator,
@@ -45,6 +48,10 @@ from job_mcp.sources import (
     create_default_registry,
 )
 from job_mcp.sources.hiremetech import HireMeTechSource
+from job_mcp.sources.linkedin import (
+    LinkedInSource,
+    search_linkedin_jobs_api,
+)
 from job_mcp.utils.logger import generate_trace_id, get_logger
 
 logger = get_logger(__name__)
@@ -68,7 +75,7 @@ def _response(
 
 # Server system instructions
 SERVER_INSTRUCTIONS = """
-HireMeTech MCP Server enables intelligent job matching, filtering, bookmarking, and automated job applications across multiple sources (HireMeTech, Comeet, AllJobs).
+HireMeTech MCP Server enables intelligent job matching, filtering, bookmarking, notification alerts, and automated job applications across multiple sources (HireMeTech, Comeet, AllJobs, Workday, Eightfold, DirectTech, LinkedIn).
 
 ## Operation Modes
 
@@ -79,12 +86,12 @@ The server supports two operation modes, controlled via `set_operation_mode`:
 - Standard behavior matching typical MCP tool usage.
 
 ### Autonomous Mode
-- Execute read-only and safe-action tools (`list_job_sources`, `get_job_matches`, `filter_jobs_by_preferences`, `bookmark_job`, `delete_job`, `calibrate_selectors`) WITHOUT asking the user for per-tool confirmation.
-- Chain operations freely: list sources -> scan -> filter -> bookmark matching jobs -> report results.
+- Execute read-only and safe-action tools (`list_job_sources`, `get_job_matches`, `filter_jobs_by_preferences`, `bookmark_job`, `delete_job`, `calibrate_selectors`, `search_linkedin_jobs`, `get_linkedin_job_details`, `notify_new_jobs`, `test_notifier`) WITHOUT asking the user for per-tool confirmation.
+- Chain operations freely: list sources -> scan -> filter -> bookmark matching jobs -> notify alerts -> report results.
 - The ONLY action that ALWAYS requires explicit user confirmation is `confirm_auto_apply` — actual job application submission. This is a safety-critical action.
 
 ## Available Tools
-1. `list_job_sources`: List all registered job sources (HireMeTech, Comeet, AllJobs), their capabilities, and current health status.
+1. `list_job_sources`: List all registered job sources, their capabilities, and current health status.
 2. `get_job_matches`: Fetch matched job listings across all or specified job sources. Uses caching for high performance.
 3. `filter_jobs_by_preferences`: Filter cached job listings based on tech stack, work mode (remote/hybrid/onsite), location, minimum salary, keywords, exclusion criteria, or CV keyword extraction.
 4. `bookmark_job`: Save/favorite a specific job listing by its ID.
@@ -93,11 +100,15 @@ The server supports two operation modes, controlled via `set_operation_mode`:
 7. `confirm_auto_apply`: Step 2 of safe auto-application. Submits the staged job application after user confirmation. ALWAYS requires explicit user confirmation, even in autonomous mode.
 8. `calibrate_selectors`: Test, discover, and calibrate DOM selectors against the live HireMeTech page with self-healing heuristics.
 9. `set_operation_mode`: Switch between 'supervised' and 'autonomous' operation modes.
+10. `search_linkedin_jobs`: Search LinkedIn guest jobs directly with keywords, location, workplace type, and filters.
+11. `get_linkedin_job_details`: Retrieve full detailed job description, criteria, and direct apply link for a LinkedIn job.
+12. `notify_new_jobs`: Aggregate jobs across sources, filter unseen postings via JobTracker, and dispatch alerts to Telegram or other channels.
+13. `test_notifier`: Test connectivity, health, and message delivery for notification channels.
 
 ## Safety Rules
 - Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2). This rule applies in ALL modes.
 - When a user provides a CV path, use `filter_jobs_by_preferences(cv_path=...)` to automatically parse and score matching jobs against the CV.
-- In autonomous mode, proceed with read/filter/bookmark operations without waiting for per-tool confirmation. Report a summary of all actions taken at the end.
+- In autonomous mode, proceed with read/filter/bookmark/notify operations without waiting for per-tool confirmation. Report a summary of all actions taken at the end.
 """
 
 # Global singletons for direct tool execution or when context is omitted in tests
@@ -105,6 +116,8 @@ _default_session: Optional[SessionManager] = None
 _default_cache: Optional[JobCache] = None
 _default_registry: Optional[SourceRegistry] = None
 _default_aggregator: Optional[JobAggregator] = None
+_default_tracker: Optional[JobTracker] = None
+_default_notifier: Optional[BaseNotifier] = None
 
 # Staged pending applications store: job_id -> application preview dict
 _pending_applications: dict[str, dict[str, Any]] = {}
@@ -153,18 +166,22 @@ async def _warm_cache(
 @asynccontextmanager
 async def browser_lifespan(server: FastMCP):
     """Lifespan context manager to manage browser session and job cache across server lifecycle."""
-    global _default_session, _default_cache, _default_registry, _default_aggregator
+    global _default_session, _default_cache, _default_registry, _default_aggregator, _default_tracker, _default_notifier
     logger.info("Starting HireMeTech FastMCP lifespan...")
 
     session_mgr = SessionManager()
     job_cache = JobCache()
     registry = create_default_registry(session_manager=session_mgr)
     aggregator = JobAggregator(registry=registry, cache=job_cache)
+    tracker = JobTracker(storage_path=os.getenv("JOB_TRACKER_PATH"))
+    telegram_notifier = TelegramNotifier()
 
     _default_session = session_mgr
     _default_cache = job_cache
     _default_registry = registry
     _default_aggregator = aggregator
+    _default_tracker = tracker
+    _default_notifier = telegram_notifier
 
     warmup_task = asyncio.create_task(_warm_cache(session_mgr, job_cache, aggregator=aggregator))
 
@@ -174,6 +191,8 @@ async def browser_lifespan(server: FastMCP):
             "cache": job_cache,
             "registry": registry,
             "aggregator": aggregator,
+            "tracker": tracker,
+            "notifier": telegram_notifier,
         }
     finally:
         logger.info("Shutting down HireMeTech FastMCP lifespan...")
@@ -388,6 +407,54 @@ def _get_aggregator(ctx: Optional[Context] = None) -> JobAggregator:
         _default_aggregator.registry = registry
 
     return _default_aggregator
+
+
+def _get_tracker(ctx: Optional[Context] = None) -> JobTracker:
+    """Retrieve JobTracker instance from Context lifespan state or global default."""
+    global _default_tracker
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict) and "tracker" in lifespan_ctx:
+            return lifespan_ctx["tracker"]
+    if _default_tracker is None:
+        tracker_path = os.getenv("JOB_TRACKER_PATH")
+        _default_tracker = JobTracker(storage_path=tracker_path)
+    return _default_tracker
+
+
+def _get_notifier(channel: str = "telegram", ctx: Optional[Context] = None) -> Optional[BaseNotifier]:
+    """Retrieve BaseNotifier instance for specified channel from Context or default."""
+    global _default_notifier
+    channel_lower = channel.strip().lower()
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict):
+            if f"{channel_lower}_notifier" in lifespan_ctx:
+                return lifespan_ctx[f"{channel_lower}_notifier"]
+            if "notifier" in lifespan_ctx and channel_lower == "telegram":
+                return lifespan_ctx["notifier"]
+
+    if channel_lower == "telegram":
+        if _default_notifier is None or not isinstance(_default_notifier, TelegramNotifier):
+            _default_notifier = TelegramNotifier()
+        return _default_notifier
+    return None
+
+
+def _get_linkedin_source(ctx: Optional[Context] = None) -> LinkedInSource:
+    """Retrieve LinkedInSource instance from registry or create a standalone instance."""
+    reg = _get_registry(ctx)
+    src = reg.get("linkedin")
+    if isinstance(src, LinkedInSource):
+        return src
+
+    session_mgr = None
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict) and "session" in lifespan_ctx:
+            session_mgr = lifespan_ctx["session"]
+
+    return LinkedInSource(session_manager=session_mgr)
 
 
 async def _ensure_session(ctx: Optional[Context] = None) -> tuple[SessionManager, bool]:
@@ -711,8 +778,8 @@ async def bookmark_job(
             source=source,
         )
 
-        # Handle external ATS job sources (Comeet, AllJobs, etc.)
-        if job_id.startswith(("comeet_", "alljobs_")):
+        # Handle external ATS job sources (Comeet, AllJobs, Workday, Eightfold, DirectTech, LinkedIn, etc.)
+        if job_id.startswith(("comeet_", "alljobs_", "workday_", "eightfold_", "direct_", "linkedin_")):
             if cached_job:
                 cached_job.is_bookmarked = True
             return _response(
@@ -780,8 +847,8 @@ async def delete_job(
         )
         cache.dismiss(job_id)
 
-        # Handle external ATS job sources (Comeet, AllJobs, etc.)
-        if job_id.startswith(("comeet_", "alljobs_")):
+        # Handle external ATS job sources (Comeet, AllJobs, Workday, Eightfold, DirectTech, LinkedIn, etc.)
+        if job_id.startswith(("comeet_", "alljobs_", "workday_", "eightfold_", "direct_", "linkedin_")):
             return _response(
                 success=True,
                 message=f"Successfully dismissed external ATS job '{job_id}' from view and cache.",
@@ -987,4 +1054,331 @@ async def calibrate_selectors(
             message=f"Selector calibration failed: {exc}",
             error_code="CALIBRATION_ERROR",
         )
+
+
+@mcp.tool()
+async def search_linkedin_jobs(
+    keywords: str = "",
+    location: str = "Israel",
+    start: int = 0,
+    work_mode: Optional[str] = None,
+    f_WT: Optional[str] = None,
+    f_TPR: Optional[str] = None,
+    f_AL: Optional[bool] = None,
+    f_E: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    limit: int = 25,
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Search LinkedIn jobs using the high-speed guest seeMoreJobPostings endpoint.
+
+    Args:
+        keywords: Search query / keywords (e.g. 'Software Engineer', 'Python').
+        location: Target geographic location (default: 'Israel').
+        start: Pagination start offset index.
+        work_mode: Optional work mode filter: 'onsite', 'remote', or 'hybrid'.
+        f_WT: Raw LinkedIn workplace type parameter ('1'=onsite, '2'=remote, '3'=hybrid).
+        f_TPR: Time posted range (e.g. 'r86400' for past 24h, 'r604800' for past week).
+        f_AL: Filter for Easy Apply jobs.
+        f_E: Experience level filter (e.g. '1'=internship, '2'=entry, '3'=associate, '4'=mid-senior).
+        sort_by: Sorting parameter ('R'=relevant, 'DD'=date posted).
+        limit: Maximum number of jobs to return (default: 25).
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse with list of standardized LinkedIn job listings.
+    """
+    try:
+        parsed_work_mode: Optional[WorkMode] = None
+        if work_mode:
+            try:
+                parsed_work_mode = WorkMode(work_mode.strip().lower())
+            except ValueError:
+                logger.debug("Unknown work mode for LinkedIn search: '%s'", work_mode)
+
+        jobs = await search_linkedin_jobs_api(
+            keywords=keywords,
+            location=location,
+            start=start,
+            work_mode=parsed_work_mode,
+            f_WT=f_WT,
+            f_TPR=f_TPR,
+            f_AL=f_AL,
+            f_E=f_E,
+            sort_by=sort_by,
+        )
+
+        if limit and len(jobs) > limit:
+            jobs = jobs[:limit]
+
+        cache = _get_cache(ctx)
+        if jobs:
+            cache.update(jobs)
+
+        return _response(
+            success=True,
+            message=f"Successfully fetched {len(jobs)} LinkedIn job matches.",
+            data=[j.model_dump() for j in jobs],
+        )
+    except Exception as exc:
+        logger.exception("Error in search_linkedin_jobs: %s", exc)
+        return _response(
+            success=False,
+            message=f"Failed to search LinkedIn jobs: {exc}",
+            error_code="LINKEDIN_SEARCH_ERROR",
+        )
+
+
+@mcp.tool()
+async def get_linkedin_job_details(
+    job_id: str,
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Retrieve full job details for a specific LinkedIn job posting.
+
+    Args:
+        job_id: LinkedIn job ID (e.g. 'linkedin_4152839402' or '4152839402').
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse with detailed fields including full description, criteria, apply URL, etc.
+    """
+    try:
+        linkedin_source = _get_linkedin_source(ctx)
+        details = await linkedin_source.fetch_job_details(job_id)
+
+        if not details:
+            return _response(
+                success=False,
+                message=f"Could not retrieve details for LinkedIn job '{job_id}'.",
+                error_code="JOB_NOT_FOUND",
+            )
+
+        serializable_details = dict(details)
+        if "work_mode" in serializable_details and hasattr(serializable_details["work_mode"], "value"):
+            serializable_details["work_mode"] = serializable_details["work_mode"].value
+
+        return _response(
+            success=True,
+            message=f"Successfully retrieved details for LinkedIn job '{job_id}'.",
+            data=serializable_details,
+        )
+    except Exception as exc:
+        logger.exception("Error in get_linkedin_job_details for '%s': %s", job_id, exc)
+        return _response(
+            success=False,
+            message=f"Failed to get LinkedIn job details: {exc}",
+            error_code="LINKEDIN_DETAILS_ERROR",
+        )
+
+
+@mcp.tool()
+async def notify_new_jobs(
+    channel: str = "telegram",
+    sources: Optional[list[str]] = None,
+    min_score: Optional[float] = None,
+    tech_stack: Optional[list[str]] = None,
+    work_mode: Optional[str] = None,
+    location: Optional[str] = None,
+    keywords: Optional[list[str]] = None,
+    force_refresh: bool = False,
+    auto_mark_seen: bool = True,
+    limit: Optional[int] = None,
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Scan aggregated jobs, filter unseen postings via JobTracker, and dispatch alerts.
+
+    Args:
+        channel: Notification channel (default: 'telegram').
+        sources: Optional list of source IDs to fetch from (e.g. ['linkedin', 'comeet', 'workday']).
+        min_score: Minimum match score (0-100) threshold for alerting.
+        tech_stack: Preferred tech stack list for ranking/filtering.
+        work_mode: Preferred work mode: 'remote', 'hybrid', or 'onsite'.
+        location: Geographic location filter.
+        keywords: Additional keywords to require or match.
+        force_refresh: Force live fetch from sources bypassing cache.
+        auto_mark_seen: Automatically record notified jobs in tracker to avoid duplicate alerts.
+        limit: Optional maximum number of unseen jobs to notify in one batch.
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse with notification dispatch summary and notified jobs.
+    """
+    try:
+        notifier = _get_notifier(channel=channel, ctx=ctx)
+        if notifier is None:
+            return _response(
+                success=False,
+                message=f"Unsupported notification channel '{channel}'. Supported: 'telegram'.",
+                error_code="UNSUPPORTED_CHANNEL",
+            )
+
+        if not getattr(notifier, "is_configured", True):
+            return _response(
+                success=False,
+                message="Telegram notifier is not configured. Please set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.",
+                error_code="NOTIFIER_NOT_CONFIGURED",
+            )
+
+        parsed_work_mode: Optional[WorkMode] = None
+        if work_mode:
+            try:
+                parsed_work_mode = WorkMode(work_mode.strip().lower())
+            except ValueError:
+                logger.debug("Unknown work mode: '%s'", work_mode)
+
+        prefs: Optional[JobPreferences] = None
+        if tech_stack or parsed_work_mode or location or keywords or min_score:
+            prefs = JobPreferences(
+                tech_stack=list(tech_stack or []),
+                work_mode=parsed_work_mode,
+                location=location,
+                keywords=list(keywords or []),
+            )
+
+        aggregator = _get_aggregator(ctx)
+        jobs = await aggregator.fetch_all_jobs(
+            sources=sources,
+            preferences=prefs,
+            force_refresh=force_refresh,
+        )
+
+        if min_score is not None:
+            jobs = [j for j in jobs if (j.match_score or 0) >= min_score]
+
+        tracker = _get_tracker(ctx)
+        unseen_jobs = tracker.filter_unseen(jobs, auto_mark=False)
+
+        if limit and len(unseen_jobs) > limit:
+            unseen_jobs = unseen_jobs[:limit]
+
+        if not unseen_jobs:
+            return _response(
+                success=True,
+                message="No new unseen jobs to notify.",
+                data={
+                    "channel": channel,
+                    "notified_count": 0,
+                    "total_matched": len(jobs),
+                    "jobs": [],
+                },
+            )
+
+        alert_sent = await notifier.send_alert(
+            unseen_jobs,
+            title=f"🎯 New Job Matches ({len(unseen_jobs)})",
+        )
+
+        if not alert_sent:
+            return _response(
+                success=False,
+                message=f"Failed to dispatch alert for {len(unseen_jobs)} jobs via {channel}.",
+                error_code="NOTIFICATION_FAILED",
+            )
+
+        if auto_mark_seen:
+            tracker.mark_many_seen(unseen_jobs)
+
+        return _response(
+            success=True,
+            message=f"Successfully dispatched alert for {len(unseen_jobs)} new jobs via {channel}.",
+            data={
+                "channel": channel,
+                "notified_count": len(unseen_jobs),
+                "total_matched": len(jobs),
+                "jobs": [j.model_dump() for j in unseen_jobs],
+            },
+        )
+
+    except Exception as exc:
+        logger.exception("Error in notify_new_jobs: %s", exc)
+        return _response(
+            success=False,
+            message=f"Notification dispatch failed: {exc}",
+            error_code="NOTIFY_ERROR",
+        )
+
+
+@mcp.tool()
+async def test_notifier(
+    channel: str = "telegram",
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Verify notifier connectivity, health check, and dispatch a test alert message.
+
+    Args:
+        channel: Notification channel to test (default: 'telegram').
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse with health status and test message delivery result.
+    """
+    try:
+        notifier = _get_notifier(channel=channel, ctx=ctx)
+        if notifier is None:
+            return _response(
+                success=False,
+                message=f"Unsupported notification channel '{channel}'. Supported: 'telegram'.",
+                error_code="UNSUPPORTED_CHANNEL",
+            )
+
+        if not getattr(notifier, "is_configured", True):
+            return _response(
+                success=False,
+                message="Telegram notifier is not configured. Please set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.",
+                error_code="NOTIFIER_NOT_CONFIGURED",
+            )
+
+        is_healthy = await notifier.check_health()
+        if not is_healthy:
+            return _response(
+                success=False,
+                message=f"Health check failed for {channel} notifier (invalid credentials or unreachable endpoint).",
+                error_code="HEALTH_CHECK_FAILED",
+            )
+
+        test_job = Job(
+            job_id="test_notifier_job",
+            title="Senior Test Engineer",
+            company="HireMeTech Verification",
+            location="Remote",
+            work_mode=WorkMode.REMOTE,
+            tech_stack=["Python", "FastMCP", "Telegram"],
+            description="Test alert verifying notification delivery pipeline.",
+            source="system",
+            sources=["system"],
+            url="https://github.com",
+            apply_url="https://github.com",
+        )
+
+        sent = await notifier.send_alert(
+            [test_job],
+            title="🧪 HireMeTech MCP Notifier Test",
+        )
+
+        if not sent:
+            return _response(
+                success=False,
+                message=f"Health check passed but failed to send test alert via {channel}.",
+                error_code="DELIVERY_FAILED",
+            )
+
+        return _response(
+            success=True,
+            message=f"Test notification successfully verified and dispatched via {channel}.",
+            data={
+                "channel": channel,
+                "healthy": True,
+                "delivered": True,
+            },
+        )
+
+    except Exception as exc:
+        logger.exception("Error in test_notifier: %s", exc)
+        return _response(
+            success=False,
+            message=f"Failed to test notifier: {exc}",
+            error_code="TEST_NOTIFIER_ERROR",
+        )
+
 
