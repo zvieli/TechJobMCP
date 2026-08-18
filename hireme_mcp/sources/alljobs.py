@@ -302,7 +302,7 @@ class AllJobsSource(BaseJobSource):
             return dict(self._categories_cache) if self._categories_cache else dict(DEFAULT_TECH_CATEGORIES)
         finally:
             if should_close_client:
-                await client.aclose()
+                await active_client.aclose()
 
     async def check_health(self) -> bool:
         """Check the operational health of AllJobs mobile endpoint.

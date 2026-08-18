@@ -181,6 +181,23 @@ class TestAllJobsCategories:
         assert isinstance(categories, dict)
         assert "software" in categories or "Software" in str(categories)
 
+    @pytest.mark.asyncio
+    async def test_fetch_categories_standalone_without_client_closes_properly(self) -> None:
+        """Verify fetch_categories on uninitialized source creates and properly closes active_client."""
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_instance = AsyncMock()
+            mock_client_cls.return_value = mock_instance
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = SAMPLE_CATEGORIES_PAYLOAD
+            mock_instance.get.return_value = mock_resp
+
+            source = AllJobsSource()
+            categories = await source.fetch_categories()
+
+            assert len(categories) >= 5
+            mock_instance.aclose.assert_awaited_once()
+
 
 class TestAllJobsFetchJobs:
     """Tests for job fetching, filtering, and pagination."""
