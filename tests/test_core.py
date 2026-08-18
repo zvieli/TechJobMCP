@@ -9,6 +9,7 @@ import zipfile
 
 from job_mcp.core.api_client import (
     JobCache,
+    extract_candidate_profile,
     extract_cv_keywords,
     extract_dynamic_cv_skills,
     filter_jobs,
@@ -32,7 +33,7 @@ from job_mcp.core.browser import (
     preview_application,
     execute_application,
 )
-from job_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences, WorkMode
 
 
 class TestAuth(unittest.IsolatedAsyncioTestCase):
@@ -876,6 +877,257 @@ Key Courses: 100, 94, 92, 87, 0.8
         ]
         for s in expected_skills:
             self.assertIn(s, keywords, f"Expected skill '{s}' not found in extracted CV keywords.")
+
+
+class TestCandidateProfile(unittest.TestCase):
+    """Tests for CandidateProfile schema and extract_candidate_profile dynamic analysis."""
+
+    def test_candidate_profile_schema_defaults_and_serialization(self):
+        """Test CandidateProfile schema defaults and Pydantic serialization."""
+        profile = CandidateProfile()
+        self.assertEqual(profile.skills, [])
+        self.assertEqual(profile.top_skills, [])
+        self.assertIsNone(profile.seniority_level)
+        self.assertEqual(profile.target_roles, [])
+        self.assertEqual(profile.search_queries, [])
+        self.assertEqual(profile.suggested_exclusions, [])
+
+        custom = CandidateProfile(
+            skills=["Python", "FastAPI", "Docker"],
+            top_skills=["Python", "FastAPI"],
+            seniority_level="Junior",
+            target_roles=["Python Developer", "Backend Engineer"],
+            search_queries=["Python", "FastAPI"],
+            suggested_exclusions=["Senior", "Lead", "Principal", "10+ years"],
+        )
+        dumped = custom.model_dump()
+        self.assertEqual(dumped["seniority_level"], "Junior")
+        self.assertEqual(dumped["top_skills"], ["Python", "FastAPI"])
+        self.assertEqual(dumped["target_roles"], ["Python Developer", "Backend Engineer"])
+        self.assertEqual(dumped["suggested_exclusions"], ["Senior", "Lead", "Principal", "10+ years"])
+
+    def test_extract_candidate_profile_empty_or_none(self):
+        """Test extract_candidate_profile with empty string or nonexistent path."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                with patch.dict(os.environ, {}, clear=True):
+                    prof_none = extract_candidate_profile(None)
+                    self.assertIsInstance(prof_none, CandidateProfile)
+                    self.assertEqual(prof_none.skills, [])
+
+                    prof_empty = extract_candidate_profile("")
+                    self.assertIsInstance(prof_empty, CandidateProfile)
+                    self.assertEqual(prof_empty.skills, [])
+
+                    prof_nonexistent = extract_candidate_profile("nonexistent_file_path_12345.pdf")
+                    self.assertIsInstance(prof_nonexistent, CandidateProfile)
+                    self.assertEqual(prof_nonexistent.skills, [])
+            finally:
+                os.chdir(orig_cwd)
+
+    def test_extract_candidate_profile_junior_ai_developer(self):
+        """Test profile extraction for a Junior AI & Python developer CV."""
+        cv_text = """
+        John Doe
+        johndoe@example.com | Tel Aviv, Israel
+        
+        Summary:
+        Junior AI & Python Developer and recent Computer Science Graduate with strong foundation in machine learning, LLMs, and backend APIs.
+        
+        Technical Skills:
+        • Languages & Frameworks: Python, FastAPI, PyTorch, LangChain, Scikit-Learn, Pandas, NumPy, SQL
+        • Tools & Infrastructure: Docker, Git, Linux, PostgreSQL, REST
+        
+        Experience:
+        Junior Software Engineer | TechCo (2025 - Present)
+        • Developed LLM pipelines and RAG workflows using LangChain, Python, and FastAPI.
+        • Integrated PyTorch models into containerized microservices using Docker.
+        • Created automated data pipelines with Pandas, NumPy, and PostgreSQL.
+        """
+        profile = extract_candidate_profile(cv_text)
+        self.assertIsInstance(profile, CandidateProfile)
+        self.assertEqual(profile.seniority_level, "Junior")
+
+        # Skills verification
+        for expected in ["Python", "FastAPI", "PyTorch", "LangChain", "Docker", "PostgreSQL", "Pandas"]:
+            self.assertIn(expected, profile.skills)
+
+        # Top skills verification (top 5-8 primary skills)
+        self.assertGreaterEqual(len(profile.top_skills), 5)
+        self.assertLessEqual(len(profile.top_skills), 8)
+        self.assertIn("Python", profile.top_skills)
+
+        # Target roles
+        self.assertTrue(any("AI" in r or "Machine Learning" in r for r in profile.target_roles), f"Target roles: {profile.target_roles}")
+        self.assertTrue(any("Python" in r or "Backend" in r for r in profile.target_roles), f"Target roles: {profile.target_roles}")
+
+        # Search queries
+        self.assertGreaterEqual(len(profile.search_queries), 3)
+        self.assertTrue(any("Python" in q for q in profile.search_queries))
+
+        # Suggested exclusions for Junior candidate
+        self.assertIn("Senior", profile.suggested_exclusions)
+        self.assertIn("Lead", profile.suggested_exclusions)
+        self.assertIn("Principal", profile.suggested_exclusions)
+        self.assertTrue(any("year" in e for e in profile.suggested_exclusions))
+
+    def test_extract_candidate_profile_senior_devops_architect(self):
+        """Test profile extraction for a Senior DevOps / Cloud Architect CV."""
+        cv_text = """
+        Jane Smith
+        jane@example.com | Remote
+        
+        Professional Summary:
+        Senior Cloud & DevOps Architect with 8+ years of experience designing and managing enterprise Kubernetes clusters, multi-region AWS infrastructure, and scalable CI/CD automation pipelines.
+        
+        Skills:
+        AWS, Kubernetes, Docker, Terraform, CI/CD, Python, Ansible, Prometheus, Grafana, Linux, Helm
+        
+        Work Experience:
+        Senior DevOps Architect | CloudCorp (2020 - Present)
+        • Architected multi-region Kubernetes clusters on AWS using Terraform.
+        • Automated CI/CD deployment pipelines using GitHub Actions and Helm.
+        • Monitored microservices infrastructure with Prometheus and Grafana.
+        """
+        profile = extract_candidate_profile(cv_text)
+        self.assertIsInstance(profile, CandidateProfile)
+        self.assertEqual(profile.seniority_level, "Senior")
+
+        for expected in ["AWS", "Kubernetes", "Docker", "Terraform", "CI/CD", "Python", "Prometheus"]:
+            self.assertIn(expected, profile.skills)
+
+        self.assertIn("Kubernetes", profile.top_skills)
+        self.assertIn("AWS", profile.top_skills)
+
+        self.assertTrue(any("DevOps" in r or "Cloud" in r for r in profile.target_roles), f"Target roles: {profile.target_roles}")
+
+        # Senior exclusions should filter junior/intern roles
+        self.assertIn("Student", profile.suggested_exclusions)
+        self.assertIn("Intern", profile.suggested_exclusions)
+        self.assertIn("Junior", profile.suggested_exclusions)
+        self.assertNotIn("Senior", profile.suggested_exclusions)
+        self.assertNotIn("Lead", profile.suggested_exclusions)
+
+    def test_extract_candidate_profile_student_intern(self):
+        """Test profile extraction for a Student seeking Internship."""
+        cv_text = """
+        Alex Cohen
+        alex@university.edu
+        
+        Education:
+        B.Sc. in Computer Science, University of Technology, Expected: 2027
+        
+        Summary:
+        2nd year Computer Science Student looking for a Summer Internship in software development.
+        
+        Skills:
+        Python, C++, Java, Git, Linux, SQL, Data Structures, Algorithms
+        
+        Academic Projects:
+        • Built a multithreaded web server in C++ using Operating Systems primitives.
+        • Created a relational database CLI in Python and SQL.
+        """
+        profile = extract_candidate_profile(cv_text)
+        self.assertIsInstance(profile, CandidateProfile)
+        self.assertIn(profile.seniority_level, ("Student", "Intern"))
+
+        self.assertIn("Python", profile.skills)
+        self.assertIn("C++", profile.skills)
+
+        self.assertIn("Senior", profile.suggested_exclusions)
+        self.assertIn("Lead", profile.suggested_exclusions)
+        self.assertIn("Principal", profile.suggested_exclusions)
+
+    def test_extract_candidate_profile_mid_frontend_engineer(self):
+        """Test profile extraction for a Mid-level Frontend Engineer."""
+        cv_text = """
+        Dana Levi
+        dana@example.com
+        
+        Summary:
+        Frontend Engineer with 3 years of experience building high-performance web applications using React, Next.js, and TypeScript.
+        
+        Technical Skills:
+        React, Next.js, TypeScript, TailwindCSS, Redux, Vite, HTML, CSS, JavaScript, REST, GraphQL
+        
+        Experience:
+        Software Engineer | WebStudio (2023 - Present)
+        • Developed responsive UI components in React and TypeScript with TailwindCSS.
+        • Optimized SSR and SSG performance using Next.js.
+        """
+        profile = extract_candidate_profile(cv_text)
+        self.assertIsInstance(profile, CandidateProfile)
+        self.assertEqual(profile.seniority_level, "Mid")
+
+        self.assertIn("React", profile.skills)
+        self.assertIn("Next.js", profile.skills)
+        self.assertIn("TypeScript", profile.skills)
+
+        self.assertTrue(any("Frontend" in r for r in profile.target_roles), f"Target roles: {profile.target_roles}")
+
+        # Mid exclusions should exclude director/principal/10+ years, but NOT Junior/Senior
+        self.assertIn("Principal", profile.suggested_exclusions)
+        self.assertIn("Director", profile.suggested_exclusions)
+        self.assertNotIn("Senior", profile.suggested_exclusions)
+        self.assertNotIn("Junior", profile.suggested_exclusions)
+
+    def test_extract_candidate_profile_web3_engineer(self):
+        """Test profile extraction for a Web3 / Smart Contracts engineer."""
+        cv_text = """
+        Lior Dev
+        lior@crypto.io
+        
+        Summary:
+        Smart Contract & Web3 Engineer specializing in Solidity, ZK proofs (Noir), Foundry, and decentralized protocols.
+        
+        Skills:
+        Solidity, Noir, ZK, Foundry, Viem, Hardhat, Ethers.js, Smart Contracts, EVM, TypeScript, React
+        """
+        profile = extract_candidate_profile(cv_text)
+        self.assertIsInstance(profile, CandidateProfile)
+        self.assertIn("Solidity", profile.skills)
+        self.assertIn("Noir", profile.skills)
+        self.assertIn("ZK", profile.skills)
+
+        self.assertTrue(any("Web3" in r or "Smart Contract" in r or "Blockchain" in r for r in profile.target_roles), f"Target roles: {profile.target_roles}")
+
+    def test_extract_candidate_profile_from_file_path_txt_and_docx(self):
+        """Test extract_candidate_profile reading directly from .txt and .docx file paths."""
+        txt_content = "Senior Python Developer with expertise in FastAPI, Docker, and PostgreSQL."
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(txt_content)
+            txt_path = f.name
+
+        try:
+            # String path
+            prof_str = extract_candidate_profile(txt_path)
+            self.assertIn("Python", prof_str.skills)
+            self.assertEqual(prof_str.seniority_level, "Senior")
+
+            # Path object
+            prof_path = extract_candidate_profile(Path(txt_path))
+            self.assertIn("Python", prof_path.skills)
+            self.assertEqual(prof_path.seniority_level, "Senior")
+        finally:
+            os.unlink(txt_path)
+
+        # DOCX file test
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as f:
+            docx_path = f.name
+
+        try:
+            xml_content = b'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Junior Fullstack Engineer skilled in React, Node.js, and TypeScript.</w:t></w:r></w:p></w:body></w:document>'
+            with zipfile.ZipFile(docx_path, "w") as z:
+                z.writestr("word/document.xml", xml_content)
+
+            prof_docx = extract_candidate_profile(docx_path)
+            self.assertIn("React", prof_docx.skills)
+            self.assertIn("TypeScript", prof_docx.skills)
+            self.assertEqual(prof_docx.seniority_level, "Junior")
+        finally:
+            os.unlink(docx_path)
 
 
 if __name__ == "__main__":

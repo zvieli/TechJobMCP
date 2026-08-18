@@ -9,12 +9,12 @@ import time
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import httpx
 
 from job_mcp.core.auth import BASE_URL
-from job_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences, WorkMode
 from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -218,6 +218,71 @@ def _extract_text_from_docx(path: Path) -> str:
         return ""
 
 
+def _extract_text_from_file(path: Path) -> str:
+    """Extract text from a file (.pdf, .docx, or plain text)."""
+    if not path.is_file():
+        return ""
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return _extract_text_from_pdf(path)
+    elif suffix == ".docx":
+        return _extract_text_from_docx(path)
+    else:
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except Exception as exc:
+            logger.warning("Failed reading text file '%s': %s", path, exc)
+            return ""
+
+
+def _extract_text_from_source(cv_source: Optional[Union[str, Path]]) -> str:
+    """Extract text from a CV path, Path object, or raw string content."""
+    if cv_source is None:
+        resolved = resolve_cv_path(None)
+        if resolved and resolved.is_file():
+            return _extract_text_from_file(resolved)
+        return ""
+
+    if isinstance(cv_source, Path):
+        return _extract_text_from_file(cv_source)
+
+    if isinstance(cv_source, str):
+        cleaned = cv_source.strip()
+        if not cleaned:
+            return ""
+
+        # If multiline, treat directly as raw text content
+        if "\n" in cleaned:
+            return cleaned
+
+        # Check if it points to an existing file
+        try:
+            resolved = resolve_cv_path(cleaned)
+            if resolved and resolved.is_file():
+                return _extract_text_from_file(resolved)
+        except Exception:
+            pass
+
+        try:
+            p = Path(cleaned).expanduser()
+            if p.is_file():
+                return _extract_text_from_file(p.resolve())
+        except Exception:
+            pass
+
+        # If it looks like a file path and doesn't exist on disk, return empty
+        if cleaned.lower().endswith((".pdf", ".docx", ".txt", ".rtf", ".md", ".doc")):
+            return ""
+        if len(cleaned.split()) <= 4 and ("/" in cleaned or "\\" in cleaned or "." in cleaned):
+            return ""
+
+        # Otherwise, treat as raw text content
+        return cleaned
+
+    return ""
+
+
 def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
     """Resolve the CV file path based on explicit parameter, environment variable, or fallback discovery.
 
@@ -232,11 +297,17 @@ def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
     Returns:
         Optional[Path]: The first candidate that is an existing file, resolved. None if none exist.
     """
-    candidates: list[Path] = []
-
     # 1. Explicit cv_path if provided and non-empty
     if cv_path and str(cv_path).strip():
-        candidates.append(Path(str(cv_path).strip()).expanduser())
+        p = Path(str(cv_path).strip()).expanduser()
+        try:
+            if p.is_file():
+                return p.resolve()
+        except (OSError, PermissionError):
+            pass
+        return None
+
+    candidates: list[Path] = []
 
     # 2. DEFAULT_CV_PATH environment variable if set
     env_cv = os.getenv("DEFAULT_CV_PATH")
@@ -463,22 +534,7 @@ def extract_cv_keywords(cv_path: Optional[str] = None) -> list[str]:
         return []
 
     logger.info("Extracting keywords from CV: %s", path)
-    text_content = ""
-    suffix = path.suffix.lower()
-
-    if suffix == ".pdf":
-        text_content = _extract_text_from_pdf(path)
-    elif suffix == ".docx":
-        text_content = _extract_text_from_docx(path)
-    else:
-        # Plain text, markdown, etc.
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                text_content = f.read()
-        except Exception as exc:
-            logger.warning("Failed reading text CV '%s': %s", path, exc)
-            return []
-
+    text_content = _extract_text_from_file(path)
     if not text_content:
         logger.warning("No readable text could be extracted from '%s'.", path)
         return []
@@ -486,6 +542,299 @@ def extract_cv_keywords(cv_path: Optional[str] = None) -> list[str]:
     result = extract_dynamic_cv_skills(text_content)
     logger.info("Extracted %d dynamic skills from CV '%s': %s", len(result), path.name, result)
     return result
+
+
+def _detect_cv_seniority(text: str) -> Optional[str]:
+    """Detect candidate seniority level from CV text."""
+    if not text:
+        return None
+
+    header_chunk = text[:1500]
+
+    # Explicit summary/title markers
+    if re.search(r"\b(student)\b", header_chunk, re.IGNORECASE):
+        if not re.search(r"\b(senior\s+(?:developer|engineer|architect)|lead\s+developer|tech\s+lead)\b", header_chunk, re.IGNORECASE):
+            return "Student"
+    if re.search(r"\b(intern|internship)\b", header_chunk, re.IGNORECASE):
+        return "Intern"
+    if re.search(r"\b(junior|entry[\s-]level|graduate)\b", header_chunk, re.IGNORECASE):
+        return "Junior"
+    if re.search(r"\b(principal|distinguished)\b", header_chunk, re.IGNORECASE):
+        return "Principal"
+    if re.search(r"\b(tech\s+lead|team\s+lead|lead\s+developer|lead\s+engineer|head\s+of|director|vp)\b", header_chunk, re.IGNORECASE):
+        return "Lead"
+    if re.search(r"\b(senior|staff|architect)\b|\bsr\.?\b", header_chunk, re.IGNORECASE):
+        return "Senior"
+    if re.search(r"\b(mid[\s-]level|intermediate)\b", header_chunk, re.IGNORECASE):
+        return "Mid"
+
+    # Check years of experience in full text
+    m_years = re.search(r"\b(\d+)\+?\s*years(?:\s+of)?\s*(?:experience|working)?\b", text, re.IGNORECASE)
+    if m_years:
+        years = int(m_years.group(1))
+        if years >= 10:
+            return "Principal" if re.search(r"\b(architect|principal|staff)\b", text, re.IGNORECASE) else "Senior"
+        elif years >= 5:
+            return "Senior"
+        elif years >= 2:
+            return "Mid"
+        elif years <= 1:
+            return "Junior"
+
+    # Fallback to full text keyword scan
+    if re.search(r"\b(principal|distinguished)\b", text, re.IGNORECASE):
+        return "Principal"
+    if re.search(r"\b(tech\s+lead|team\s+lead|lead\s+developer|lead\s+engineer)\b", text, re.IGNORECASE):
+        return "Lead"
+    if re.search(r"\b(senior|software\s+architect|solutions\s+architect|staff\s+engineer)\b", text, re.IGNORECASE):
+        return "Senior"
+    if re.search(r"\b(junior|entry[\s-]level)\b", text, re.IGNORECASE):
+        return "Junior"
+    if re.search(r"\b(student)\b", text, re.IGNORECASE):
+        return "Student"
+    if re.search(r"\b(intern|internship)\b", text, re.IGNORECASE):
+        return "Intern"
+    if re.search(r"\b(mid[\s-]level|intermediate)\b", text, re.IGNORECASE):
+        return "Mid"
+
+    return None
+
+
+def _compute_top_skills(skills: list[str], text: str) -> list[str]:
+    """Compute top 5-8 primary skills by frequency and section prominence."""
+    if not skills:
+        return []
+    if len(skills) <= 5:
+        return list(skills)
+
+    text_lower = text.lower()
+    first_quarter = text_lower[: max(500, len(text_lower) // 4)]
+
+    skills_section = ""
+    m_sec = re.search(
+        r"(?:technical\s+skills|skills|technologies|tech\s+stack|core\s+competencies)[\s:\-]+(.*?)(?:\n\s*(?:experience|work|projects|education)|\Z)",
+        text_lower,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if m_sec:
+        skills_section = m_sec.group(1)
+
+    scored: list[tuple[float, str]] = []
+    for skill in skills:
+        pattern = r"(?<![a-zA-Z0-9_])" + re.escape(skill.lower()) + r"(?![a-zA-Z0-9_])"
+        occurrences = len(re.findall(pattern, text_lower))
+        score = occurrences * 2.0
+
+        if pattern and re.search(pattern, first_quarter):
+            score += 4.0
+        if skills_section and pattern and re.search(pattern, skills_section):
+            score += 5.0
+
+        scored.append((score, skill))
+
+    # Sort descending by score, then ascending by name
+    scored.sort(key=lambda item: (-item[0], item[1].lower()))
+
+    target_count = min(len(skills), max(5, min(8, len(skills))))
+    return [skill for _, skill in scored[:target_count]]
+
+
+def _derive_target_roles(skills: list[str], text: str, seniority: Optional[str] = None) -> list[str]:
+    """Derive suggested job titles from extracted skills and CV text."""
+    skills_lower = {s.lower() for s in skills}
+    text_lower = text.lower()
+    roles: list[str] = []
+
+    # AI / ML / Data
+    ai_indicators = {
+        "graphrag", "langgraph", "langchain", "llamaindex", "pytorch", "tensorflow",
+        "hugging face", "llm", "rag", "nlp", "machine learning", "ollama", "vllm",
+        "pinecone", "qdrant", "chromadb", "chroma", "vector db", "clinicalbert",
+        "pandas", "scikit-learn", "numpy", "transformers", "fine-tuning", "embeddings",
+        "agentic", "semantic kernel",
+    }
+    matched_ai = skills_lower & ai_indicators
+    if len(matched_ai) >= 2 or "ai " in text_lower or "artificial intelligence" in text_lower or "machine learning" in text_lower or "llm" in text_lower:
+        roles.append("AI Engineer")
+        if any(s in skills_lower for s in ["pytorch", "tensorflow", "scikit-learn", "machine learning", "clinicalbert"]):
+            roles.append("Machine Learning Engineer")
+
+    # Web3 / Blockchain
+    web3_indicators = {
+        "solidity", "noir", "web3", "smart contracts", "smart contract development",
+        "foundry", "hardhat", "evm", "ethers.js", "viem", "zk", "ultrahonk", "bb.js", "ipfs",
+        "keccak256", "merkle patricia trie",
+    }
+    matched_web3 = skills_lower & web3_indicators
+    if len(matched_web3) >= 1 or "web3" in text_lower or "smart contract" in text_lower:
+        roles.append("Web3 Developer")
+        roles.append("Smart Contract Engineer")
+        roles.append("Blockchain Developer")
+
+    # Backend / Python / Languages
+    backend_indicators = {
+        "fastapi", "django", "flask", "sqlalchemy", "asyncio", "postgresql", "postgres",
+        "redis", "rest", "grpc", "fastmcp", "pydantic",
+    }
+    if "python" in skills_lower and (skills_lower & backend_indicators or "backend" in text_lower or "developer" in text_lower or "engineer" in text_lower):
+        roles.append("Python Developer")
+        roles.append("Backend Engineer")
+    elif "python" in skills_lower:
+        roles.append("Python Developer")
+
+    if "go" in skills_lower or "golang" in skills_lower:
+        roles.append("Go Developer")
+        if "Backend Engineer" not in roles:
+            roles.append("Backend Engineer")
+
+    if "rust" in skills_lower:
+        roles.append("Rust Developer")
+        if "Systems Engineer" not in roles:
+            roles.append("Systems Engineer")
+
+    if "c++" in skills_lower or "c" in skills_lower or "operating systems" in skills_lower:
+        if "Systems Engineer" not in roles:
+            roles.append("Systems Engineer")
+
+    # Frontend / Full Stack
+    frontend_indicators = {
+        "react", "next.js", "vue", "vue.js", "nuxt", "angular", "svelte",
+        "typescript", "javascript", "tailwindcss", "vite", "redux", "html", "css", "zustand",
+    }
+    matched_frontend = skills_lower & frontend_indicators
+    has_backend_skill = any(s in skills_lower for s in [
+        "python", "node.js", "node", "go", "golang", "java", "c#", "rust", "fastapi",
+        "django", "postgresql", "postgres", "sql", "redis", "mongodb",
+    ])
+
+    if len(matched_frontend) >= 2 or "frontend" in text_lower:
+        if has_backend_skill and "Full Stack Engineer" not in roles:
+            roles.append("Full Stack Engineer")
+        if "Frontend Engineer" not in roles:
+            roles.append("Frontend Engineer")
+    elif has_backend_skill and len(matched_frontend) >= 1:
+        if "Full Stack Engineer" not in roles:
+            roles.append("Full Stack Engineer")
+
+    # DevOps / Cloud
+    devops_indicators = {
+        "kubernetes", "k8s", "docker", "terraform", "ansible", "helm", "aws",
+        "amazon web services", "gcp", "google cloud", "azure", "ci/cd", "github actions",
+        "gitlab ci", "jenkins", "prometheus", "grafana",
+    }
+    matched_devops = skills_lower & devops_indicators
+    if len(matched_devops) >= 2 or "devops" in text_lower or "cloud" in text_lower:
+        roles.append("DevOps Engineer")
+        roles.append("Cloud Engineer")
+
+    # Java / .NET
+    if "java" in skills_lower or "spring" in skills_lower or "spring boot" in skills_lower:
+        roles.append("Java Developer")
+        if "Backend Engineer" not in roles:
+            roles.append("Backend Engineer")
+    if "c#" in skills_lower or ".net" in skills_lower:
+        roles.append(".NET Developer")
+        if "Backend Engineer" not in roles:
+            roles.append("Backend Engineer")
+
+    # Default fallback
+    if not roles and skills:
+        roles.append("Software Engineer")
+
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    deduped_roles: list[str] = []
+    for r in roles:
+        if r not in seen:
+            seen.add(r)
+            deduped_roles.append(r)
+
+    return deduped_roles
+
+
+def _derive_search_queries(top_skills: list[str], target_roles: list[str]) -> list[str]:
+    """Derive concise 1-2 word tech queries for job search platforms."""
+    queries: list[str] = []
+    seen: set[str] = set()
+
+    for role in target_roles[:2]:
+        if role.lower() not in seen:
+            seen.add(role.lower())
+            queries.append(role)
+
+    for skill in top_skills[:4]:
+        if skill.lower() not in seen:
+            seen.add(skill.lower())
+            queries.append(skill)
+
+    for role in target_roles[2:4]:
+        if len(queries) >= 6:
+            break
+        if role.lower() not in seen:
+            seen.add(role.lower())
+            queries.append(role)
+
+    for skill in top_skills[4:]:
+        if len(queries) >= 6:
+            break
+        if skill.lower() not in seen:
+            seen.add(skill.lower())
+            queries.append(skill)
+
+    return queries
+
+
+def _derive_suggested_exclusions(seniority: Optional[str]) -> list[str]:
+    """Derive adaptive exclusions based on candidate seniority level."""
+    if not seniority:
+        return []
+    sen_upper = seniority.upper()
+    if sen_upper in ("STUDENT", "INTERN", "JUNIOR"):
+        return ["Senior", "Lead", "Principal", "Staff", "Director", "VP", "Head", "7+ years", "10+ years"]
+    elif sen_upper == "MID":
+        return ["Principal", "Staff", "Director", "VP", "Head", "10+ years"]
+    elif sen_upper in ("SENIOR", "LEAD", "PRINCIPAL"):
+        return ["Student", "Intern", "Junior", "Entry Level", "Graduate"]
+    return []
+
+
+def extract_candidate_profile(cv_source: Optional[Union[str, Path]] = None) -> CandidateProfile:
+    """Extract a structured candidate profile from a CV file path, Path object, or raw text.
+
+    Args:
+        cv_source: Optional path to CV file or raw string content. If None, default CV path is resolved.
+
+    Returns:
+        CandidateProfile: Populated candidate profile data model.
+    """
+    text_content = _extract_text_from_source(cv_source)
+    if not text_content or not text_content.strip():
+        logger.warning("No readable text content found for candidate profile extraction.")
+        return CandidateProfile()
+
+    skills = extract_dynamic_cv_skills(text_content)
+    seniority_level = _detect_cv_seniority(text_content)
+    top_skills = _compute_top_skills(skills, text_content)
+    target_roles = _derive_target_roles(skills, text_content, seniority_level)
+    search_queries = _derive_search_queries(top_skills, target_roles)
+    suggested_exclusions = _derive_suggested_exclusions(seniority_level)
+
+    logger.info(
+        "Candidate profile extracted: %d skills, %d top skills, seniority: %s, %d target roles",
+        len(skills),
+        len(top_skills),
+        seniority_level,
+        len(target_roles),
+    )
+
+    return CandidateProfile(
+        skills=skills,
+        top_skills=top_skills,
+        seniority_level=seniority_level,
+        target_roles=target_roles,
+        search_queries=search_queries,
+        suggested_exclusions=suggested_exclusions,
+    )
 
 
 def _extract_text_tech_keywords(text: str) -> list[str]:
