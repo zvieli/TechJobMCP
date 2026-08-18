@@ -144,6 +144,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output raw JSON serialization of PipelineResult at the end",
     )
     parser.add_argument(
+        "--inspect",
+        "--show-jobs",
+        dest="inspect",
+        action="store_true",
+        default=True,
+        help="Render detailed Job Insight Cards for Top-Tier and Strong Match jobs (default: True)",
+    )
+    parser.add_argument(
+        "--no-inspect",
+        dest="inspect",
+        action="store_false",
+        help="Disable rendering detailed Job Insight Cards",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -261,6 +275,10 @@ def render_header(
         "[bold green]Enabled (2-Step Staged Preview & Confirm)[/bold green]" if args.auto_apply else "[bold yellow]Disabled (Bookmarks Only)[/bold yellow]",
     )
     config_table.add_row(
+        "Job Insight Cards",
+        "[bold green]Enabled (Detailed Match & Skill Cards)[/bold green]" if getattr(args, "inspect", True) else "[dim]Disabled (--no-inspect)[/dim]",
+    )
+    config_table.add_row(
         "Server Connection",
         f"[bold magenta]Remote MCP ({args.remote_url})[/bold magenta]" if args.remote_url else f"[bold blue]In-Memory Execution (Mode: {args.mode})[/bold blue]",
     )
@@ -354,13 +372,145 @@ def _format_work_mode(mode_val: Any) -> str:
     return s
 
 
-def render_summary_dashboard(
+def render_job_insight_card(
     console: Console,
+    job: dict[str, Any],
     result: PipelineResult,
-    top_tier_threshold: int,
-    strong_match_threshold: int,
+    tier_label: str = "Top-Tier Match",
+    border_style: str = "green",
 ) -> None:
-    """Render the comprehensive final summary dashboard."""
+    """Render a detailed Job Insight Card as a styled Rich Panel."""
+    jid = job.get("job_id", "")
+    title = job.get("title", "Untitled Role")
+    company = job.get("company", "Unknown Company")
+    score = float(job.get("match_score") or 0.0)
+    seniority = job.get("seniority_level") or "Junior"
+    work_mode_str = _format_work_mode(job.get("work_mode"))
+    location = job.get("location") or "N/A"
+    salary = job.get("salary_range")
+
+    # 1. Source(s) Badges
+    raw_sources = job.get("sources") or ([job.get("source")] if job.get("source") else [])
+    source_badges: list[str] = []
+    for s in raw_sources:
+        s_lower = str(s).lower()
+        if "comeet" in s_lower:
+            source_badges.append("[bold magenta][Comeet (Direct ATS)][/bold magenta]")
+        elif "hireme" in s_lower:
+            source_badges.append("[bold blue][HireMeTech][/bold blue]")
+        elif "alljobs" in s_lower:
+            source_badges.append("[bold yellow][AllJobs][/bold yellow]")
+        else:
+            source_badges.append(f"[bold cyan][{s}][/bold cyan]")
+    sources_str = " ".join(source_badges) if source_badges else "[dim]Unknown[/dim]"
+
+    # 2. Match Score & Seniority Details Line
+    score_style = "bold green" if score >= 85 else "bold yellow"
+    details_parts = [
+        f"Score: [{score_style}]{score:.0f}/100[/{score_style}]",
+        f"Level: [cyan]{seniority}[/cyan]",
+        f"Work Mode: [cyan]{work_mode_str}[/cyan]",
+        f"Location: [cyan]{location}[/cyan]",
+    ]
+    if salary:
+        details_parts.append(f"Salary: [green]{salary}[/green]")
+    fit_line = "  |  ".join(details_parts)
+
+    # 3. Match Reasons
+    reasons = job.get("match_reasons") or []
+    if reasons:
+        reasons_str = "\n".join(f"• {r}" for r in reasons)
+    else:
+        tech_list = job.get("tech_stack") or []
+        tech_str = ", ".join(tech_list[:5]) if tech_list else "General engineering match"
+        reasons_str = f"• High alignment with target technology stack ({tech_str})"
+
+    # 4. Matched and Missing Skills
+    matched_skills = job.get("matched_skills") or job.get("tech_stack") or []
+    missing_skills = job.get("missing_skills") or []
+
+    matched_badges = (
+        " ".join(f"[bold green][{s}][/bold green]" for s in matched_skills)
+        if matched_skills
+        else "[dim]None listed[/dim]"
+    )
+    missing_badges = (
+        " ".join(f"[dim][{s}][/dim]" for s in missing_skills)
+        if missing_skills
+        else ""
+    )
+
+    # 5. Role Summary
+    summary = job.get("description_summary") or job.get("description") or "No description available."
+    if len(summary) > 280 and not job.get("description_summary"):
+        from job_mcp.core.api_client import generate_description_summary
+        summary = generate_description_summary(summary) or (summary[:277] + "...")
+
+    # 6. Application Link
+    link = job.get("apply_url") or job.get("url") or "N/A"
+    if link != "N/A":
+        link_str = f"[underline cyan]{link}[/underline cyan]"
+    else:
+        link_str = "[dim]N/A[/dim]"
+
+    # 7. Auto-Apply Status
+    if jid in result.confirmed_apply_ids:
+        apply_status = "[bold green]✅ Applied & Confirmed[/bold green]"
+    elif jid in result.staged_apply_ids:
+        apply_status = "[bold yellow]⏳ Staged Preview (Pending Confirmation)[/bold yellow]"
+    elif jid in result.bookmarked_job_ids:
+        apply_status = "[bold cyan]🔖 Bookmarked for Review[/bold cyan]"
+    else:
+        apply_status = "[dim]Unapplied[/dim]"
+
+    # Card Table
+    card_table = Table(box=None, show_header=False, pad_edge=False, padding=(0, 1), expand=True)
+    card_table.add_column("Icon & Field", style="bold white", width=22)
+    card_table.add_column("Content")
+
+    card_table.add_row("🏷️  Source(s)", sources_str)
+    card_table.add_row("🎯  Match Details", fit_line)
+    card_table.add_row("💡  Match Reasons", reasons_str)
+    card_table.add_row("🛠️  Matched Skills", matched_badges)
+    if missing_badges:
+        card_table.add_row("   Missing Skills", missing_badges)
+    card_table.add_row("📝  Role Summary", summary)
+    card_table.add_row("🔗  Application Link", link_str)
+    card_table.add_row("⚡  Auto-Apply Status", apply_status)
+
+    panel_title = f"📋 [bold white]{title}[/bold white] [dim]@[/dim] [bold cyan]{company}[/bold cyan] [dim]({jid})[/dim]"
+    card_panel = Panel(
+        card_table,
+        title=panel_title,
+        title_align="left",
+        subtitle=f"[{border_style}]{tier_label} (Score: {score:.0f}/100)[/{border_style}]",
+        subtitle_align="right",
+        border_style=border_style,
+        box=box.ROUNDED,
+        padding=(0, 1),
+    )
+    console.print(card_panel)
+    console.print()
+
+
+def render_summary_dashboard(
+    console: Console | PipelineResult,
+    result: Optional[PipelineResult | Console] = None,
+    top_tier_threshold: int = 85,
+    strong_match_threshold: int = 70,
+    inspect_jobs: bool = True,
+) -> None:
+    """Render the comprehensive final summary dashboard and optional Job Insight Cards."""
+    if isinstance(console, PipelineResult):
+        if isinstance(result, Console):
+            console, result = result, console
+        else:
+            actual_result = console
+            console = Console()
+            result = actual_result
+    elif result is None:
+        raise ValueError("PipelineResult must be provided to render_summary_dashboard")
+
     console.print(
         Panel(
             Text("📊 Pipeline Execution Summary Dashboard", style="bold white on blue", justify="center"),
@@ -465,7 +615,32 @@ def render_summary_dashboard(
 
     console.print()
 
-    # 3. Overall KPI Metrics Table
+    # 3. Detailed Job Insight Cards (Rendered by default for Top-Tier and Strong Matches)
+    if inspect_jobs:
+        inspectable_jobs_count = len(result.top_tier_jobs) + len(result.strong_match_jobs)
+        if inspectable_jobs_count > 0:
+            console.print(
+                f"[bold cyan]🔍 Detailed Job Insight Cards ({inspectable_jobs_count} priority jobs)[/bold cyan]"
+            )
+            console.print()
+            for job in result.top_tier_jobs:
+                render_job_insight_card(
+                    console,
+                    job,
+                    result,
+                    tier_label="🏆 Top-Tier Match",
+                    border_style="green",
+                )
+            for job in result.strong_match_jobs:
+                render_job_insight_card(
+                    console,
+                    job,
+                    result,
+                    tier_label="⭐ Strong Match",
+                    border_style="yellow",
+                )
+
+    # 4. Overall KPI Metrics Table
     kpi_table = Table(box=box.ROUNDED, header_style="bold white on dark_blue", show_lines=True, expand=True)
     kpi_table.add_column("Metric", style="bold", ratio=4)
     kpi_table.add_column("Value", justify="right", style="bold cyan", ratio=3)
@@ -747,6 +922,7 @@ async def execute_cli_pipeline(
             result,
             top_tier_threshold=args.top_tier,
             strong_match_threshold=args.strong_match,
+            inspect_jobs=getattr(args, "inspect", True),
         )
     else:
         print(json.dumps(result.model_dump(), indent=2, default=str))

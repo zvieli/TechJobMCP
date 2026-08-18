@@ -571,3 +571,99 @@ async def test_e2e_multi_source_dedup_integrity(test_lifespan_context):
     beta_job = next(j for j in deduped if "beta" in j.company.lower())
     assert beta_job.job_id == "cmt-job-404"
     assert beta_job.sources == ["comeet"]
+
+
+@pytest.mark.asyncio
+async def test_e2e_cli_visual_runner_insight_cards(test_lifespan_context):
+    """Test 5: E2E Visual CLI runner Job Insight Cards rendering and inspect mode default.
+
+    Validates:
+    - Default inspect mode produces Rich Job Insight Cards for top-tier and strong matches.
+    - Insight cards display title, company, source badges, score breakdown, summary, and apply URLs.
+    - Disabling inspect mode (--no-inspect) omits detailed insight cards while keeping summary tables.
+    """
+    import io
+    from rich.console import Console
+    from scripts.run_mock_llm_pipeline import build_parser, execute_cli_pipeline, render_summary_dashboard
+
+    ctx, cache, session_mgr, registry, aggregator = test_lifespan_context
+
+    # Realistic mock jobs
+    jobs = [
+        Job(
+            job_id="e2e-top-1",
+            title="AI Agent Engineer (FastAPI & LangGraph)",
+            company="CommIT Dynamics",
+            source="comeet",
+            sources=["comeet", "hiremetech"],
+            work_mode=WorkMode.HYBRID,
+            tech_stack=["Python", "FastAPI", "Docker", "LangGraph", "React"],
+            description="Developing agentic AI systems and FastAPI microservices in hybrid Tel Aviv office.",
+            salary_range="$150,000 - $170,000",
+            location="Tel Aviv",
+            apply_url="https://app.comeet.com/jobs/commit/e2e-top-1/apply",
+        ),
+        Job(
+            job_id="e2e-strong-2",
+            title="Backend Python Developer",
+            company="AlphaCloud",
+            source="alljobs",
+            sources=["alljobs"],
+            work_mode=WorkMode.REMOTE,
+            tech_stack=["Python", "FastAPI", "PostgreSQL"],
+            description="Backend developer building cloud services with Python and PostgreSQL.",
+            salary_range="₪35,000 / mo",
+            location="Remote",
+            url="https://www.alljobs.co.il/job/e2e-strong-2",
+        ),
+    ]
+    cache.update(jobs)
+
+    parser = build_parser()
+    args = parser.parse_args(["--mode", "mock", "--no-auto-apply"])
+    assert args.inspect is True
+
+    output_stream = io.StringIO()
+    console = Console(file=output_stream, force_terminal=False, color_system=None, width=120)
+
+    # 1. Execute CLI pipeline with default inspect=True
+    with patch("job_mcp.main.browser_bookmark_job", new_callable=AsyncMock):
+        result = await execute_cli_pipeline(args, console=console)
+
+    assert result.success is True
+    output = output_stream.getvalue()
+
+    # 2. Verify Job Insight Cards rendering
+    assert "Detailed Job Insight Cards" in output
+    assert "AI Application Engineer (FastAPI & LangGraph)" in output
+    assert "TechNova Labs" in output
+    assert "Cognitive Dynamics" in output
+    assert "Comeet (Direct ATS)" in output
+    assert "HireMeTech" in output
+    assert "Score:" in output
+    assert "Level:" in output
+    assert "Work Mode: Remote" in output
+    assert "Location: Tel Aviv" in output
+    assert "Python" in output
+    assert "FastAPI" in output
+    assert "https://hireme.tech/jobs/hmt-top-1" in output
+    assert "CloudWorks Software" in output
+    assert "InnoTech Solutions" in output
+    assert "AllJobs" in output
+
+    # 3. Verify --no-inspect disables cards
+    no_inspect_stream = io.StringIO()
+    no_inspect_console = Console(file=no_inspect_stream, force_terminal=False, color_system=None, width=120)
+    render_summary_dashboard(
+        no_inspect_console,
+        result,
+        top_tier_threshold=85,
+        strong_match_threshold=70,
+        inspect_jobs=False,
+    )
+    no_inspect_output = no_inspect_stream.getvalue()
+    assert "Pipeline Execution Summary Dashboard" in no_inspect_output
+    assert "AI Application Engineer" in no_inspect_output
+    assert "TechNova Labs" in no_inspect_output
+    assert "Detailed Job Insight Cards" not in no_inspect_output
+
