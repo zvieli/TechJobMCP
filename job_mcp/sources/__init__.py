@@ -54,6 +54,16 @@ from job_mcp.sources.direct_tech import (
     parse_ibm_position,
     parse_ibm_positions,
 )
+from job_mcp.sources.linkedin import (
+    LINKEDIN_HEADERS,
+    LINKEDIN_JOB_DETAIL_URL,
+    LINKEDIN_SEARCH_API_URL,
+    LinkedInSource,
+    parse_linkedin_job_card,
+    parse_linkedin_job_details,
+    parse_linkedin_search_results,
+    search_linkedin_jobs_api,
+)
 from job_mcp.sources.hiremetech import HireMeTechSource
 from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
 
@@ -166,6 +176,10 @@ def create_default_registry(session_manager: Optional[Any] = None) -> SourceRegi
     enable_direct_tech = os.getenv("ENABLE_DIRECT_TECH", "false").strip().lower() in ("true", "1", "yes")
     if enable_direct_tech:
         reg.register(DirectTechSource())
+
+    enable_linkedin = os.getenv("ENABLE_LINKEDIN", "false").strip().lower() in ("true", "1", "yes")
+    if enable_linkedin:
+        reg.register(LinkedInSource(session_manager=session_manager))
     return reg
 
 
@@ -209,6 +223,14 @@ __all__ = [
     "parse_apple_positions",
     "parse_ibm_position",
     "parse_ibm_positions",
+    "LinkedInSource",
+    "parse_linkedin_job_card",
+    "parse_linkedin_search_results",
+    "parse_linkedin_job_details",
+    "search_linkedin_jobs_api",
+    "LINKEDIN_SEARCH_API_URL",
+    "LINKEDIN_JOB_DETAIL_URL",
+    "LINKEDIN_HEADERS",
     # Registry & Aggregator
     "SourceRegistry",
     "create_default_registry",
