@@ -40,6 +40,20 @@ from job_mcp.sources.eightfold import (
     EightfoldCompany,
     parse_eightfold_position,
 )
+from job_mcp.sources.direct_tech import (
+    DEFAULT_DIRECT_TECH_COMPANIES,
+    DIRECT_TECH_COMPANIES,
+    DirectTechCompany,
+    DirectTechSource,
+    parse_amazon_position,
+    parse_amazon_positions,
+    parse_apple_position,
+    parse_apple_positions,
+    parse_google_job,
+    parse_google_positions,
+    parse_ibm_position,
+    parse_ibm_positions,
+)
 from job_mcp.sources.hiremetech import HireMeTechSource
 from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
 
@@ -148,6 +162,10 @@ def create_default_registry(session_manager: Optional[Any] = None) -> SourceRegi
     enable_eightfold = os.getenv("ENABLE_EIGHTFOLD", "false").strip().lower() in ("true", "1", "yes")
     if enable_eightfold:
         reg.register(EightfoldAISource())
+
+    enable_direct_tech = os.getenv("ENABLE_DIRECT_TECH", "false").strip().lower() in ("true", "1", "yes")
+    if enable_direct_tech:
+        reg.register(DirectTechSource())
     return reg
 
 
@@ -179,6 +197,18 @@ __all__ = [
     "ALLJOBS_HEADERS",
     "DEFAULT_TECH_CATEGORIES",
     "parse_alljobs_position",
+    "DirectTechSource",
+    "DirectTechCompany",
+    "DIRECT_TECH_COMPANIES",
+    "DEFAULT_DIRECT_TECH_COMPANIES",
+    "parse_google_job",
+    "parse_google_positions",
+    "parse_amazon_position",
+    "parse_amazon_positions",
+    "parse_apple_position",
+    "parse_apple_positions",
+    "parse_ibm_position",
+    "parse_ibm_positions",
     # Registry & Aggregator
     "SourceRegistry",
     "create_default_registry",
