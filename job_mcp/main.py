@@ -113,7 +113,7 @@ _pending_applications: dict[str, dict[str, Any]] = {}
 _operation_mode: OperationMode = OperationMode.SUPERVISED
 
 # Timeout constant for live scraping operations to avoid proxy / tunnel timeouts (e.g. DevTunnel 10s limit)
-_SCRAPE_TIMEOUT_SECONDS: float = 8.0
+_SCRAPE_TIMEOUT_SECONDS: float = 4.0
 _WARMUP_TIMEOUT_SECONDS: float = 30.0
 
 
@@ -537,7 +537,7 @@ async def get_job_matches(
     """
     cache = _get_cache(ctx)
 
-    if not force_refresh and not cache.is_stale:
+    if not force_refresh:
         cached_jobs = cache.get_all()
         if cached_jobs:
             if sources is not None:

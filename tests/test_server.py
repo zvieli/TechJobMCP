@@ -199,7 +199,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
 class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
     """Tests for setup CLI and __main__ execution."""
 
-    @patch("hireme_mcp.setup.async_playwright")
+    @patch("job_mcp.setup.async_playwright")
     async def test_run_setup_success(self, mock_async_playwright):
         """Test run_setup happy path with successful authentication."""
         mock_pw = AsyncMock()
@@ -223,7 +223,7 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
             mock_context.close.assert_called_once()
             mock_pw.stop.assert_called_once()
 
-    @patch("hireme_mcp.setup.async_playwright")
+    @patch("job_mcp.setup.async_playwright")
     async def test_run_setup_failure(self, mock_async_playwright):
         """Test run_setup when authentication verification fails."""
         mock_pw = AsyncMock()
@@ -247,15 +247,15 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
             mock_context.close.assert_called_once()
             mock_pw.stop.assert_called_once()
 
-    @patch("hireme_mcp.__main__.mcp.run")
+    @patch("job_mcp.__main__.mcp.run")
     def test_main_stdio(self, mock_run):
         """Test __main__.py stdio transport default."""
         with patch.dict(os.environ, {"MCP_TRANSPORT": "stdio"}):
             server_main()
             mock_run.assert_called_once_with(transport="stdio")
 
-    @patch("hireme_mcp.__main__.uvicorn.run")
-    @patch("hireme_mcp.__main__.mcp.http_app")
+    @patch("job_mcp.__main__.uvicorn.run")
+    @patch("job_mcp.__main__.mcp.http_app")
     def test_main_http(self, mock_http_app, mock_uvicorn_run):
         """Test __main__.py http transport with host and port."""
         mock_app = MagicMock()
@@ -271,8 +271,8 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
             mock_app.add_middleware.assert_called_once_with(GeminiProbeMiddleware)
             mock_uvicorn_run.assert_called_once_with(mock_app, host="127.0.0.1", port=8080)
 
-    @patch("hireme_mcp.__main__.uvicorn.run")
-    @patch("hireme_mcp.__main__.mcp.http_app")
+    @patch("job_mcp.__main__.uvicorn.run")
+    @patch("job_mcp.__main__.mcp.http_app")
     def test_main_sse(self, mock_http_app, mock_uvicorn_run):
         """Test __main__.py sse transport with host and port."""
         mock_app = MagicMock()

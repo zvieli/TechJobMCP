@@ -270,16 +270,26 @@ class TestHireMeTechSource:
         mock_sm.get_page = AsyncMock(return_value=mock_page)
         source = HireMeTechSource(session_manager=mock_sm)
 
-        with patch("hireme_mcp.sources.hiremetech.browser_bookmark_job", new_callable=AsyncMock) as mock_bm:
+        with patch("job_mcp.sources.hiremetech.browser_bookmark_job", new_callable=AsyncMock) as mock_bm:
             mock_bm.return_value = True
             result = await source.bookmark_job("job-abc")
             assert result is True
             mock_bm.assert_awaited_once_with(mock_page, "job-abc")
 
     @pytest.mark.asyncio
+    async def test_fetch_jobs_session_timeout_or_failure_returns_empty(self) -> None:
+        mock_sm = MagicMock()
+        mock_sm.ensure_ready = AsyncMock(side_effect=RuntimeError("Session timeout or unauthenticated"))
+        source = HireMeTechSource(session_manager=mock_sm)
+
+        jobs = await source.fetch_jobs(limit=10)
+        assert jobs == []
+
+    @pytest.mark.asyncio
     async def test_fetch_jobs_via_api_primary(self) -> None:
         mock_sm = MagicMock()
         mock_page = MagicMock()
+        mock_sm.ensure_ready = AsyncMock(return_value=mock_page)
         mock_sm.get_page = AsyncMock(return_value=mock_page)
         source = HireMeTechSource(session_manager=mock_sm)
 
@@ -300,7 +310,7 @@ class TestHireMeTechSource:
             ),
         ]
 
-        with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api:
+        with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = raw_jobs
             jobs = await source.fetch_jobs(limit=10)
             assert len(jobs) == 2
@@ -317,6 +327,7 @@ class TestHireMeTechSource:
         mock_page.url = "https://hiremetech.com/other"
         mock_page.goto = AsyncMock()
         mock_page.wait_for_timeout = AsyncMock()
+        mock_sm.ensure_ready = AsyncMock(return_value=mock_page)
         mock_sm.get_page = AsyncMock(return_value=mock_page)
         source = HireMeTechSource(session_manager=mock_sm)
 
@@ -329,8 +340,8 @@ class TestHireMeTechSource:
             ),
         ]
 
-        with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-             patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+        with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+             patch("job_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
             mock_api.side_effect = RuntimeError("API unavailable")
             mock_dom.return_value = dom_jobs
 
@@ -346,6 +357,7 @@ class TestHireMeTechSource:
     async def test_fetch_jobs_with_preferences_filtering(self) -> None:
         mock_sm = MagicMock()
         mock_page = MagicMock()
+        mock_sm.ensure_ready = AsyncMock(return_value=mock_page)
         mock_sm.get_page = AsyncMock(return_value=mock_page)
         source = HireMeTechSource(session_manager=mock_sm)
 
@@ -366,7 +378,7 @@ class TestHireMeTechSource:
             ),
         ]
 
-        with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api:
+        with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api:
             mock_api.return_value = raw_jobs
             prefs = JobPreferences(tech_stack=["Python"], work_mode=WorkMode.REMOTE)
             filtered = await source.fetch_jobs(preferences=prefs, limit=10)

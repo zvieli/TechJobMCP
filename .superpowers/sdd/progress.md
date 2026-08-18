@@ -22,3 +22,6 @@ Multi-Source Task 3: complete (commits ce8a391..b848292, review clean)
 Multi-Source Task 4: complete (commits b848292..75dc3ff, review clean)
 Multi-Source Task 5: complete, review clean
 
+Spark Timeout Fix Task 1: complete (commits 3211ee1..3026ef2, review clean)
+Spark Timeout Fix Task 2: complete (commits 3026ef2..8d8be88, review clean)
+Spark Timeout Fix Task 3: complete

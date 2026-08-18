@@ -78,29 +78,48 @@ class HireMeTechSource(BaseJobSource):
         Returns:
             list[Job]: List of Job listings tagged with 'hiremetech' source.
         """
-        page = await self.session_manager.get_page()
+        if not self.session_manager:
+            return []
+
+        try:
+            if hasattr(self.session_manager, "ensure_ready") and callable(self.session_manager.ensure_ready):
+                res = self.session_manager.ensure_ready(max_retries=1)
+                if asyncio.iscoroutine(res):
+                    page = await asyncio.wait_for(res, timeout=2.0)
+                else:
+                    page = res
+            else:
+                page = await self.session_manager.get_page()
+        except Exception as exc:
+            logger.debug("HireMeTech session check skipped/failed: %s", exc)
+            return []
+
         jobs: list[Job] = []
 
         # 1. Primary data source: Direct API fetch (~100-200ms)
         try:
-            jobs = await fetch_jobs_via_api(page.request, size=limit)
+            jobs = await asyncio.wait_for(fetch_jobs_via_api(page.request, size=limit), timeout=2.5)
         except Exception as exc:
             logger.debug("Direct API fetch failed or timed out, falling back to DOM scraping: %s", exc)
+            jobs = []
 
         # 2. Fallback: Browser DOM scraping
         if not jobs:
             try:
                 target_url = f"{BASE_URL}{DASHBOARD_PATH}"
                 if hasattr(page, "url") and DASHBOARD_PATH not in (page.url or ""):
-                    await page.goto(target_url, wait_until="commit", timeout=10000)
+                    if hasattr(page, "goto") and callable(page.goto):
+                        await page.goto(target_url, wait_until="commit", timeout=5000)
                     if hasattr(page, "wait_for_timeout") and callable(page.wait_for_timeout):
-                        t = page.wait_for_timeout(2500)
+                        t = page.wait_for_timeout(1000)
                         if asyncio.iscoroutine(t):
                             await t
 
-                jobs = await browser_extract_jobs(page)
+                if hasattr(page, "request"):
+                    jobs = await asyncio.wait_for(browser_extract_jobs(page), timeout=3.0)
             except (asyncio.TimeoutError, TimeoutError):
-                raise
+                logger.warning("DOM extraction fallback timed out.")
+                jobs = []
             except Exception as exc:
                 logger.warning("DOM extraction fallback failed: %s", exc)
                 jobs = []

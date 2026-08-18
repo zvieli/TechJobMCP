@@ -101,8 +101,9 @@ class TestHebrewSelectorsAndDiscovery(unittest.IsolatedAsyncioTestCase):
             return MockLocator(count_val=0, text="")
 
         card.locator = mock_locator
+        card.locator = mock_locator
         # Clear cached dynamic registry for test isolation
-        with patch("hireme_mcp.core.browser.dynamic_registry", DynamicSelectorRegistry(file_path="/tmp/test_reg.json")):
+        with patch("job_mcp.core.browser.dynamic_registry", DynamicSelectorRegistry(file_path="/tmp/test_reg.json")):
             resolved = await _resolve_selector(card, "bookmark_button")
             self.assertTrue("שמור" in resolved or "שמירה" in resolved)
 
@@ -227,8 +228,8 @@ class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
             )
         ]
 
-    @patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api")
-    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
+    @patch("job_mcp.sources.hiremetech.fetch_jobs_via_api")
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_warm_cache_populates_cache_when_authenticated(self, mock_extract, mock_api):
         """Verify _warm_cache navigates and updates JobCache when session is healthy."""
         mock_api.side_effect = RuntimeError("API unavailable")
@@ -247,10 +248,10 @@ class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(cache.get_all()), 1)
         self.assertEqual(cache.get_all()[0].job_id, "job-warmup-1")
-        mock_page.goto.assert_called_once_with(f"{BASE_URL}{DASHBOARD_PATH}", wait_until="commit", timeout=10000)
+        mock_page.goto.assert_called_once_with(f"{BASE_URL}{DASHBOARD_PATH}", wait_until="commit", timeout=5000)
         mock_extract.assert_called_once_with(mock_page)
 
-    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_warm_cache_handles_unauthenticated_gracefully(self, mock_extract):
         """Verify _warm_cache does not raise and leaves cache empty if ensure_ready fails."""
         mock_session = AsyncMock(spec=SessionManager)
@@ -263,8 +264,8 @@ class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(cache.get_all()), 0)
         mock_extract.assert_not_called()
 
-    @patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api")
-    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
+    @patch("job_mcp.sources.hiremetech.fetch_jobs_via_api")
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_warm_cache_handles_extraction_error_gracefully(self, mock_extract, mock_api):
         """Verify _warm_cache catches unexpected extraction exceptions without crashing."""
         mock_api.side_effect = RuntimeError("API unavailable")
@@ -282,7 +283,7 @@ class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
 
     @patch.object(SessionManager, "initialize", new_callable=AsyncMock)
     @patch.object(SessionManager, "shutdown", new_callable=AsyncMock)
-    @patch("hireme_mcp.main._warm_cache", new_callable=AsyncMock)
+    @patch("job_mcp.main._warm_cache", new_callable=AsyncMock)
     async def test_browser_lifespan_starts_and_cancels_warmup(self, mock_warm, mock_shutdown, mock_init):
         """Verify browser_lifespan starts _warm_cache task and cleanly handles shutdown."""
         mock_init.return_value = None
@@ -308,8 +309,8 @@ class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
 class TestScrapingTimeoutSafeguards(unittest.IsolatedAsyncioTestCase):
     """Tests for scraping timeout safeguards preventing DevTunnel / client timeouts."""
 
-    @patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api")
-    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
+    @patch("job_mcp.sources.hiremetech.fetch_jobs_via_api")
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_handles_timeout(self, mock_extract, mock_api):
         """Verify get_job_matches returns error when scraping exceeds timeout limit."""
         mock_api.side_effect = RuntimeError("API unavailable")
@@ -341,7 +342,7 @@ class TestScrapingTimeoutSafeguards(unittest.IsolatedAsyncioTestCase):
         }
 
         # Use patch to shorten timeout and trigger wait_for timeout
-        with patch("hireme_mcp.main._SCRAPE_TIMEOUT_SECONDS", 0.05):
+        with patch("job_mcp.main._SCRAPE_TIMEOUT_SECONDS", 0.05):
             res = await get_job_matches(force_refresh=True, ctx=ctx)
             self.assertFalse(res["success"])
             self.assertEqual(res["error_code"], "FETCH_ERROR")

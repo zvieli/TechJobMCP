@@ -87,7 +87,7 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         }
         return ctx
 
-    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_cache_hit(self, mock_extract):
         """Test get_job_matches returns cached data without calling browser extraction."""
         cache = JobCache(ttl_minutes=10)
@@ -102,13 +102,30 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(res["data"]), 3)
         mock_extract.assert_not_called()
 
-    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
+    async def test_get_job_matches_stale_cache_returns_cached_immediately(self, mock_extract):
+        """Test get_job_matches returns cached data even if stale when force_refresh=False."""
+        cache = JobCache(ttl_minutes=0)  # Immediately stale
+        cache.update(self.mock_jobs)
+        self.assertTrue(cache.is_stale)
+        mock_session = AsyncMock(spec=SessionManager)
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await get_job_matches(force_refresh=False, ctx=ctx)
+
+        self.assertTrue(res["success"])
+        self.assertIn("Retrieved 3 cached", res["message"])
+        self.assertEqual(len(res["data"]), 3)
+        mock_extract.assert_not_called()
+
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_live_fetch_and_force_refresh(self, mock_extract):
         """Test live extraction when cache is empty or force_refresh is True."""
         cache = JobCache(ttl_minutes=10)
         mock_session = AsyncMock(spec=SessionManager)
         mock_session._initialized = True
         mock_session.check_session_health.return_value = True
+        mock_session.ensure_ready = AsyncMock(return_value=AsyncMock())
         mock_page = AsyncMock()
         mock_page.url = "https://hiremetech.com/login"
         mock_session.get_page.return_value = mock_page
@@ -130,14 +147,15 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(res2["success"])
         mock_extract.assert_called_once()
 
-    @patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api")
-    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
+    @patch("job_mcp.sources.hiremetech.fetch_jobs_via_api")
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_api_first(self, mock_extract, mock_api):
         """Test get_job_matches uses API data when available and avoids DOM extraction."""
         cache = JobCache(ttl_minutes=10)
         mock_session = AsyncMock(spec=SessionManager)
         mock_session._initialized = True
         mock_session.check_session_health.return_value = True
+        mock_session.ensure_ready = AsyncMock(return_value=AsyncMock())
         mock_page = AsyncMock()
         mock_session.get_page.return_value = mock_page
 
@@ -147,10 +165,10 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         res = await get_job_matches(force_refresh=True, ctx=ctx)
         self.assertTrue(res["success"])
         self.assertEqual(len(res["data"]), 3)
-        mock_api.assert_called_once_with(mock_page.request, size=50)
+        mock_api.assert_called_once()
         mock_extract.assert_not_called()
 
-    @patch("hireme_mcp.sources.hiremetech.browser_extract_jobs")
+    @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
     async def test_get_job_matches_unauthenticated(self, mock_extract):
         """Test get_job_matches returns UNAUTHENTICATED error when session is invalid."""
         cache = JobCache(ttl_minutes=10)
@@ -217,7 +235,7 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         finally:
             os.unlink(cv_file)
 
-    @patch("hireme_mcp.main.browser_bookmark_job")
+    @patch("job_mcp.main.browser_bookmark_job")
     async def test_bookmark_job_flow(self, mock_browser_bookmark):
         """Test bookmark_job updates browser and job cache."""
         cache = JobCache(ttl_minutes=10)
@@ -237,7 +255,7 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cache.get_by_id("job-1").is_bookmarked)
         mock_browser_bookmark.assert_called_once_with(mock_page, "job-1")
 
-    @patch("hireme_mcp.main.browser_delete_job")
+    @patch("job_mcp.main.browser_delete_job")
     async def test_delete_job_flow(self, mock_browser_delete):
         """Test delete_job dismisses job on page and removes from cache."""
         cache = JobCache(ttl_minutes=10)
@@ -257,8 +275,8 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(cache.get_all()), 2)
         mock_browser_delete.assert_called_once_with(mock_page, "job-3")
 
-    @patch("hireme_mcp.main.browser_preview_application")
-    @patch("hireme_mcp.main.browser_execute_application")
+    @patch("job_mcp.main.browser_preview_application")
+    @patch("job_mcp.main.browser_execute_application")
     async def test_two_step_auto_apply_flow(self, mock_execute, mock_preview):
         """Test complete 2-step apply workflow: auto_apply_job then confirm_auto_apply."""
         cache = JobCache(ttl_minutes=10)

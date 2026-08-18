@@ -519,8 +519,8 @@ async def test_warm_cache_api_success():
 
     cache = JobCache(ttl_minutes=15)
 
-    with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-         patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+    with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("job_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.return_value = sample_jobs
 
         await _warm_cache(mock_session, cache)
@@ -550,8 +550,8 @@ async def test_warm_cache_api_failure_fallback_to_dom():
 
     cache = JobCache(ttl_minutes=15)
 
-    with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-         patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+    with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("job_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.side_effect = RuntimeError("API 500 Error")
         mock_dom.return_value = sample_jobs
 
@@ -579,8 +579,8 @@ async def test_get_job_matches_api_success():
 
     cache = JobCache(ttl_minutes=10)
     mock_session = AsyncMock()
-    mock_session.ensure_ready.return_value = AsyncMock()
     mock_page = AsyncMock()
+    mock_session.ensure_ready.return_value = mock_page
     mock_session.get_page.return_value = mock_page
 
     reg = SourceRegistry()
@@ -595,8 +595,8 @@ async def test_get_job_matches_api_success():
         "aggregator": agg,
     }
 
-    with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-         patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+    with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("job_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.return_value = sample_jobs
 
         res = await get_job_matches(force_refresh=True, ctx=ctx)
@@ -623,9 +623,9 @@ async def test_get_job_matches_api_failure_fallback_to_dom():
 
     cache = JobCache(ttl_minutes=10)
     mock_session = AsyncMock()
-    mock_session.ensure_ready.return_value = AsyncMock()
     mock_page = AsyncMock()
     mock_page.url = "https://hiremetech.com/login"
+    mock_session.ensure_ready.return_value = mock_page
     mock_session.get_page.return_value = mock_page
 
     reg = SourceRegistry()
@@ -640,8 +640,8 @@ async def test_get_job_matches_api_failure_fallback_to_dom():
         "aggregator": agg,
     }
 
-    with patch("hireme_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
-         patch("hireme_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
+    with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+         patch("job_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.side_effect = RuntimeError("API service unavailable")
         mock_dom.return_value = sample_jobs
 
@@ -669,14 +669,14 @@ async def test_filter_jobs_by_preferences_supplements_skills_from_resume_profile
     ])
 
     mock_session = AsyncMock()
-    mock_session.ensure_ready.return_value = AsyncMock()
     mock_page = AsyncMock()
+    mock_session.ensure_ready.return_value = mock_page
     mock_session.get_page.return_value = mock_page
 
     ctx = MagicMock(spec=Context)
     ctx.lifespan_context = {"session": mock_session, "cache": cache}
 
-    with patch("hireme_mcp.main.fetch_user_resume_profile", new_callable=AsyncMock) as mock_profile:
+    with patch("job_mcp.main.fetch_user_resume_profile", new_callable=AsyncMock) as mock_profile:
         mock_profile.return_value = {"technical_skills": ["Python", "FastAPI"]}
 
         res = await filter_jobs_by_preferences(ctx=ctx)

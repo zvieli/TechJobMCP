@@ -50,7 +50,7 @@ class TestAuth(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(str(manager.user_data_dir), "/tmp/test_profile")
         self.assertFalse(manager.headless)
 
-    @patch("hireme_mcp.core.auth.async_playwright")
+    @patch("job_mcp.core.auth.async_playwright")
     async def test_session_manager_lifecycle(self, mock_async_playwright):
         mock_pw = AsyncMock()
         mock_context = AsyncMock()

@@ -354,15 +354,15 @@ class TestCalibrateSelectorsTool(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         dynamic_registry.clear()
 
-    @patch("hireme_mcp.main._ensure_session")
+    @patch("job_mcp.main._ensure_session")
     async def test_calibrate_selectors_unauthenticated(self, mock_ensure_session):
         mock_ensure_session.return_value = (MagicMock(), False)
         resp = await calibrate_selectors()
         self.assertFalse(resp["success"])
         self.assertEqual(resp["error_code"], "UNAUTHENTICATED")
 
-    @patch("hireme_mcp.main._ensure_session")
-    @patch("hireme_mcp.main.calibrate_all_selectors")
+    @patch("job_mcp.main._ensure_session")
+    @patch("job_mcp.main.calibrate_all_selectors")
     async def test_calibrate_selectors_success(self, mock_calibrate, mock_ensure_session):
         mock_session = MagicMock()
         mock_page = MagicMock()
@@ -382,7 +382,7 @@ class TestCalibrateSelectorsTool(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Calibrated 2/2 selectors successfully", resp["message"])
         self.assertEqual(resp["data"]["matched_count"], 2)
 
-    @patch("hireme_mcp.main._ensure_session")
+    @patch("job_mcp.main._ensure_session")
     async def test_calibrate_selectors_exception_handling(self, mock_ensure_session):
         mock_session = MagicMock()
         mock_session.get_page = AsyncMock(side_effect=RuntimeError("Browser page crashed"))
