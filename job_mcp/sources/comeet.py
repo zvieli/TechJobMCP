@@ -216,7 +216,9 @@ class ComeetSource(BaseJobSource):
         async with self.semaphore:
             url = f"https://www.comeet.co/careers-api/2.0/company/{company.uid}/positions"
             params = {"token": company.token, "details": "true"}
+            t0 = time.perf_counter()
             response = await client.get(url, params=params, timeout=self.timeout)
+            duration_ms = (time.perf_counter() - t0) * 1000.0
             if response.status_code != 200:
                 logger.warning(
                     "Comeet API error for %s (%s): HTTP %d",
@@ -240,6 +242,16 @@ class ComeetSource(BaseJobSource):
                         exc,
                     )
 
+            company_name = company.name if hasattr(company, "name") else (company.get("name", "") if isinstance(company, dict) else str(company))
+            logger.info(
+                "HTTP ATS request completed",
+                url=url,
+                status=response.status_code,
+                duration_ms=round(duration_ms, 2),
+                company=company_name,
+                positions_count=len(parsed_jobs),
+                source="comeet",
+            )
             self._cache[company.uid] = (now, parsed_jobs)
             return parsed_jobs
 

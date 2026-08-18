@@ -112,3 +112,146 @@ class TestToolResponseTraceId:
         resp = ToolResponse(success=True, message="ok", trace_id="ef567890")
         d = resp.model_dump()
         assert d["trace_id"] == "ef567890"
+
+
+class TestSourceHttpTelemetry:
+    """Unit tests for outbound HTTP request telemetry across job sources."""
+
+    @pytest.mark.asyncio
+    async def test_hiremetech_api_fetch_telemetry(self, capfd):
+        from unittest.mock import AsyncMock
+        from job_mcp.core.api_client import fetch_jobs_via_api
+
+        mock_response = AsyncMock()
+        mock_response.status = 200
+        mock_response.json = AsyncMock(return_value={
+            "jobs": [
+                {"id": "1", "title": "Python Dev", "company_name": "Acme"},
+                {"id": "2", "title": "Frontend Dev", "company_name": "Beta"},
+            ]
+        })
+        mock_request = AsyncMock()
+        mock_request.get = AsyncMock(return_value=mock_response)
+
+        jobs = await fetch_jobs_via_api(mock_request, page=1, size=10)
+        assert len(jobs) == 2
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        events = [l for l in lines if l.get("event") == "HTTP API request completed"]
+        assert len(events) >= 1
+        event = events[-1]
+        assert event["source"] == "hiremetech"
+        assert event["status"] == 200
+        assert event["jobs_count"] == 2
+        assert isinstance(event["duration_ms"], (int, float))
+        assert "url" in event
+
+    @pytest.mark.asyncio
+    async def test_comeet_http_ats_telemetry(self, capfd):
+        from unittest.mock import AsyncMock, MagicMock
+        import httpx
+        from job_mcp.sources.comeet import ComeetSource, ComeetCompany
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [
+            {"position_uid": "p1", "name": "DevOps Engineer", "location": "Tel Aviv"}
+        ]
+        mock_client.get.return_value = mock_resp
+
+        company = ComeetCompany(uid="c1", name="TestCo", token="tok123")
+        source = ComeetSource(companies=[company], client=mock_client)
+
+        jobs = await source.fetch_jobs(limit=10)
+        assert len(jobs) == 1
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        events = [l for l in lines if l.get("event") == "HTTP ATS request completed"]
+        assert len(events) >= 1
+        event = events[-1]
+        assert event["source"] == "comeet"
+        assert event["status"] == 200
+        assert event["company"] == "TestCo"
+        assert event["positions_count"] == 1
+        assert isinstance(event["duration_ms"], (int, float))
+        assert "url" in event
+
+    @pytest.mark.asyncio
+    async def test_alljobs_http_feed_telemetry(self, capfd):
+        from unittest.mock import AsyncMock, MagicMock
+        import httpx
+        from job_mcp.sources.alljobs import AllJobsSource
+
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        cat_resp = MagicMock(spec=httpx.Response)
+        cat_resp.status_code = 200
+        cat_resp.url = "https://www.alljobs.co.il/SearchResultsMobile.ashx?action=getSearchEngineData"
+        cat_resp.json.return_value = {"Categories": [{"CategoryID": 235, "CategoryName": "Software"}]}
+
+        feed_resp = MagicMock(spec=httpx.Response)
+        feed_resp.status_code = 200
+        feed_resp.url = "https://www.alljobs.co.il/SearchResultsMobile.ashx?action=getJobs"
+        feed_resp.json.return_value = {
+            "Jobs": [
+                {"JobID": 101, "JobTitle": "Backend", "CompanyName": "Alpha"}
+            ]
+        }
+
+        async def _mock_get(url, **kwargs):
+            if "categories" in kwargs.get("params", {}):
+                return cat_resp
+            return feed_resp
+
+        mock_client.get.side_effect = _mock_get
+        source = AllJobsSource(client=mock_client)
+
+        jobs = await source.fetch_jobs(limit=10)
+        assert len(jobs) == 1
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        feed_events = [l for l in lines if l.get("event") == "HTTP feed request completed"]
+        assert len(feed_events) >= 1
+        for ev in feed_events:
+            assert ev["source"] == "alljobs"
+            assert ev["status"] == 200
+            assert "items_count" in ev
+            assert isinstance(ev["duration_ms"], (int, float))
+            assert "url" in ev
+
+    @pytest.mark.asyncio
+    async def test_aggregator_source_fetch_telemetry(self, capfd):
+        from job_mcp.models.schemas import Job
+        from job_mcp.sources.base import BaseJobSource
+        from job_mcp.sources import SourceRegistry
+        from job_mcp.sources.aggregator import JobAggregator
+
+        class MockSource(BaseJobSource):
+            source_id = "test_src"
+            display_name = "Test Source"
+
+            async def fetch_jobs(self, preferences=None, limit=50):
+                return [Job(job_id="s1", title="Engineer", company="Company")]
+
+            async def check_health(self):
+                return True
+
+        registry = SourceRegistry()
+        registry.register(MockSource())
+        aggregator = JobAggregator(registry=registry)
+
+        jobs = await aggregator.fetch_all_jobs()
+        assert len(jobs) == 1
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        agg_events = [l for l in lines if l.get("event") == "Source fetch completed"]
+        assert len(agg_events) >= 1
+        event = agg_events[-1]
+        assert event["source_id"] == "test_src"
+        assert event["jobs_count"] == 1
+        assert isinstance(event["duration_ms"], (int, float))
+

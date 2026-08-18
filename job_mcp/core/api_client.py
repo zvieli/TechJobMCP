@@ -713,7 +713,9 @@ async def fetch_jobs_via_api(
     """
     url = f"{BASE_URL}/api/jobs/search?page={page}&size={size}&sort_by={sort_by}&sort_order={sort_order}&country=Israel&israeli=true"
     logger.info("Fetching jobs from API: %s", url)
+    t0 = time.perf_counter()
     resp = await request_context.get(url)
+    duration_ms = (time.perf_counter() - t0) * 1000.0
     if resp.status != 200:
         error_msg = f"HireMe API returned status {resp.status} for {url}"
         logger.warning(error_msg)
@@ -725,7 +727,14 @@ async def fetch_jobs_via_api(
         raw_jobs = data["data"]
 
     jobs = [parse_api_job_dict(item) for item in raw_jobs if isinstance(item, dict)]
-    logger.info("Successfully fetched and parsed %d jobs from API", len(jobs))
+    logger.info(
+        "HTTP API request completed",
+        url=url,
+        status=resp.status,
+        duration_ms=round(duration_ms, 2),
+        jobs_count=len(jobs),
+        source="hiremetech",
+    )
     return jobs
 
 

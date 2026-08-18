@@ -264,12 +264,14 @@ class AllJobsSource(BaseJobSource):
         params = {"action": "getSearchEngineData", "categories": "true"}
 
         try:
+            t0 = time.perf_counter()
             response = await active_client.get(
                 url,
                 params=params,
                 headers=self.headers,
                 timeout=self.timeout,
             )
+            duration_ms = (time.perf_counter() - t0) * 1000.0
             if response.status_code != 200:
                 logger.warning("AllJobs getSearchEngineData returned status %d", response.status_code)
                 return dict(self._categories_cache) if self._categories_cache else dict(DEFAULT_TECH_CATEGORIES)
@@ -292,6 +294,15 @@ class AllJobsSource(BaseJobSource):
                         parsed_cats[str(cname)] = int(cid)
                     except (ValueError, TypeError):
                         pass
+
+            logger.info(
+                "HTTP feed request completed",
+                url=str(response.url),
+                status=response.status_code,
+                duration_ms=round(duration_ms, 2),
+                items_count=len(parsed_cats),
+                source="alljobs",
+            )
 
             if parsed_cats:
                 self._categories_cache = parsed_cats
@@ -360,12 +371,14 @@ class AllJobsSource(BaseJobSource):
 
         url = f"{self.base_url}{SEARCH_MOBILE_ENDPOINT}"
         try:
+            t0 = time.perf_counter()
             response = await client.get(
                 url,
                 params=params,
                 headers=self.headers,
                 timeout=self.timeout,
             )
+            duration_ms = (time.perf_counter() - t0) * 1000.0
             if response.status_code != 200:
                 logger.warning(
                     "AllJobs search feed returned status %d for params %s",
@@ -406,6 +419,14 @@ class AllJobsSource(BaseJobSource):
                 except Exception as exc:
                     logger.warning("Error parsing AllJobs position: %s", exc)
 
+            logger.info(
+                "HTTP feed request completed",
+                url=str(response.url),
+                status=response.status_code,
+                duration_ms=round(duration_ms, 2),
+                items_count=len(parsed_jobs),
+                source="alljobs",
+            )
             self._feed_cache[param_key] = (now, parsed_jobs)
             return parsed_jobs
         except Exception as exc:

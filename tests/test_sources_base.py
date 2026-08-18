@@ -384,3 +384,33 @@ class TestHireMeTechSource:
             filtered = await source.fetch_jobs(preferences=prefs, limit=10)
             assert len(filtered) == 1
             assert filtered[0].job_id == "job-py"
+
+    @pytest.mark.asyncio
+    async def test_fetch_jobs_via_api_telemetry_logging(self, capfd) -> None:
+        import json
+        from job_mcp.core.api_client import fetch_jobs_via_api
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(return_value={
+            "jobs": [
+                {"id": "job-100", "title": "Lead Architect", "company_name": "CloudNine"},
+            ]
+        })
+        mock_request = AsyncMock()
+        mock_request.get = AsyncMock(return_value=mock_resp)
+
+        jobs = await fetch_jobs_via_api(mock_request, page=1, size=10)
+        assert len(jobs) == 1
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        telemetry = [l for l in lines if l.get("event") == "HTTP API request completed"]
+        assert len(telemetry) >= 1
+        ev = telemetry[-1]
+        assert ev["source"] == "hiremetech"
+        assert ev["status"] == 200
+        assert ev["jobs_count"] == 1
+        assert "duration_ms" in ev
+        assert "url" in ev
+

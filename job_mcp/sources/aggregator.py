@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, Optional
 
 from job_mcp.core.api_client import JobCache, filter_jobs
@@ -97,11 +98,20 @@ class JobAggregator:
         )
 
         async def _fetch_with_timeout(src: BaseJobSource) -> list[Job]:
+            t0 = time.perf_counter()
             try:
-                return await asyncio.wait_for(
+                jobs = await asyncio.wait_for(
                     src.fetch_jobs(preferences=preferences, limit=limit_per_source),
                     timeout=self.source_timeout,
                 )
+                duration_ms = (time.perf_counter() - t0) * 1000.0
+                logger.info(
+                    "Source fetch completed",
+                    source_id=src.source_id,
+                    jobs_count=len(jobs),
+                    duration_ms=round(duration_ms, 2),
+                )
+                return jobs
             except asyncio.TimeoutError:
                 logger.warning(
                     "Source '%s' timed out after %.1fs.",
