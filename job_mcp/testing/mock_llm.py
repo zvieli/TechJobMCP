@@ -1,0 +1,394 @@
+"""Mock LLM Agent and execution engine for HireMeTech MCP testing."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Any, Callable, Optional
+
+from fastmcp import Context
+from pydantic import BaseModel, Field
+
+from job_mcp.main import (
+    auto_apply_job,
+    bookmark_job,
+    calibrate_selectors,
+    confirm_auto_apply,
+    delete_job,
+    filter_jobs_by_preferences,
+    get_job_matches,
+    list_job_sources,
+    set_operation_mode,
+)
+
+
+class StepTrace(BaseModel):
+    """Execution step trace recorded during tool invocation or reasoning."""
+
+    step_number: int
+    thought: str = ""
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    response: dict[str, Any] = Field(default_factory=dict)
+    duration_ms: float = 0.0
+
+
+class PipelineResult(BaseModel):
+    """Structured outcome of an end-to-end LLM job hunt pipeline execution."""
+
+    success: bool
+    steps: list[StepTrace] = Field(default_factory=list)
+    sources_found: list[str] = Field(default_factory=list)
+    total_jobs_fetched: int = 0
+    top_tier_jobs: list[dict[str, Any]] = Field(default_factory=list)
+    strong_match_jobs: list[dict[str, Any]] = Field(default_factory=list)
+    bookmarked_job_ids: list[str] = Field(default_factory=list)
+    staged_apply_ids: list[str] = Field(default_factory=list)
+    confirmed_apply_ids: list[str] = Field(default_factory=list)
+    deleted_job_ids: list[str] = Field(default_factory=list)
+    execution_time_ms: float = 0.0
+
+
+TOOL_DISPATCH: dict[str, Callable[..., Any]] = {
+    "list_job_sources": list_job_sources,
+    "get_job_matches": get_job_matches,
+    "filter_jobs_by_preferences": filter_jobs_by_preferences,
+    "bookmark_job": bookmark_job,
+    "delete_job": delete_job,
+    "auto_apply_job": auto_apply_job,
+    "confirm_auto_apply": confirm_auto_apply,
+    "set_operation_mode": set_operation_mode,
+    "calibrate_selectors": calibrate_selectors,
+}
+
+
+class MockLLMAgent:
+    """Mock LLM Agent simulating autonomous job search, matching, and application."""
+
+    def __init__(
+        self,
+        mcp_server: Optional[Any] = None,
+        cv_path: Optional[str] = None,
+        context: Optional[Context] = None,
+    ) -> None:
+        """Initialize the MockLLMAgent.
+
+        Args:
+            mcp_server: Optional FastMCP server instance or client reference.
+            cv_path: Optional path to candidate's CV file.
+            context: Optional FastMCP Context object for tool execution.
+        """
+        self.mcp_server = mcp_server
+        self.cv_path = cv_path
+        self.context = context
+        self.history: list[StepTrace] = []
+
+    def reset_history(self) -> None:
+        """Clear recorded step history."""
+        self.history.clear()
+
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: Optional[dict[str, Any]] = None,
+        thought: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Execute a tool function by name, measure duration, and log a StepTrace.
+
+        Args:
+            tool_name: Name of tool to execute.
+            arguments: Dictionary of arguments to pass to the tool.
+            thought: Optional reasoning thought string for this step.
+
+        Returns:
+            dict[str, Any]: Response dictionary returned by the tool.
+        """
+        args = dict(arguments or {})
+        start_time = time.perf_counter()
+
+        func = TOOL_DISPATCH.get(tool_name)
+        if func is None:
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            error_response = {
+                "success": False,
+                "message": f"Unknown tool: '{tool_name}'",
+                "error_code": "UNKNOWN_TOOL",
+            }
+            trace = StepTrace(
+                step_number=len(self.history) + 1,
+                thought=thought or f"Calling tool {tool_name}",
+                tool_name=tool_name,
+                arguments=args,
+                response=error_response,
+                duration_ms=round(duration_ms, 2),
+            )
+            self.history.append(trace)
+            return error_response
+
+        # Pass context if provided and not explicitly set in args
+        call_kwargs = dict(args)
+        if "ctx" not in call_kwargs and self.context is not None:
+            call_kwargs["ctx"] = self.context
+
+        try:
+            raw_res = func(**call_kwargs)
+            if asyncio.iscoroutine(raw_res):
+                res = await raw_res
+            else:
+                res = raw_res
+
+            if hasattr(res, "model_dump"):
+                res = res.model_dump()
+            elif not isinstance(res, dict):
+                res = {"data": res, "success": True}
+        except Exception as exc:
+            res = {
+                "success": False,
+                "message": f"Error executing tool '{tool_name}': {exc}",
+                "error_code": "TOOL_EXECUTION_ERROR",
+            }
+
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        trace = StepTrace(
+            step_number=len(self.history) + 1,
+            thought=thought or f"Calling tool {tool_name}",
+            tool_name=tool_name,
+            arguments=args,
+            response=res,
+            duration_ms=round(duration_ms, 2),
+        )
+        self.history.append(trace)
+        return res
+
+    async def run_pipeline(
+        self,
+        tech_stack: Optional[list[str]] = None,
+        exclude_keywords: Optional[list[str]] = None,
+        cv_path: Optional[str] = None,
+        top_tier_threshold: int = 85,
+        strong_match_threshold: int = 70,
+        auto_apply: bool = True,
+        target_roles: Optional[list[str]] = None,
+        work_mode: Optional[str] = None,
+        location: Optional[str] = None,
+        min_salary: Optional[int] = None,
+        keywords: Optional[list[str]] = None,
+        force_refresh: bool = False,
+        disqualify_threshold: int = 50,
+    ) -> PipelineResult:
+        """Run an end-to-end autonomous job hunting pipeline.
+
+        Pipeline workflow:
+        1. Discover available job platforms via `list_job_sources`.
+        2. Fetch aggregated job listings across platforms via `get_job_matches`.
+        3. Score and rank jobs against user preferences and CV via `filter_jobs_by_preferences`.
+        4. Bookmark and auto-apply (preview + confirm) to Top-Tier jobs (score >= top_tier_threshold).
+        5. Bookmark Strong Match jobs (strong_match_threshold <= score < top_tier_threshold).
+        6. Delete/dismiss disqualified jobs (score < disqualify_threshold or excluded).
+
+        Args:
+            tech_stack: Target technologies (e.g. ['Python', 'FastAPI']).
+            exclude_keywords: Keywords to exclude/filter out.
+            cv_path: Path to CV file (overrides self.cv_path if specified).
+            top_tier_threshold: Minimum match score for top-tier jobs (default: 85).
+            strong_match_threshold: Minimum match score for strong match jobs (default: 70).
+            auto_apply: Whether to automatically preview and confirm top-tier applications.
+            target_roles: Target job roles or titles to search for.
+            work_mode: Work mode filter ('remote', 'hybrid', 'onsite').
+            location: Location filter string.
+            min_salary: Minimum desired annual salary.
+            keywords: Additional keywords to match.
+            force_refresh: Force refresh scraping from live sources.
+            disqualify_threshold: Score below which jobs are considered disqualified (default: 50).
+
+        Returns:
+            PipelineResult: Comprehensive execution results and traces.
+        """
+        pipeline_start_step_idx = len(self.history)
+        pipeline_start_time = time.perf_counter()
+
+        effective_cv = cv_path or self.cv_path
+        combined_keywords = list(keywords or [])
+        if target_roles:
+            for r in target_roles:
+                if r not in combined_keywords:
+                    combined_keywords.append(r)
+
+        sources_found: list[str] = []
+        total_jobs_fetched: int = 0
+        top_tier_jobs: list[dict[str, Any]] = []
+        strong_match_jobs: list[dict[str, Any]] = []
+        bookmarked_job_ids: list[str] = []
+        staged_apply_ids: list[str] = []
+        confirmed_apply_ids: list[str] = []
+        deleted_job_ids: list[str] = []
+
+        # Step 1: Discover available platforms
+        res1 = await self.call_tool(
+            "list_job_sources",
+            arguments={},
+            thought="Discovering available job platforms...",
+        )
+        if res1.get("success"):
+            data1 = res1.get("data")
+            if isinstance(data1, dict):
+                for s in data1.get("sources", []):
+                    if isinstance(s, dict):
+                        sid = s.get("source_id") or s.get("name")
+                        if sid:
+                            sources_found.append(sid)
+                    elif isinstance(s, str):
+                        sources_found.append(s)
+
+        # Step 2: Fetch aggregated jobs
+        res2 = await self.call_tool(
+            "get_job_matches",
+            arguments={"force_refresh": force_refresh},
+            thought="Fetching aggregated jobs across sources...",
+        )
+        raw_jobs: list[dict[str, Any]] = []
+        if res2.get("success"):
+            data2 = res2.get("data", [])
+            if isinstance(data2, list):
+                raw_jobs = data2
+                total_jobs_fetched = len(raw_jobs)
+
+        # Step 3: Scoring jobs against preferences and CV
+        filter_args: dict[str, Any] = {}
+        if tech_stack is not None:
+            filter_args["tech_stack"] = tech_stack
+        if exclude_keywords is not None:
+            filter_args["exclude_keywords"] = exclude_keywords
+        if effective_cv is not None:
+            filter_args["cv_path"] = effective_cv
+        if work_mode is not None:
+            filter_args["work_mode"] = work_mode
+        if location is not None:
+            filter_args["location"] = location
+        if min_salary is not None:
+            filter_args["min_salary"] = min_salary
+        if combined_keywords:
+            filter_args["keywords"] = combined_keywords
+
+        res3 = await self.call_tool(
+            "filter_jobs_by_preferences",
+            arguments=filter_args,
+            thought="Scoring jobs against preferences and CV...",
+        )
+        scored_jobs: list[dict[str, Any]] = []
+        if res3.get("success"):
+            data3 = res3.get("data", [])
+            if isinstance(data3, list):
+                scored_jobs = data3
+
+        scored_job_ids = set()
+        for job in scored_jobs:
+            jid = job.get("job_id")
+            if jid:
+                scored_job_ids.add(jid)
+            score = job.get("match_score")
+            score_val = float(score) if score is not None else 0.0
+
+            if score_val >= top_tier_threshold:
+                top_tier_jobs.append(job)
+            elif score_val >= strong_match_threshold:
+                strong_match_jobs.append(job)
+
+        # Disqualified jobs: scored jobs with score < disqualify_threshold, plus raw jobs filtered out entirely
+        disqualified_jobs: list[dict[str, Any]] = []
+        seen_disqualified = set()
+
+        for job in scored_jobs:
+            score = job.get("match_score")
+            if score is not None and float(score) < disqualify_threshold:
+                jid = job.get("job_id")
+                if jid and jid not in seen_disqualified:
+                    disqualified_jobs.append(job)
+                    seen_disqualified.add(jid)
+
+        for job in raw_jobs:
+            jid = job.get("job_id")
+            if jid and jid not in scored_job_ids and jid not in seen_disqualified:
+                disqualified_jobs.append(job)
+                seen_disqualified.add(jid)
+
+        # Step 4: Processing Top-Tier jobs (score >= top_tier_threshold)
+        for job in top_tier_jobs:
+            jid = job.get("job_id")
+            if not jid:
+                continue
+            title = job.get("title", "Unknown")
+            company = job.get("company", "Unknown")
+            b_res = await self.call_tool(
+                "bookmark_job",
+                arguments={"job_id": jid},
+                thought=f"Processing Top-Tier jobs (score >= {top_tier_threshold}): bookmarking '{jid}' ({title} at {company})...",
+            )
+            if b_res.get("success"):
+                bookmarked_job_ids.append(jid)
+
+            if auto_apply:
+                a_res = await self.call_tool(
+                    "auto_apply_job",
+                    arguments={"job_id": jid},
+                    thought=f"Generating application preview for Top-Tier job '{jid}'...",
+                )
+                if a_res.get("success"):
+                    staged_apply_ids.append(jid)
+                    c_res = await self.call_tool(
+                        "confirm_auto_apply",
+                        arguments={"job_id": jid},
+                        thought=f"Confirming auto-apply for Top-Tier job '{jid}'...",
+                    )
+                    if c_res.get("success"):
+                        confirmed_apply_ids.append(jid)
+
+        # Step 5: Processing Strong Match jobs (strong_match_threshold <= score < top_tier_threshold)
+        for job in strong_match_jobs:
+            jid = job.get("job_id")
+            if not jid:
+                continue
+            title = job.get("title", "Unknown")
+            company = job.get("company", "Unknown")
+            b_res = await self.call_tool(
+                "bookmark_job",
+                arguments={"job_id": jid},
+                thought=f"Processing Strong Match jobs (score {strong_match_threshold}-{top_tier_threshold - 1}): bookmarking '{jid}' ({title} at {company})...",
+            )
+            if b_res.get("success"):
+                bookmarked_job_ids.append(jid)
+
+        # Step 6: Cleaning up disqualified jobs (score < disqualify_threshold or excluded)
+        for job in disqualified_jobs:
+            jid = job.get("job_id")
+            if not jid:
+                continue
+            d_res = await self.call_tool(
+                "delete_job",
+                arguments={"job_id": jid},
+                thought=f"Cleaning up disqualified jobs (score < {disqualify_threshold} or excluded): deleting '{jid}'...",
+            )
+            if d_res.get("success"):
+                deleted_job_ids.append(jid)
+
+        execution_time_ms = round((time.perf_counter() - pipeline_start_time) * 1000.0, 2)
+        pipeline_steps = self.history[pipeline_start_step_idx:]
+        pipeline_success = (
+            res1.get("success", False)
+            and res2.get("success", False)
+            and res3.get("success", False)
+        )
+
+        return PipelineResult(
+            success=pipeline_success,
+            steps=pipeline_steps,
+            sources_found=sources_found,
+            total_jobs_fetched=total_jobs_fetched,
+            top_tier_jobs=top_tier_jobs,
+            strong_match_jobs=strong_match_jobs,
+            bookmarked_job_ids=bookmarked_job_ids,
+            staged_apply_ids=staged_apply_ids,
+            confirmed_apply_ids=confirmed_apply_ids,
+            deleted_job_ids=deleted_job_ids,
+            execution_time_ms=execution_time_ms,
+        )
