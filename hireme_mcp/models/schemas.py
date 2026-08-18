@@ -2,7 +2,7 @@
 
 from enum import Enum
 from typing import Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WorkMode(str, Enum):
@@ -33,6 +33,18 @@ class Job(BaseModel):
     url: Optional[str] = None
     is_bookmarked: bool = False
     match_score: Optional[float] = None
+    source: str = "hiremetech"
+    sources: list[str] = Field(default_factory=lambda: ["hiremetech"])
+    apply_url: Optional[str] = None
+    department: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _sync_sources(self) -> "Job":
+        if self.source and self.source != "hiremetech" and self.sources == ["hiremetech"]:
+            self.sources = [self.source]
+        elif self.source and self.source not in self.sources:
+            self.sources.insert(0, self.source)
+        return self
 
 
 class JobPreferences(BaseModel):
