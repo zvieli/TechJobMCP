@@ -12,6 +12,13 @@ from hireme_mcp.sources.dedup import (
     normalize_company,
     normalize_title,
 )
+from hireme_mcp.sources.alljobs import (
+    ALLJOBS_BASE_URL,
+    ALLJOBS_HEADERS,
+    DEFAULT_TECH_CATEGORIES,
+    AllJobsSource,
+    parse_alljobs_position,
+)
 from hireme_mcp.sources.comeet import (
     DEFAULT_COMEET_COMPANIES,
     ComeetCompany,
@@ -121,6 +128,11 @@ __all__ = [
     "ComeetCompany",
     "DEFAULT_COMEET_COMPANIES",
     "parse_comeet_position",
+    "AllJobsSource",
+    "ALLJOBS_BASE_URL",
+    "ALLJOBS_HEADERS",
+    "DEFAULT_TECH_CATEGORIES",
+    "parse_alljobs_position",
     # Registry
     "SourceRegistry",
     "registry",
