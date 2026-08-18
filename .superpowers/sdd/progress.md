@@ -15,5 +15,6 @@ Hardening Task 1: complete (commits 8e727ad..e3eb74d, review clean)
 Hardening Task 2: complete (commits e3eb74d..3ac84b4, review clean)
 Direct API Task 1: complete (commits 45bf33e..88fa2be, review clean)
 Direct API Task 2: complete (commits 88fa2be..925d0f2, review clean)
-Direct API Task 3: complete (in progress for commit)
-
+Direct API Task 3: complete (commits 925d0f2..d229063, review clean)
+Multi-Source Task 1: complete (commits d229063..8c49dc8, review clean)
+Multi-Source Task 2: complete (in progress for commit)

@@ -40,12 +40,12 @@ user-data/
 *.swp
 *.swo
 .venv
-.superpowers
 lior_zvieli_cv.pdf
 docs
 logs.txt
 sparkchat.txt
 uv.lock
 diff.txt
-hiremetech_intercepted_api_1787052993710.json
-.superpowers
+json data
+linkedin-mcp-server
+student-tech-jobs-notifier/
