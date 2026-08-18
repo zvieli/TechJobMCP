@@ -26,7 +26,7 @@ from job_mcp.sources.comeet import (
     parse_comeet_position,
 )
 from job_mcp.sources.hiremetech import HireMeTechSource
-from job_mcp.sources.aggregator import JobAggregator
+from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
 
 
 class SourceRegistry:
@@ -148,6 +148,7 @@ __all__ = [
     "create_default_registry",
     "registry",
     "JobAggregator",
+    "DEFAULT_SOURCE_TIMEOUT",
     # Deduplication & Merging
     "normalize_title",
     "normalize_company",

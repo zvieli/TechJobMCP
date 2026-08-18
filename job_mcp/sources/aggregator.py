@@ -17,6 +17,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+DEFAULT_SOURCE_TIMEOUT: float = 3.0
+
+
 class JobAggregator:
     """Aggregates and deduplicates job listings across multiple registered sources."""
 
@@ -24,12 +27,14 @@ class JobAggregator:
         self,
         registry: Optional[SourceRegistry] = None,
         cache: Optional[JobCache] = None,
+        source_timeout: float = DEFAULT_SOURCE_TIMEOUT,
     ) -> None:
         """Initialize JobAggregator.
 
         Args:
             registry: Optional SourceRegistry instance. If None, uses default registry.
             cache: Optional JobCache instance for storing aggregated jobs.
+            source_timeout: Maximum timeout in seconds allowed per source fetch.
         """
         if registry is None:
             from job_mcp.sources import registry as default_registry
@@ -39,6 +44,7 @@ class JobAggregator:
             self.registry = registry
 
         self.cache = cache
+        self.source_timeout = source_timeout
 
     async def fetch_all_jobs(
         self,
@@ -82,37 +88,40 @@ class JobAggregator:
             logger.warning("No active sources found in registry for filter: %s", sources)
             return []
 
-        # 3. Fetch from all sources concurrently with error isolation
+        # 3. Fetch from all sources concurrently with per-source timeout & error isolation
         logger.info(
-            "Fetching jobs concurrently from %d source(s): %s",
+            "Fetching jobs concurrently from %d source(s): %s (timeout: %.1fs)",
             len(active_sources),
             [s.source_id for s in active_sources],
+            self.source_timeout,
         )
 
-        tasks = [
-            source.fetch_jobs(preferences=preferences, limit=limit_per_source)
-            for source in active_sources
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        async def _fetch_with_timeout(src: BaseJobSource) -> list[Job]:
+            try:
+                return await asyncio.wait_for(
+                    src.fetch_jobs(preferences=preferences, limit=limit_per_source),
+                    timeout=self.source_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Source '%s' timed out after %.1fs.",
+                    src.source_id,
+                    self.source_timeout,
+                )
+                return []
+            except Exception as exc:
+                logger.warning("Source '%s' fetch failed: %s", src.source_id, exc)
+                return []
+
+        results = await asyncio.gather(
+            *[_fetch_with_timeout(s) for s in active_sources]
+        )
 
         all_jobs: list[Job] = []
         for source, res in zip(active_sources, results):
-            if isinstance(res, Exception):
-                logger.warning(
-                    "Source '%s' fetch_jobs failed: %s",
-                    source.source_id,
-                    res,
-                    exc_info=res,
-                )
-            elif isinstance(res, list):
+            if res:
                 logger.info("Source '%s' returned %d jobs.", source.source_id, len(res))
                 all_jobs.extend(res)
-            else:
-                logger.warning(
-                    "Source '%s' returned unexpected result type: %s",
-                    source.source_id,
-                    type(res),
-                )
 
         # 4. Deduplicate across sources
         deduped = deduplicate_jobs(all_jobs)

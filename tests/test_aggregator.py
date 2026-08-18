@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,6 +23,7 @@ from job_mcp.sources import (
     SourceRegistry,
     create_default_registry,
 )
+from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT
 
 
 class MockSource(BaseJobSource):
@@ -35,6 +37,7 @@ class MockSource(BaseJobSource):
         is_healthy: bool = True,
         raise_on_fetch: Exception | None = None,
         raise_on_health: Exception | None = None,
+        delay: float = 0.0,
     ) -> None:
         self.source_id = source_id
         self.display_name = display_name or source_id.capitalize()
@@ -43,6 +46,7 @@ class MockSource(BaseJobSource):
         self._is_healthy = is_healthy
         self._raise_on_fetch = raise_on_fetch
         self._raise_on_health = raise_on_health
+        self._delay = delay
         self.fetch_call_count = 0
         self.health_call_count = 0
 
@@ -52,6 +56,9 @@ class MockSource(BaseJobSource):
         limit: int = 50,
     ) -> list[Job]:
         self.fetch_call_count += 1
+        if self._delay > 0:
+            import asyncio
+            await asyncio.sleep(self._delay)
         if self._raise_on_fetch:
             raise self._raise_on_fetch
         return self._jobs[:limit]
@@ -267,6 +274,40 @@ class TestJobAggregator(unittest.IsolatedAsyncioTestCase):
         agg = JobAggregator(registry=reg)
         health_map = await agg.check_all_health()
         self.assertEqual(health_map, {})
+
+    async def test_aggregator_source_timeout_configuration(self) -> None:
+        """Verify source_timeout defaults to DEFAULT_SOURCE_TIMEOUT and can be overridden."""
+        agg_default = JobAggregator()
+        self.assertEqual(agg_default.source_timeout, DEFAULT_SOURCE_TIMEOUT)
+
+        agg_custom = JobAggregator(source_timeout=1.5)
+        self.assertEqual(agg_custom.source_timeout, 1.5)
+
+    async def test_aggregator_per_source_timeout_cutoff(self) -> None:
+        """Verify slow source times out without blocking or failing fast sources."""
+        slow_source = MockSource("slow_source", jobs=[self.job_hmt], delay=5.0)
+        fast_source = MockSource(
+            "fast_source",
+            jobs=[self.job_hmt, self.job_alljobs],
+            delay=0.0,
+        )
+
+        reg = SourceRegistry()
+        reg.register(slow_source)
+        reg.register(fast_source)
+
+        agg = JobAggregator(registry=reg, source_timeout=0.5)
+
+        start_time = time.monotonic()
+        jobs = await agg.fetch_all_jobs(force_refresh=True)
+        elapsed = time.monotonic() - start_time
+
+        # Ensure execution cutoff happened fast (< 1.5s, well below the 5.0s slow source delay)
+        self.assertLess(elapsed, 1.5)
+        # Fast source jobs should have been returned successfully
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual(fast_source.fetch_call_count, 1)
+        self.assertEqual(slow_source.fetch_call_count, 1)
 
 
 class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
