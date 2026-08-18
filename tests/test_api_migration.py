@@ -504,7 +504,7 @@ async def test_check_session_health_api_200_missing_user_fallback():
 
 @pytest.mark.asyncio
 async def test_warm_cache_api_success():
-    """Verify _warm_cache attempts API first and populates cache without DOM navigation."""
+    """Verify _warm_cache attempts pure HTTP API first and populates cache without browser launch or DOM navigation."""
     from job_mcp.core.api_client import JobCache
     from job_mcp.main import _warm_cache
 
@@ -527,8 +527,9 @@ async def test_warm_cache_api_success():
 
         assert len(cache.get_all()) == 1
         assert cache.get_all()[0].job_id == "api-1"
-        mock_api.assert_awaited_once_with(mock_page.request, size=50)
+        mock_api.assert_awaited_once_with(None, size=50)
         mock_dom.assert_not_called()
+        mock_session.ensure_ready.assert_not_called()
         mock_page.goto.assert_not_called()
 
 
@@ -559,14 +560,14 @@ async def test_warm_cache_api_failure_fallback_to_dom():
 
         assert len(cache.get_all()) == 1
         assert cache.get_all()[0].job_id == "dom-1"
-        mock_api.assert_awaited_once_with(mock_page.request, size=50)
+        assert mock_api.await_count == 2
         mock_dom.assert_awaited_once_with(mock_page)
         mock_page.goto.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_get_job_matches_api_success():
-    """Verify get_job_matches fetches via API and skips DOM scraping when API succeeds."""
+    """Verify get_job_matches fetches via direct pure HTTP API and skips DOM scraping when API succeeds."""
     from fastmcp import Context
     from job_mcp.core.api_client import JobCache
     from job_mcp.main import get_job_matches
@@ -604,7 +605,7 @@ async def test_get_job_matches_api_success():
         assert res["success"] is True
         assert len(res["data"]) == 1
         assert res["data"][0]["job_id"] == "api-201"
-        mock_api.assert_awaited_once_with(mock_page.request, size=50)
+        mock_api.assert_awaited_once_with(None, size=50)
         mock_dom.assert_not_called()
 
 
@@ -650,7 +651,7 @@ async def test_get_job_matches_api_failure_fallback_to_dom():
         assert res["success"] is True
         assert len(res["data"]) == 1
         assert res["data"][0]["job_id"] == "dom-301"
-        mock_api.assert_awaited_once_with(mock_page.request, size=50)
+        assert mock_api.await_count == 2
         mock_dom.assert_awaited_once_with(mock_page)
         mock_page.goto.assert_awaited_once()
 
@@ -813,6 +814,132 @@ def test_filter_jobs_senior_exclusion_smart_boundary():
     assert "drop-senior" not in kept_ids
     assert "drop-lead" not in kept_ids
     assert "drop-java" not in kept_ids
+
+
+# ==========================================
+# 8. Tests for Pure HTTP & Concurrency Locking (Task 2)
+# ==========================================
+
+
+@pytest.mark.asyncio
+async def test_fetch_jobs_via_api_httpx_direct_pure_http():
+    """Verify fetch_jobs_via_api with request_context=None makes pure HTTP request via httpx."""
+    import httpx
+
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.json = MagicMock(return_value={
+        "jobs": [
+            {"id": "http-1", "title": "Pure HTTP Engineer", "company": "NoBrowserCo"}
+        ]
+    })
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp
+
+        jobs = await fetch_jobs_via_api(None, page=1, size=25)
+
+        assert len(jobs) == 1
+        assert jobs[0].job_id == "http-1"
+        assert jobs[0].title == "Pure HTTP Engineer"
+        mock_get.assert_awaited_once()
+        called_url = mock_get.call_args[0][0]
+        assert "/api/jobs/search" in called_url
+        assert "size=25" in called_url
+
+
+@pytest.mark.asyncio
+async def test_fetch_jobs_via_api_httpx_client_instance():
+    """Verify fetch_jobs_via_api accepts httpx.AsyncClient instance directly."""
+    import httpx
+    from job_mcp.core.api_client import DEFAULT_HTTP_HEADERS
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json = MagicMock(return_value={
+        "jobs": [
+            {"id": "client-1", "title": "Client Injected Job", "company": "InjectedCo"}
+        ]
+    })
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    jobs = await fetch_jobs_via_api(client=mock_client, page=2, size=15)
+
+    assert len(jobs) == 1
+    assert jobs[0].job_id == "client-1"
+    mock_client.get.assert_awaited_once()
+    called_url = mock_client.get.call_args[0][0]
+    assert "page=2" in called_url
+    assert "size=15" in called_url
+    assert mock_client.get.call_args[1]["headers"] == DEFAULT_HTTP_HEADERS
+
+
+@pytest.mark.asyncio
+async def test_hiremetech_source_pure_http_no_browser():
+    """Verify HireMeTechSource.fetch_jobs performs pure HTTP request without touching SessionManager."""
+    from job_mcp.sources.hiremetech import HireMeTechSource
+
+    mock_session = AsyncMock()
+    source = HireMeTechSource(session_manager=mock_session)
+
+    sample_jobs = [
+        Job(job_id="hmt-http-1", title="Fast Backend", company="FastCo", tech_stack=["Python"])
+    ]
+
+    with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api:
+        mock_api.return_value = sample_jobs
+
+        jobs = await source.fetch_jobs(limit=10)
+
+        assert len(jobs) == 1
+        assert jobs[0].job_id == "hmt-http-1"
+        assert jobs[0].source == "hiremetech"
+        mock_api.assert_awaited_once_with(None, size=10)
+        mock_session.ensure_ready.assert_not_called()
+        mock_session.get_page.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_session_manager_ensure_ready_concurrency():
+    """Verify concurrent ensure_ready() calls are serialized with _lock and don't double initialize."""
+    import asyncio
+    from job_mcp.core.auth import SessionManager
+
+    mock_pw = AsyncMock()
+    mock_context = AsyncMock()
+    mock_page = AsyncMock()
+    mock_page.is_closed = MagicMock(return_value=False)
+    mock_page.url = "https://hiremetech.com/he-il/jobs-app"
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value={"user": {"id": "u1"}})
+    mock_page.request.get = AsyncMock(return_value=mock_resp)
+    mock_context.pages = [mock_page]
+    mock_pw.chromium.launch_persistent_context.return_value = mock_context
+
+    mock_cm = MagicMock()
+    mock_cm.start = AsyncMock(return_value=mock_pw)
+
+    with patch("job_mcp.core.auth.async_playwright", return_value=mock_cm):
+        manager = SessionManager(user_data_dir="/tmp/test_profile_concurrency_ready")
+        assert not manager.is_running
+
+        results = await asyncio.gather(
+            manager.ensure_ready(max_retries=1),
+            manager.ensure_ready(max_retries=1),
+            manager.ensure_ready(max_retries=1),
+        )
+
+        assert len(results) == 3
+        for p in results:
+            assert p == mock_page
+        assert manager.is_running
+        mock_cm.start.assert_awaited_once()
+        mock_pw.chromium.launch_persistent_context.assert_awaited_once()
+
+        await manager.shutdown()
+        assert not manager.is_running
 
 
 

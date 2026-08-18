@@ -113,7 +113,7 @@ _pending_applications: dict[str, dict[str, Any]] = {}
 _operation_mode: OperationMode = OperationMode.SUPERVISED
 
 # Timeout constant for live scraping operations to avoid proxy / tunnel timeouts (e.g. DevTunnel 10s limit)
-_SCRAPE_TIMEOUT_SECONDS: float = 4.0
+_SCRAPE_TIMEOUT_SECONDS: float = float(os.getenv("SCRAPE_TIMEOUT_SECONDS", "10.0"))
 _WARMUP_TIMEOUT_SECONDS: float = 30.0
 
 
@@ -138,12 +138,6 @@ async def _warm_cache(
 
         if cache is not None:
             agg.cache = cache
-
-        if session is not None:
-            try:
-                await session.ensure_ready(max_retries=1)
-            except Exception as exc:
-                logger.info("Cache warmup browser session note: %s. Continuing with public sources.", exc)
 
         jobs = await agg.fetch_all_jobs(force_refresh=True)
         if cache is not None and jobs:
@@ -172,11 +166,6 @@ async def browser_lifespan(server: FastMCP):
     _default_registry = registry
     _default_aggregator = aggregator
 
-    try:
-        await session_mgr.initialize()
-    except Exception as exc:
-        logger.warning("SessionManager initial start notice: %s", exc)
-
     warmup_task = asyncio.create_task(_warm_cache(session_mgr, job_cache, aggregator=aggregator))
 
     try:
@@ -195,10 +184,11 @@ async def browser_lifespan(server: FastMCP):
             except (asyncio.CancelledError, Exception):
                 pass
 
-        try:
-            await session_mgr.shutdown()
-        except Exception as exc:
-            logger.error("Error during session shutdown: %s", exc)
+        if session_mgr.is_running:
+            try:
+                await session_mgr.shutdown()
+            except Exception as exc:
+                logger.error("Error during session shutdown: %s", exc)
 
 
 # Initialize FastMCP Server
@@ -709,10 +699,20 @@ async def bookmark_job(
     """
     try:
         cache = _get_cache(ctx)
+        cached_job = cache.get_by_id(job_id)
+        title = cached_job.title if cached_job else None
+        company = cached_job.company if cached_job else None
+        source = cached_job.source if cached_job else None
+        logger.info(
+            "Bookmarked job",
+            job_id=job_id,
+            title=title,
+            company=company,
+            source=source,
+        )
 
         # Handle external ATS job sources (Comeet, AllJobs, etc.)
         if job_id.startswith(("comeet_", "alljobs_")):
-            cached_job = cache.get_by_id(job_id)
             if cached_job:
                 cached_job.is_bookmarked = True
             return _response(
@@ -733,7 +733,6 @@ async def bookmark_job(
         await browser_bookmark_job(page, job_id)
 
         # Update cache if job present
-        cached_job = cache.get_by_id(job_id)
         if cached_job:
             cached_job.is_bookmarked = True
 
@@ -768,11 +767,21 @@ async def delete_job(
     """
     try:
         cache = _get_cache(ctx)
+        cached_job = cache.get_by_id(job_id)
+        title = cached_job.title if cached_job else None
+        company = cached_job.company if cached_job else None
+        source = cached_job.source if cached_job else None
+        logger.info(
+            "Dismissed job from cache",
+            job_id=job_id,
+            title=title,
+            company=company,
+            source=source,
+        )
+        cache.dismiss(job_id)
 
         # Handle external ATS job sources (Comeet, AllJobs, etc.)
         if job_id.startswith(("comeet_", "alljobs_")):
-            updated_jobs = [j for j in cache.get_all() if j.job_id != job_id]
-            cache.update(updated_jobs)
             return _response(
                 success=True,
                 message=f"Successfully dismissed external ATS job '{job_id}' from view and cache.",
@@ -789,10 +798,6 @@ async def delete_job(
 
         page = await session.get_page()
         await browser_delete_job(page, job_id)
-
-        # Update cache
-        updated_jobs = [j for j in cache.get_all() if j.job_id != job_id]
-        cache.update(updated_jobs)
 
         return _response(
             success=True,

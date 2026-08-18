@@ -118,9 +118,11 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(res["data"]), 3)
         mock_extract.assert_not_called()
 
+    @patch("job_mcp.sources.hiremetech.fetch_jobs_via_api")
     @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
-    async def test_get_job_matches_live_fetch_and_force_refresh(self, mock_extract):
+    async def test_get_job_matches_live_fetch_and_force_refresh(self, mock_extract, mock_api):
         """Test live extraction when cache is empty or force_refresh is True."""
+        mock_api.side_effect = RuntimeError("API unavailable")
         cache = JobCache(ttl_minutes=10)
         mock_session = AsyncMock(spec=SessionManager)
         mock_session._initialized = True

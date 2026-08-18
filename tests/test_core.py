@@ -1,6 +1,7 @@
 """Unit tests for hireme_mcp core modules."""
 
 import os
+from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,6 +11,7 @@ from job_mcp.core.api_client import (
     JobCache,
     extract_cv_keywords,
     filter_jobs,
+    resolve_cv_path,
 )
 from job_mcp.core.auth import (
     BASE_URL,
@@ -65,8 +67,10 @@ class TestAuth(unittest.IsolatedAsyncioTestCase):
         mock_async_playwright.return_value = mock_cm
 
         manager = SessionManager(user_data_dir="/tmp/test_profile")
+        self.assertFalse(manager.is_running)
         await manager.initialize()
         self.assertTrue(manager._initialized)
+        self.assertTrue(manager.is_running)
 
         page = await manager.get_page()
         self.assertEqual(page, mock_page)
@@ -92,7 +96,42 @@ class TestAuth(unittest.IsolatedAsyncioTestCase):
         # Test shutdown
         await manager.shutdown()
         self.assertFalse(manager._initialized)
+        self.assertFalse(manager.is_running)
         self.assertIsNone(manager.page)
+
+    @patch("job_mcp.core.auth.async_playwright")
+    async def test_session_manager_concurrency_lock(self, mock_async_playwright):
+        """Test concurrent initialize() calls with asyncio.gather are safe and launch only once."""
+        import asyncio
+        mock_pw = AsyncMock()
+        mock_context = AsyncMock()
+        mock_page = AsyncMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_context.pages = [mock_page]
+        mock_pw.chromium.launch_persistent_context.return_value = mock_context
+
+        mock_cm = MagicMock()
+        mock_cm.start = AsyncMock(return_value=mock_pw)
+        mock_async_playwright.return_value = mock_cm
+
+        manager = SessionManager(user_data_dir="/tmp/test_profile_concurrency")
+        self.assertFalse(manager.is_running)
+
+        await asyncio.gather(
+            manager.initialize(),
+            manager.initialize(),
+            manager.initialize(),
+            manager.initialize(),
+        )
+
+        self.assertTrue(manager.is_running)
+        self.assertTrue(manager._initialized)
+        mock_cm.start.assert_awaited_once()
+        mock_pw.chromium.launch_persistent_context.assert_awaited_once()
+
+        await manager.shutdown()
+        self.assertFalse(manager.is_running)
+        self.assertFalse(manager._initialized)
 
 
 class MockLocator:
@@ -245,7 +284,14 @@ class TestApiClient(unittest.TestCase):
     """Tests for cache, keyword extraction, and job filtering."""
 
     def test_job_cache(self):
+        # Test default TTL and attributes
+        default_cache = JobCache()
+        self.assertEqual(default_cache.ttl_seconds, 7200)
+        self.assertEqual(default_cache.dismissed_ids, set())
+        self.assertIsNotNone(default_cache._lock)
+
         cache = JobCache(ttl_minutes=1)
+        self.assertEqual(cache.ttl_seconds, 60)
         self.assertTrue(cache.is_stale)
         self.assertEqual(len(cache.get_all()), 0)
 
@@ -262,6 +308,38 @@ class TestApiClient(unittest.TestCase):
         cache.clear()
         self.assertTrue(cache.is_stale)
         self.assertEqual(len(cache.get_all()), 0)
+
+    def test_job_cache_ttl_env_config(self):
+        """Test TTL configuration via CACHE_TTL_MINUTES environment variable."""
+        with patch.dict(os.environ, {"CACHE_TTL_MINUTES": "45"}):
+            cache = JobCache()
+            self.assertEqual(cache.ttl_seconds, 45 * 60)
+
+    def test_job_cache_dismiss_and_filtering(self):
+        """Test dismissing jobs removes them from cache and prevents re-addition on update."""
+        cache = JobCache()
+        j1 = Job(job_id="j1", title="Backend Engineer", company="Acme")
+        j2 = Job(job_id="j2", title="Frontend Engineer", company="Beta")
+        j3 = Job(job_id="j3", title="DevOps Engineer", company="Gamma")
+
+        cache.update([j1, j2])
+        self.assertEqual(len(cache.get_all()), 2)
+        self.assertIsNotNone(cache.get_by_id("j1"))
+
+        # Dismiss j1
+        cache.dismiss("j1")
+        self.assertIn("j1", cache.dismissed_ids)
+        self.assertIsNone(cache.get_by_id("j1"))
+        self.assertEqual(len(cache.get_all()), 1)
+        self.assertEqual(cache.get_all()[0].job_id, "j2")
+
+        # Update with j1, j2, j3 - j1 should be filtered out
+        cache.update([j1, j2, j3])
+        self.assertEqual(len(cache.get_all()), 2)
+        remaining_ids = [j.job_id for j in cache.get_all()]
+        self.assertNotIn("j1", remaining_ids)
+        self.assertIn("j2", remaining_ids)
+        self.assertIn("j3", remaining_ids)
 
     def test_extract_cv_keywords_txt(self):
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
@@ -469,6 +547,244 @@ class TestApiClient(unittest.TestCase):
         self.assertEqual(results[0].seniority_level, "Junior")
         self.assertIn("Python", results[0].matched_skills)
         self.assertIn("FastAPI", results[0].matched_skills)
+
+    def test_resolve_cv_path_exact_path(self):
+        """Test resolve_cv_path resolves an explicit existing file path."""
+        with tempfile.NamedTemporaryFile("w", suffix=".pdf", delete=False) as f:
+            f.write("mock pdf content")
+            temp_path = f.name
+
+        try:
+            resolved = resolve_cv_path(temp_path)
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved, Path(temp_path).resolve())
+        finally:
+            os.unlink(temp_path)
+
+    def test_resolve_cv_path_env_var(self):
+        """Test resolve_cv_path resolves via DEFAULT_CV_PATH environment variable."""
+        with tempfile.NamedTemporaryFile("w", suffix=".pdf", delete=False) as f:
+            f.write("mock pdf content")
+            temp_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"DEFAULT_CV_PATH": temp_path}):
+                resolved = resolve_cv_path()
+                self.assertIsNotNone(resolved)
+                self.assertEqual(resolved, Path(temp_path).resolve())
+        finally:
+            os.unlink(temp_path)
+
+    def test_resolve_cv_path_fallback_workspace(self):
+        """Test resolve_cv_path finds workspace CV files when cv_path is omitted and env is empty."""
+        with patch.dict(os.environ, {}, clear=True):
+            resolved = resolve_cv_path()
+            if (Path.cwd() / "lior_zvieli_cv.pdf").is_file():
+                self.assertIsNotNone(resolved)
+                self.assertEqual(resolved, (Path.cwd() / "lior_zvieli_cv.pdf").resolve())
+
+    def test_resolve_cv_path_container_fallback(self):
+        """Test resolve_cv_path resolves container paths when running inside container."""
+        def mock_is_file(path_obj):
+            return str(path_obj) == "/app/lior_zvieli_cv.pdf"
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch.object(Path, "is_file", autospec=True, side_effect=lambda self: str(self) == "/app/lior_zvieli_cv.pdf"):
+                with patch.object(Path, "resolve", autospec=True, side_effect=lambda self: self):
+                    resolved = resolve_cv_path()
+                    self.assertIsNotNone(resolved)
+                    self.assertEqual(str(resolved), "/app/lior_zvieli_cv.pdf")
+
+    def test_resolve_cv_path_nonexistent_returns_none(self):
+        """Test resolve_cv_path returns None when no candidates exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                with patch.dict(os.environ, {}, clear=True):
+                    resolved = resolve_cv_path("nonexistent_path_xyz.pdf")
+                    self.assertIsNone(resolved)
+
+                    resolved_empty = resolve_cv_path()
+                    self.assertIsNone(resolved_empty)
+            finally:
+                os.chdir(orig_cwd)
+
+    def test_extract_cv_keywords_modern_ai_web3_backend(self):
+        """Test extract_cv_keywords correctly detects new AI, Web3, and Modern Framework keywords."""
+        sample_text = (
+            "Senior AI & Blockchain Engineer proficient in GraphRAG, LangGraph, RAG, Agentic workflows, "
+            "Vector DB, ChromaDB, Chroma, Pinecone, Qdrant, Weaviate, CrewAI, Autogen, vLLM, Ollama, "
+            "LangSmith, Semantic Kernel, Transformers, Fine-Tuning, and Embeddings. "
+            "Deep expertise in Web3, Solidity, Smart Contracts, EVM, Hardhat, Foundry, Ethers.js, Viem, "
+            "FastAPI, Supabase, Pydantic, SQLAlchemy, Prisma, TRPC, and AsyncIO."
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(sample_text)
+            temp_path = f.name
+
+        try:
+            keywords = extract_cv_keywords(temp_path)
+            expected_keywords = [
+                # AI / LLM / Agentic
+                "GraphRAG", "LangGraph", "RAG", "Agentic", "Vector DB", "ChromaDB", "Chroma",
+                "Pinecone", "Qdrant", "Weaviate", "CrewAI", "Autogen", "vLLM", "Ollama",
+                "LangSmith", "Semantic Kernel", "Transformers", "Fine-Tuning", "Embeddings",
+                # Web3 & Blockchain
+                "Solidity", "Web3", "Smart Contracts", "EVM", "Hardhat", "Foundry", "Ethers.js", "Viem",
+                # Modern Backend & Frameworks
+                "FastAPI", "Supabase", "Pydantic", "SQLAlchemy", "Prisma", "TRPC", "AsyncIO",
+            ]
+            for kw in expected_keywords:
+                self.assertIn(kw, keywords, f"Expected keyword '{kw}' was not extracted from CV.")
+        finally:
+            os.unlink(temp_path)
+
+    def test_extract_cv_keywords_default_resolution_and_nonexistent(self):
+        """Test extract_cv_keywords with default resolution and nonexistent path handling."""
+        # 1. Nonexistent path handling
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                with patch.dict(os.environ, {}, clear=True):
+                    res = extract_cv_keywords("nonexistent.pdf")
+                    self.assertEqual(res, [])
+            finally:
+                os.chdir(orig_cwd)
+
+        # 2. Real workspace CV extraction (if lior_zvieli_cv.pdf exists)
+        if (Path.cwd() / "lior_zvieli_cv.pdf").is_file():
+            keywords = extract_cv_keywords()
+            self.assertIsInstance(keywords, list)
+            self.assertGreater(len(keywords), 0)
+
+    def test_filter_jobs_cv_scoring_tuning_and_coverage(self):
+        """Test CV scoring formula does not penalize rich CVs and computes job coverage properly."""
+        # Candidate with broad AI/Fullstack CV with 25+ skills
+        cv_text = (
+            "Senior AI & Fullstack Developer. Skills: Python, Docker, LangChain, LLM, FastAPI, "
+            "React, TypeScript, Kubernetes, SQL, Git, Linux, AWS, Redis, PostgreSQL, GraphQL, "
+            "Next.js, C++, PyTorch, Pandas, NumPy, Terraform, Supabase, SQLAlchemy, Pydantic, AsyncIO."
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(cv_text)
+            cv_path = f.name
+
+        try:
+            ai_job = Job(
+                job_id="ai-1",
+                title="AI Engineer",
+                company="BrainAI",
+                tech_stack=["Python", "LangChain", "LLM", "Docker"],
+                description="Developing LLM applications using LangChain, Python, and Docker.",
+            )
+            fullstack_job = Job(
+                job_id="fs-1",
+                title="Fullstack Developer",
+                company="WebCo",
+                tech_stack=["React", "TypeScript", "FastAPI", "PostgreSQL"],
+                description="Build modern web applications with React, TypeScript, and FastAPI.",
+            )
+            irrelevant_job = Job(
+                job_id="irr-1",
+                title="Help Desk Support Technician",
+                company="SupportCo",
+                tech_stack=[],
+                description="Provide telephone and hardware support for internal office staff.",
+            )
+            finance_job = Job(
+                job_id="fin-1",
+                title="Finance Analyst",
+                company="BankCorp",
+                tech_stack=[],
+                description="Financial modeling, budget forecasting, and accounting spreadsheets.",
+            )
+
+            prefs = JobPreferences(cv_path=cv_path)
+            ranked = filter_jobs([ai_job, fullstack_job, irrelevant_job, finance_job], prefs)
+
+            self.assertEqual(len(ranked), 4)
+            scored_map = {j.job_id: j for j in ranked}
+
+            # 1. AI job with 3+ matching skills (Python, LangChain, LLM, Docker) scores >= 75.0 (between 75.0 and 98.0+)
+            ai_scored = scored_map["ai-1"]
+            self.assertGreaterEqual(ai_scored.match_score, 75.0)
+            self.assertLessEqual(ai_scored.match_score, 100.0)
+            self.assertIn("Python", ai_scored.matched_skills)
+            self.assertIn("LangChain", ai_scored.matched_skills)
+            self.assertIn("LLM", ai_scored.matched_skills)
+            self.assertIn("Docker", ai_scored.matched_skills)
+
+            # 2. Fullstack job with 3+ matching skills scores >= 75.0
+            fs_scored = scored_map["fs-1"]
+            self.assertGreaterEqual(fs_scored.match_score, 75.0)
+            self.assertLessEqual(fs_scored.match_score, 100.0)
+
+            # 3. Irrelevant / Finance jobs with 0 matching skills score < 40.0 (specifically < 35.0)
+            irr_scored = scored_map["irr-1"]
+            fin_scored = scored_map["fin-1"]
+            self.assertLess(irr_scored.match_score, 40.0)
+            self.assertLess(irr_scored.match_score, 35.0)
+            self.assertEqual(irr_scored.match_score, 0.0)
+            self.assertLess(fin_scored.match_score, 40.0)
+            self.assertLess(fin_scored.match_score, 35.0)
+            self.assertEqual(fin_scored.match_score, 0.0)
+
+            # 4. Explainable match reasons on AI job
+            self.assertTrue(len(ai_scored.match_reasons) > 0)
+            cv_reason = next((r for r in ai_scored.match_reasons if "CV matched" in r), None)
+            self.assertIsNotNone(cv_reason)
+            self.assertIn("core skills:", cv_reason)
+            self.assertIn("tech requirements match", cv_reason)
+            self.assertIn("100% tech requirements match", cv_reason)
+        finally:
+            os.unlink(cv_path)
+
+    def test_filter_jobs_compatibility_with_explicit_tech_stack_and_keywords(self):
+        """Test scoring combines explicit tech_stack (50%), keywords (30%), and CV (20%)."""
+        cv_text = "Developer skilled in Python, Docker, Redis, Git, Linux."
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(cv_text)
+            cv_path = f.name
+
+        try:
+            job_match_all = Job(
+                job_id="j-all",
+                title="Python Platform Engineer",
+                company="CloudTech",
+                tech_stack=["Python", "FastAPI", "Docker", "Redis"],
+                description="Scale platform microservices with Python and FastAPI on Kubernetes.",
+            )
+            job_no_match = Job(
+                job_id="j-none",
+                title="HR Manager",
+                company="PeopleCo",
+                tech_stack=[],
+                description="Manage recruitment and people operations.",
+            )
+
+            prefs = JobPreferences(
+                tech_stack=["Python", "FastAPI"],
+                keywords=["Kubernetes"],
+                cv_path=cv_path,
+            )
+
+            results = filter_jobs([job_match_all, job_no_match], prefs)
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0].job_id, "j-all")
+            self.assertGreaterEqual(results[0].match_score, 85.0)
+
+            reasons = results[0].match_reasons
+            self.assertTrue(any("CV matched" in r for r in reasons))
+            self.assertTrue(any("Target stack matched" in r for r in reasons))
+            self.assertTrue(any("Keywords matched" in r for r in reasons))
+
+            self.assertEqual(results[1].job_id, "j-none")
+            self.assertEqual(results[1].match_score, 0.0)
+            self.assertEqual(results[1].match_reasons, [])
+        finally:
+            os.unlink(cv_path)
 
 
 if __name__ == "__main__":

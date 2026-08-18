@@ -10,6 +10,7 @@ from job_mcp.core.api_client import (
     filter_jobs,
     generate_description_summary,
     parse_api_job_dict,
+    resolve_cv_path,
 )
 from job_mcp.core.auth import (
     BASE_URL,
@@ -54,6 +55,7 @@ __all__ = [
     "preview_application",
     "execute_application",
     "JobCache",
+    "resolve_cv_path",
     "extract_cv_keywords",
     "detect_seniority_level",
     "generate_description_summary",

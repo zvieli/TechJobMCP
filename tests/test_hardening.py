@@ -251,9 +251,11 @@ class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
         mock_page.goto.assert_called_once_with(f"{BASE_URL}{DASHBOARD_PATH}", wait_until="commit", timeout=5000)
         mock_extract.assert_called_once_with(mock_page)
 
+    @patch("job_mcp.sources.hiremetech.fetch_jobs_via_api")
     @patch("job_mcp.sources.hiremetech.browser_extract_jobs")
-    async def test_warm_cache_handles_unauthenticated_gracefully(self, mock_extract):
+    async def test_warm_cache_handles_unauthenticated_gracefully(self, mock_extract, mock_api):
         """Verify _warm_cache does not raise and leaves cache empty if ensure_ready fails."""
+        mock_api.side_effect = RuntimeError("Session unauthenticated")
         mock_session = AsyncMock(spec=SessionManager)
         mock_session.ensure_ready.side_effect = RuntimeError("Session unauthenticated")
 
@@ -299,10 +301,12 @@ class TestBackgroundCacheWarmup(unittest.IsolatedAsyncioTestCase):
         async with browser_lifespan(mock_server) as state:
             self.assertIn("session", state)
             self.assertIn("cache", state)
+            state["session"]._initialized = True
+            state["session"].context = MagicMock()
             await asyncio.sleep(0.01)
             self.assertTrue(mock_warm.called)
 
-        # Exited context - shutdown should be called
+        # Exited context with running session - shutdown should be called
         mock_shutdown.assert_called_once()
 
 

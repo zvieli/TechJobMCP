@@ -105,7 +105,7 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
     - Run agent.run_pipeline with tech stack and seniority exclusion preferences.
     - Assert:
       * All 6 pipeline steps executed successfully in sequence.
-      * sources_found contains ['hiremetech', 'comeet', 'alljobs'].
+      * sources_found contains ['hiremetech', 'comeet'].
       * total_jobs_fetched > 0.
       * Top-tier jobs (score >= 85) are bookmarked and have staged & confirmed applications.
       * Strong matches (70-84) are bookmarked only without applying.
@@ -150,8 +150,8 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
             source="comeet",
             sources=["comeet"],
             work_mode=WorkMode.REMOTE,
-            tech_stack=["Python", "FastAPI", "AI", "LangGraph", "Docker", "Git"],
-            description="Python developer working with FastAPI, LangGraph, Docker, AI, and Git.",
+            tech_stack=["Python", "FastAPI", "AI", "Docker", "Git"],
+            description="Python developer working with FastAPI, Docker, AI, and Git.",
             salary_range="$130,000",
             apply_url="https://app.comeet.com/jobs/cloudworks/cmt-strong-1",
         ),
@@ -223,10 +223,9 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
         assert result.success is True, f"Pipeline failed: {result}"
         assert result.execution_time_ms > 0.0
 
-        # 2. Source discovery
+        # 2. Source discovery (defaults to hiremetech, comeet)
         assert "hiremetech" in result.sources_found
         assert "comeet" in result.sources_found
-        assert "alljobs" in result.sources_found
 
         # 3. Job fetching
         assert result.total_jobs_fetched == 5

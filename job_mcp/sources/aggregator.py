@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-DEFAULT_SOURCE_TIMEOUT: float = 3.0
+DEFAULT_SOURCE_TIMEOUT: float = float(os.getenv("SOURCE_TIMEOUT_SECONDS", "6.0"))
 
 
 class JobAggregator:
@@ -124,13 +125,17 @@ class JobAggregator:
                 return []
 
         results = await asyncio.gather(
-            *[_fetch_with_timeout(s) for s in active_sources]
+            *[_fetch_with_timeout(s) for s in active_sources],
+            return_exceptions=True,
         )
 
         all_jobs: list[Job] = []
-        for source, res in zip(active_sources, results):
-            if res:
-                logger.info("Source '%s' returned %d jobs.", source.source_id, len(res))
+        for src, res in zip(active_sources, results):
+            if isinstance(res, Exception):
+                logger.warning("Source '%s' fetch failed: %s", src.source_id, res)
+            elif isinstance(res, list):
+                if res:
+                    logger.info("Source '%s' returned %d jobs.", src.source_id, len(res))
                 all_jobs.extend(res)
 
         # 4. Deduplicate across sources

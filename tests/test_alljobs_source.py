@@ -502,3 +502,16 @@ class TestAllJobsRegistryIntegration:
         retrieved = registry.get("alljobs")
         assert retrieved is source
         assert retrieved.display_name == "AllJobs Israel"
+
+    def test_deprecation_warning_logged(self, capfd: pytest.CaptureFixture) -> None:
+        """Verify AllJobsSource logs a deprecation warning upon instantiation."""
+        _ = AllJobsSource()
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        warn_events = [
+            l for l in lines
+            if "AllJobsSource is deprecated and disabled by default due to upstream WAF restrictions." in l.get("event", "")
+        ]
+        assert len(warn_events) >= 1
+        assert warn_events[-1].get("level") == "warning"
+

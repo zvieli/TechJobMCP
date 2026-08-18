@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time
@@ -9,6 +10,8 @@ import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Optional
+
+import httpx
 
 from job_mcp.core.auth import BASE_URL
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
@@ -22,11 +25,14 @@ CURATED_TECH_KEYWORDS = [
     "Python", "JavaScript", "TypeScript", "Go", "Golang", "Rust", "Java", "Kotlin",
     "Scala", "C++", "C#", "C", ".NET", "Ruby", "PHP", "Swift", "Objective-C",
     "SQL", "HTML", "CSS", "Bash", "Shell", "R", "Dart", "Elixir", "Clojure",
+    # Web3 & Blockchain
+    "Solidity", "Web3", "Smart Contracts", "EVM", "Hardhat", "Foundry", "Ethers.js", "Viem",
     # Frameworks & Libraries
     "React", "Next.js", "Vue", "Vue.js", "Nuxt", "Angular", "Svelte",
     "Node.js", "Node", "Express", "FastAPI", "Django", "Flask", "Spring", "Spring Boot",
     "Ruby on Rails", "Rails", "Laravel", "ASP.NET", "GraphQL", "gRPC", "REST", "RESTful",
     "Redux", "Zustand", "TailwindCSS", "Bootstrap", "Prisma", "SQLAlchemy", "Pydantic",
+    "Supabase", "TRPC", "AsyncIO",
     # Databases & Storage
     "PostgreSQL", "Postgres", "MySQL", "MongoDB", "Redis", "Elasticsearch", "Cassandra",
     "DynamoDB", "SQLite", "MariaDB", "Neo4j", "Kafka", "RabbitMQ", "Celery",
@@ -34,9 +40,12 @@ CURATED_TECH_KEYWORDS = [
     "Docker", "Kubernetes", "K8s", "AWS", "Amazon Web Services", "GCP", "Google Cloud",
     "Azure", "Terraform", "Ansible", "Helm", "CI/CD", "GitHub Actions", "GitLab CI",
     "Jenkins", "CircleCI", "Linux", "Git", "Nginx", "Prometheus", "Grafana",
-    # AI / ML / Data
+    # AI / LLM / Agentic / ML / Data
     "PyTorch", "TensorFlow", "Keras", "Scikit-Learn", "Pandas", "NumPy",
     "OpenAI", "LLM", "LangChain", "LlamaIndex", "Hugging Face", "NLP",
+    "GraphRAG", "LangGraph", "RAG", "Agentic", "Vector DB", "ChromaDB", "Chroma",
+    "Pinecone", "Qdrant", "Weaviate", "CrewAI", "Autogen", "vLLM", "Ollama",
+    "LangSmith", "Semantic Kernel", "Transformers", "Fine-Tuning", "Embeddings",
     "FastMCP", "Playwright", "Selenium", "Airflow", "Spark", "Hadoop",
 ]
 
@@ -48,18 +57,20 @@ class JobCache:
         """Initialize cache with TTL in minutes.
 
         Args:
-            ttl_minutes: Optional cache time-to-live in minutes. Defaults to CACHE_TTL_MINUTES env or 60.
+            ttl_minutes: Optional cache time-to-live in minutes. Defaults to CACHE_TTL_MINUTES env or 120.
         """
         if ttl_minutes is None:
-            env_ttl = os.getenv("CACHE_TTL_MINUTES", "60").strip()
+            env_ttl = os.getenv("CACHE_TTL_MINUTES", "120").strip()
             try:
                 ttl_minutes = int(env_ttl)
             except ValueError:
-                ttl_minutes = 60
+                ttl_minutes = 120
 
         self.ttl_seconds: int = ttl_minutes * 60
         self._jobs: list[Job] = []
         self._last_updated: float = 0.0
+        self.dismissed_ids: set[str] = set()
+        self._lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def is_stale(self) -> bool:
@@ -68,13 +79,24 @@ class JobCache:
             return True
         return (time.time() - self._last_updated) > self.ttl_seconds
 
+    def dismiss(self, job_id: str) -> None:
+        """Dismiss a job by ID, adding to dismissed_ids and removing from cached jobs.
+
+        Args:
+            job_id: ID of the job to dismiss.
+        """
+        str_id = str(job_id)
+        self.dismissed_ids.add(str_id)
+        self._jobs = [j for j in self._jobs if j.job_id != str_id]
+        logger.info("Job %s dismissed and removed from JobCache.", str_id)
+
     def update(self, jobs: list[Job]) -> None:
         """Update cached jobs and reset expiration timestamp.
 
         Args:
-            jobs: New list of Job instances to cache.
+            jobs: New list of Job instances to cache (dismissed jobs are filtered out).
         """
-        self._jobs = list(jobs)
+        self._jobs = [j for j in jobs if j.job_id not in self.dismissed_ids]
         self._last_updated = time.time()
         logger.info("JobCache updated with %d jobs (TTL: %ds)", len(self._jobs), self.ttl_seconds)
 
@@ -158,18 +180,83 @@ def _extract_text_from_docx(path: Path) -> str:
         return ""
 
 
-def extract_cv_keywords(cv_path: str) -> list[str]:
+def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
+    """Resolve the CV file path based on explicit parameter, environment variable, or fallback discovery.
+
+    Resolution candidate order:
+    1. Path(cv_path).expanduser() if cv_path is provided and non-empty.
+    2. Path(os.getenv("DEFAULT_CV_PATH")).expanduser() if DEFAULT_CV_PATH is set.
+    3. Container paths: Path("/app/lior_zvieli_cv.pdf"), Path("/app/cv.pdf").
+    4. Local workspace paths: Path("lior_zvieli_cv.pdf").resolve(), Path("cv.pdf").resolve().
+    5. Any .pdf in working directory matching *cv*.pdf or *.pdf.
+    6. Any .pdf in /app if /app directory exists.
+
+    Returns:
+        Optional[Path]: The first candidate that is an existing file, resolved. None if none exist.
+    """
+    candidates: list[Path] = []
+
+    # 1. Explicit cv_path if provided and non-empty
+    if cv_path and str(cv_path).strip():
+        candidates.append(Path(str(cv_path).strip()).expanduser())
+
+    # 2. DEFAULT_CV_PATH environment variable if set
+    env_cv = os.getenv("DEFAULT_CV_PATH")
+    if env_cv and env_cv.strip():
+        candidates.append(Path(env_cv.strip()).expanduser())
+
+    # 3. Container paths
+    candidates.append(Path("/app/lior_zvieli_cv.pdf"))
+    candidates.append(Path("/app/cv.pdf"))
+
+    # 4. Local workspace paths
+    cwd = Path.cwd()
+    candidates.append(cwd / "lior_zvieli_cv.pdf")
+    candidates.append(cwd / "cv.pdf")
+
+    # 5. Any .pdf in working directory matching *cv*.pdf or *.pdf
+    try:
+        cv_glob = sorted(cwd.glob("*cv*.pdf"))
+        all_glob = sorted(cwd.glob("*.pdf"))
+        seen: set[Path] = set()
+        for p in cv_glob + all_glob:
+            if p not in seen:
+                seen.add(p)
+                candidates.append(p)
+    except Exception:
+        pass
+
+    # 6. Any .pdf in /app if /app directory exists
+    app_dir = Path("/app")
+    if app_dir.is_dir():
+        try:
+            for p in sorted(app_dir.glob("*.pdf")):
+                candidates.append(p)
+        except Exception:
+            pass
+
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate.resolve()
+        except (OSError, PermissionError):
+            continue
+
+    return None
+
+
+def extract_cv_keywords(cv_path: Optional[str] = None) -> list[str]:
     """Read a CV/resume file (text, pdf, docx) and extract technology keywords.
 
     Args:
-        cv_path: Path to the resume/CV file.
+        cv_path: Optional path to the resume/CV file. If not provided, resolved automatically.
 
     Returns:
         list[str]: Sorted, deduplicated list of detected technology keywords.
     """
-    path = Path(cv_path).expanduser().resolve()
-    if not path.exists():
-        logger.warning("CV file path '%s' does not exist.", path)
+    path = resolve_cv_path(cv_path)
+    if path is None:
+        logger.warning("CV file path '%s' does not exist.", cv_path or os.getenv("DEFAULT_CV_PATH"))
         return []
 
     logger.info("Extracting keywords from CV: %s", path)
@@ -333,6 +420,21 @@ def _parse_salary_number(salary_str: str) -> Optional[int]:
     return None
 
 
+def _match_terms_in_job(terms: set[str], text_lower: str, tech_tokens: set[str]) -> set[str]:
+    """Check which search terms match in job tech stack or text using word boundaries."""
+    if not terms:
+        return set()
+    matched: set[str] = set()
+    for t in terms:
+        if t in tech_tokens:
+            matched.add(t)
+        else:
+            pattern = r"(?<![a-zA-Z0-9_])" + re.escape(t) + r"(?![a-zA-Z0-9_])"
+            if re.search(pattern, text_lower):
+                matched.add(t)
+    return matched
+
+
 def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
     """Filter and score job listings according to user preferences.
 
@@ -425,12 +527,13 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
                 continue
 
         # 5. Compute match score (0 to 100) & explainability fields
-        job_tech_tokens = {t.strip().lower() for t in job.tech_stack}
-        job_words = set(re.findall(r"[a-zA-Z0-9_\.\#\+]+", job_full_text))
-        all_job_tokens = job_tech_tokens | job_words
+        job_tech_tokens = {t.strip().lower() for t in job.tech_stack if t.strip()}
+        matched_tech = _match_terms_in_job(desired_tech, job_full_text, job_tech_tokens)
+        matched_kw = _match_terms_in_job(desired_keywords, job_full_text, job_tech_tokens)
+        matched_cv = _match_terms_in_job(cv_keywords, job_full_text, job_tech_tokens)
 
-        matched_tokens = total_desired & all_job_tokens
-        missing_tokens = total_desired - all_job_tokens
+        matched_tokens = matched_tech | matched_kw | matched_cv
+        missing_tokens = total_desired - matched_tokens
 
         job.matched_skills = sorted([display_map.get(s, s.title()) for s in matched_tokens], key=lambda s: s.lower())
         job.missing_skills = sorted([display_map.get(s, s.title()) for s in missing_tokens], key=lambda s: s.lower())
@@ -441,22 +544,24 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
         if not job.description_summary and job.description:
             job.description_summary = generate_description_summary(job.description)
 
+        # Job's identified tech stack/skills
+        extracted_job_skills = {s.lower() for s in _extract_text_tech_keywords(f"{job.title} {job.description} {' '.join(job.tech_stack)}")}
+        job_skills = job_tech_tokens | extracted_job_skills
+
         # Structured match reasons
         reasons: list[str] = []
         if cv_keywords:
-            matched_cv = cv_keywords & all_job_tokens
             if matched_cv:
                 cv_names = sorted([display_map.get(s, s.title()) for s in matched_cv], key=lambda s: s.lower())
-                reasons.append(f"CV matched skills: {', '.join(cv_names)}")
+                cv_fit_pct = round((len(matched_cv & job_skills) / len(job_skills)) * 100.0) if job_skills else 100.0
+                reasons.append(f"CV matched {len(matched_cv)} core skills: {', '.join(cv_names)} ({int(cv_fit_pct)}% tech requirements match)")
 
         if desired_tech:
-            matched_tech = desired_tech & all_job_tokens
             if matched_tech:
                 tech_names = sorted([display_map.get(s, s.title()) for s in matched_tech], key=lambda s: s.lower())
                 reasons.append(f"Target stack matched: {', '.join(tech_names)}")
 
         if desired_keywords:
-            matched_kw = desired_keywords & all_job_tokens
             if matched_kw:
                 kw_names = sorted([display_map.get(s, s.title()) for s in matched_kw], key=lambda s: s.lower())
                 reasons.append(f"Keywords matched: {', '.join(kw_names)}")
@@ -482,31 +587,42 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
             # If no skills or keywords specified in preferences, score is 100.0
             score = 100.0
         else:
-            # Weights breakdown
-            matched_tech = desired_tech & all_job_tokens
-            matched_kw = desired_keywords & all_job_tokens
-            matched_cv = cv_keywords & all_job_tokens
+            tech_score = (len(matched_tech) / len(desired_tech)) * 100.0 if desired_tech else 0.0
+            kw_score = (len(matched_kw) / len(desired_keywords)) * 100.0 if desired_keywords else 0.0
 
-            score_components = []
-            if desired_tech:
-                score_components.append((len(matched_tech) / len(desired_tech)) * 50.0)
-            if desired_keywords:
-                score_components.append((len(matched_kw) / len(desired_keywords)) * 30.0)
+            cv_score = 0.0
             if cv_keywords:
-                score_components.append((len(matched_cv) / len(cv_keywords)) * 20.0)
+                if matched_cv:
+                    if job_skills:
+                        matched_job_skills = matched_cv & job_skills
+                        job_coverage = len(matched_job_skills) / len(job_skills)
+                        coverage_points = job_coverage * 55.0
+                        count_points = min(45.0, len(matched_cv) * 15.0)
+                        cv_score = min(100.0, coverage_points + count_points)
+                    else:
+                        cv_score = min(50.0, len(matched_cv) * 15.0)
+                else:
+                    cv_score = 0.0
 
-            raw_score = sum(score_components)
-            # Normalize to 100 scale based on active components
             active_weights = (50.0 if desired_tech else 0.0) + (30.0 if desired_keywords else 0.0) + (20.0 if cv_keywords else 0.0)
             if active_weights > 0:
-                score = (raw_score / active_weights) * 100.0
+                weighted_sum = (
+                    tech_score * (50.0 if desired_tech else 0.0)
+                    + kw_score * (30.0 if desired_keywords else 0.0)
+                    + cv_score * (20.0 if cv_keywords else 0.0)
+                )
+                score = weighted_sum / active_weights
             else:
                 score = 100.0
 
-            # Bonus for exact title match
-            title_lower = job.title.lower()
-            if any(t in title_lower for t in desired_tech | desired_keywords):
-                score = min(100.0, score + 5.0)
+            # Bonus for exact title match (only if base score > 0)
+            if score > 0:
+                title_lower = job.title.lower()
+                for t in desired_tech | desired_keywords | cv_keywords:
+                    pattern = r"(?<![a-zA-Z0-9_])" + re.escape(t) + r"(?![a-zA-Z0-9_])"
+                    if re.search(pattern, title_lower):
+                        score = min(100.0, score + 5.0)
+                        break
 
             score = round(max(0.0, min(100.0, score)), 1)
 
@@ -689,21 +805,29 @@ def parse_api_job_dict(raw: dict) -> Job:
     )
 
 
+DEFAULT_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+}
+
+
 async def fetch_jobs_via_api(
-    request_context: Any,
+    request_context: Any = None,
     page: int = 1,
     size: int = 50,
     sort_by: str = "posted_date",
     sort_order: str = "desc",
+    client: Optional[httpx.AsyncClient] = None,
 ) -> list[Job]:
-    """Fetch jobs directly via the HireMeTech REST API using an active APIRequestContext.
+    """Fetch jobs directly via the HireMeTech REST API using httpx or Playwright APIRequestContext.
 
     Args:
-        request_context: Playwright APIRequestContext instance.
+        request_context: Optional Playwright APIRequestContext or httpx.AsyncClient instance.
         page: Page number (1-indexed).
         size: Number of jobs per page.
         sort_by: Field to sort by ('posted_date', 'relevance', etc.).
         sort_order: Sort direction ('desc' or 'asc').
+        client: Optional httpx.AsyncClient instance.
 
     Returns:
         list[Job]: Parsed list of Job objects.
@@ -713,15 +837,52 @@ async def fetch_jobs_via_api(
     """
     url = f"{BASE_URL}/api/jobs/search?page={page}&size={size}&sort_by={sort_by}&sort_order={sort_order}&country=Israel&israeli=true"
     logger.info("Fetching jobs from API: %s", url)
-    t0 = time.perf_counter()
-    resp = await request_context.get(url)
-    duration_ms = (time.perf_counter() - t0) * 1000.0
-    if resp.status != 200:
-        error_msg = f"HireMe API returned status {resp.status} for {url}"
-        logger.warning(error_msg)
-        raise RuntimeError(error_msg)
 
-    data = await resp.json()
+    if client is not None or isinstance(request_context, httpx.AsyncClient):
+        http_client = client if isinstance(client, httpx.AsyncClient) else request_context
+        t0 = time.perf_counter()
+        resp = await http_client.get(url, headers=DEFAULT_HTTP_HEADERS)
+        duration_ms = (time.perf_counter() - t0) * 1000.0
+        status_code = resp.status_code
+        if status_code != 200:
+            error_msg = f"HireMe API returned status {status_code} for {url}"
+            logger.warning(error_msg)
+            raise RuntimeError(error_msg)
+        data = resp.json()
+    elif request_context is None:
+        async with httpx.AsyncClient(timeout=6.0, headers=DEFAULT_HTTP_HEADERS) as http_client:
+            t0 = time.perf_counter()
+            resp = await http_client.get(url)
+            duration_ms = (time.perf_counter() - t0) * 1000.0
+            status_code = resp.status_code
+            if status_code != 200:
+                error_msg = f"HireMe API returned status {status_code} for {url}"
+                logger.warning(error_msg)
+                raise RuntimeError(error_msg)
+            data = resp.json()
+    else:
+        # Playwright APIRequestContext or test mock
+        t0 = time.perf_counter()
+        resp = await request_context.get(url)
+        duration_ms = (time.perf_counter() - t0) * 1000.0
+        status_code = getattr(resp, "status", getattr(resp, "status_code", 200))
+        if status_code != 200:
+            error_msg = f"HireMe API returned status {status_code} for {url}"
+            logger.warning(error_msg)
+            raise RuntimeError(error_msg)
+
+        json_method = getattr(resp, "json", None)
+        if callable(json_method):
+            json_res = json_method()
+            if asyncio.iscoroutine(json_res):
+                data = await json_res
+            else:
+                data = json_res
+        elif hasattr(resp, "json"):
+            data = resp.json
+        else:
+            data = {}
+
     raw_jobs = data.get("jobs", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
     if isinstance(data, dict) and not raw_jobs and "data" in data:
         raw_jobs = data["data"]
@@ -730,7 +891,7 @@ async def fetch_jobs_via_api(
     logger.info(
         "HTTP API request completed",
         url=url,
-        status=resp.status,
+        status=status_code,
         duration_ms=round(duration_ms, 2),
         jobs_count=len(jobs),
         source="hiremetech",

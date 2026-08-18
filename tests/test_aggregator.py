@@ -309,6 +309,54 @@ class TestJobAggregator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fast_source.fetch_call_count, 1)
         self.assertEqual(slow_source.fetch_call_count, 1)
 
+    async def test_fetch_all_jobs_partial_source_failure_graceful_degradation(self) -> None:
+        """Verify partial source failure with asyncio.gather(return_exceptions=True) returns jobs from successful sources."""
+        src_success = MockSource("good_source", jobs=[self.job_hmt, self.job_alljobs])
+        src_error = MockSource("failing_source", raise_on_fetch=RuntimeError("Connection reset by peer"))
+        src_timeout = MockSource("timeout_source", delay=5.0)
+
+        reg = SourceRegistry()
+        reg.register(src_success)
+        reg.register(src_error)
+        reg.register(src_timeout)
+
+        agg = JobAggregator(registry=reg, source_timeout=0.3)
+        jobs = await agg.fetch_all_jobs(force_refresh=True)
+
+        # Successful source returns its jobs despite the failure and timeout of others
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual({j.job_id for j in jobs}, {"hmt-1", "aj-1"})
+        self.assertEqual(src_success.fetch_call_count, 1)
+        self.assertEqual(src_error.fetch_call_count, 1)
+        self.assertEqual(src_timeout.fetch_call_count, 1)
+
+    async def test_fetch_all_jobs_gather_exception_result_handling(self) -> None:
+        """Verify that if asyncio.gather returns an Exception object directly, it is caught and logged gracefully."""
+        src1 = MockSource("src1", jobs=[self.job_hmt])
+        src2 = MockSource("src2", jobs=[self.job_alljobs])
+
+        reg = SourceRegistry()
+        reg.register(src1)
+        reg.register(src2)
+
+        agg = JobAggregator(registry=reg)
+
+        exc = RuntimeError("Simulated unhandled task crash")
+
+        async def mock_gather(*coros, **kwargs):
+            for c in coros:
+                c.close()
+            return [[self.job_hmt], exc]
+
+        with patch("job_mcp.sources.aggregator.asyncio.gather", side_effect=mock_gather):
+            with patch("job_mcp.sources.aggregator.logger.warning") as mock_warning:
+                jobs = await agg.fetch_all_jobs(force_refresh=True)
+
+                self.assertEqual(len(jobs), 1)
+                self.assertEqual(jobs[0].job_id, "hmt-1")
+                # Verify warning logged with structured format
+                mock_warning.assert_called_with("Source '%s' fetch failed: %s", "src2", exc)
+
 
 class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
     """Tests for list_job_sources and get_job_matches FastMCP tools."""

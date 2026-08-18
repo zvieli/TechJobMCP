@@ -160,8 +160,8 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
     @patch.object(SessionManager, "initialize", new_callable=AsyncMock)
     @patch.object(SessionManager, "check_session_health", new_callable=AsyncMock)
     @patch.object(SessionManager, "shutdown", new_callable=AsyncMock)
-    async def test_browser_lifespan(self, mock_shutdown, mock_health, mock_init):
-        """Test browser_lifespan startup, state yield, and cleanup shutdown."""
+    async def test_browser_lifespan_lazy(self, mock_shutdown, mock_health, mock_init):
+        """Test browser_lifespan boots without eager browser initialization."""
         mock_init.return_value = None
         mock_health.return_value = True
         mock_shutdown.return_value = None
@@ -175,7 +175,21 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
             self.assertIn("aggregator", state)
             self.assertIsInstance(state["session"], SessionManager)
             self.assertIsInstance(state["cache"], JobCache)
-            mock_init.assert_called_once()
+            mock_init.assert_not_called()
+            self.assertFalse(state["session"].is_running)
+
+        mock_shutdown.assert_not_called()
+
+    @patch.object(SessionManager, "shutdown", new_callable=AsyncMock)
+    async def test_browser_lifespan_shutdown_when_running(self, mock_shutdown):
+        """Test browser_lifespan cleanly shuts down session if it was lazily started."""
+        mock_server = MagicMock(spec=FastMCP)
+
+        async with browser_lifespan(mock_server) as state:
+            session = state["session"]
+            session._initialized = True
+            session.context = MagicMock()
+            self.assertTrue(session.is_running)
 
         mock_shutdown.assert_called_once()
 

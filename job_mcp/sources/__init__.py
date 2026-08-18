@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import os
+from typing import Any, Optional
 
 from job_mcp.sources.base import BaseJobSource, SourceMetadata
 from job_mcp.sources.dedup import (
@@ -121,7 +122,10 @@ def create_default_registry(session_manager: Optional[Any] = None) -> SourceRegi
     reg = SourceRegistry()
     reg.register(HireMeTechSource(session_manager=session_manager))
     reg.register(ComeetSource())
-    reg.register(AllJobsSource())
+
+    enable_alljobs = os.getenv("ENABLE_ALLJOBS", "false").strip().lower() in ("true", "1", "yes")
+    if enable_alljobs:
+        reg.register(AllJobsSource())
     return reg
 
 

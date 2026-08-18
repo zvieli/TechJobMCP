@@ -210,6 +210,9 @@ class AllJobsSource(BaseJobSource):
             timeout: Default HTTP query timeout in seconds.
             health_timeout: Health check HTTP timeout in seconds.
         """
+        logger.warning(
+            "AllJobsSource is deprecated and disabled by default due to upstream WAF restrictions."
+        )
         self.base_url = base_url.rstrip("/")
         self.headers = headers or dict(ALLJOBS_HEADERS)
         self.cache_ttl_seconds = cache_ttl_seconds

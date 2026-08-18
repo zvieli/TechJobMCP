@@ -255,3 +255,129 @@ class TestSourceHttpTelemetry:
         assert event["jobs_count"] == 1
         assert isinstance(event["duration_ms"], (int, float))
 
+
+class TestJobActionObservability:
+    """Unit tests verifying structured event logging for bookmark_job and delete_job."""
+
+    @pytest.mark.asyncio
+    async def test_bookmark_job_structured_logging_cached(self, capfd):
+        from unittest.mock import MagicMock
+        from fastmcp import Context
+        from job_mcp.core.api_client import JobCache
+        from job_mcp.main import bookmark_job
+        from job_mcp.models.schemas import Job
+
+        cache = JobCache(ttl_minutes=10)
+        test_job = Job(
+            job_id="comeet_123",
+            title="Senior Backend Dev",
+            company="Acme Corp",
+            source="comeet",
+        )
+        cache.update([test_job])
+
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"cache": cache}
+
+        res = await bookmark_job(job_id="comeet_123", ctx=ctx)
+        assert res["success"] is True
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        bm_events = [l for l in lines if l.get("event") == "Bookmarked job"]
+        assert len(bm_events) >= 1
+        event = bm_events[-1]
+        assert event["job_id"] == "comeet_123"
+        assert event["title"] == "Senior Backend Dev"
+        assert event["company"] == "Acme Corp"
+        assert event["source"] == "comeet"
+
+    @pytest.mark.asyncio
+    async def test_bookmark_job_structured_logging_uncached(self, capfd):
+        from unittest.mock import MagicMock
+        from fastmcp import Context
+        from job_mcp.core.api_client import JobCache
+        from job_mcp.main import bookmark_job
+
+        cache = JobCache(ttl_minutes=10)
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"cache": cache}
+
+        res = await bookmark_job(job_id="comeet_999", ctx=ctx)
+        assert res["success"] is True
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        bm_events = [l for l in lines if l.get("event") == "Bookmarked job"]
+        assert len(bm_events) >= 1
+        event = bm_events[-1]
+        assert event["job_id"] == "comeet_999"
+        assert event["title"] is None
+        assert event["company"] is None
+        assert event["source"] is None
+
+    @pytest.mark.asyncio
+    async def test_delete_job_structured_logging_and_dismiss_cached(self, capfd):
+        from unittest.mock import MagicMock
+        from fastmcp import Context
+        from job_mcp.core.api_client import JobCache
+        from job_mcp.main import delete_job
+        from job_mcp.models.schemas import Job
+
+        cache = JobCache(ttl_minutes=10)
+        test_job = Job(
+            job_id="comeet_456",
+            title="DevOps Lead",
+            company="Beta Inc",
+            source="comeet",
+        )
+        cache.update([test_job])
+        assert cache.get_by_id("comeet_456") is not None
+
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"cache": cache}
+
+        res = await delete_job(job_id="comeet_456", ctx=ctx)
+        assert res["success"] is True
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        del_events = [l for l in lines if l.get("event") == "Dismissed job from cache"]
+        assert len(del_events) >= 1
+        event = del_events[-1]
+        assert event["job_id"] == "comeet_456"
+        assert event["title"] == "DevOps Lead"
+        assert event["company"] == "Beta Inc"
+        assert event["source"] == "comeet"
+
+        # Verify job was dismissed in cache
+        assert cache.get_by_id("comeet_456") is None
+        assert "comeet_456" in cache.dismissed_ids
+
+    @pytest.mark.asyncio
+    async def test_delete_job_structured_logging_uncached(self, capfd):
+        from unittest.mock import MagicMock
+        from fastmcp import Context
+        from job_mcp.core.api_client import JobCache
+        from job_mcp.main import delete_job
+
+        cache = JobCache(ttl_minutes=10)
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"cache": cache}
+
+        res = await delete_job(job_id="comeet_999", ctx=ctx)
+        assert res["success"] is True
+
+        captured = capfd.readouterr()
+        lines = [json.loads(l) for l in captured.err.strip().split("\n") if l.strip()]
+        del_events = [l for l in lines if l.get("event") == "Dismissed job from cache"]
+        assert len(del_events) >= 1
+        event = del_events[-1]
+        assert event["job_id"] == "comeet_999"
+        assert event["title"] is None
+        assert event["company"] is None
+        assert event["source"] is None
+
+        assert "comeet_999" in cache.dismissed_ids
+
+

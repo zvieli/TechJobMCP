@@ -282,8 +282,9 @@ class TestHireMeTechSource:
         mock_sm.ensure_ready = AsyncMock(side_effect=RuntimeError("Session timeout or unauthenticated"))
         source = HireMeTechSource(session_manager=mock_sm)
 
-        jobs = await source.fetch_jobs(limit=10)
-        assert jobs == []
+        with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", side_effect=RuntimeError("Direct API failed")):
+            jobs = await source.fetch_jobs(limit=10)
+            assert jobs == []
 
     @pytest.mark.asyncio
     async def test_fetch_jobs_via_api_primary(self) -> None:
@@ -318,7 +319,7 @@ class TestHireMeTechSource:
             assert jobs[0].source == "hiremetech"
             assert jobs[0].sources == ["hiremetech"]
             assert jobs[1].job_id == "job-2"
-            mock_api.assert_awaited_once_with(mock_page.request, size=10)
+            mock_api.assert_awaited_once_with(None, size=10)
 
     @pytest.mark.asyncio
     async def test_fetch_jobs_fallback_to_dom_extraction(self) -> None:
@@ -413,4 +414,50 @@ class TestHireMeTechSource:
         assert ev["jobs_count"] == 1
         assert "duration_ms" in ev
         assert "url" in ev
+
+
+class TestCreateDefaultRegistry:
+    """Unit tests for create_default_registry factory function."""
+
+    def test_default_registration_without_alljobs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from job_mcp.sources import create_default_registry
+
+        monkeypatch.delenv("ENABLE_ALLJOBS", raising=False)
+        reg = create_default_registry()
+        assert len(reg) == 2
+        assert "hiremetech" in reg
+        assert "comeet" in reg
+        assert "alljobs" not in reg
+
+    @pytest.mark.parametrize("env_val", ["true", "1", "yes", "TRUE", "True"])
+    def test_registration_with_enable_alljobs(self, monkeypatch: pytest.MonkeyPatch, env_val: str) -> None:
+        from job_mcp.sources import create_default_registry
+
+        monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
+        reg = create_default_registry()
+        assert len(reg) == 3
+        assert "hiremetech" in reg
+        assert "comeet" in reg
+        assert "alljobs" in reg
+
+    @pytest.mark.parametrize("env_val", ["false", "0", "no", "", "invalid"])
+    def test_registration_with_disabled_alljobs(self, monkeypatch: pytest.MonkeyPatch, env_val: str) -> None:
+        from job_mcp.sources import create_default_registry
+
+        monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
+        reg = create_default_registry()
+        assert len(reg) == 2
+        assert "hiremetech" in reg
+        assert "comeet" in reg
+        assert "alljobs" not in reg
+
+    def test_passes_session_manager(self) -> None:
+        from job_mcp.sources import create_default_registry
+
+        mock_sm = MagicMock()
+        reg = create_default_registry(session_manager=mock_sm)
+        hmt_src = reg.get("hiremetech")
+        assert hmt_src is not None
+        assert hmt_src.session_manager is mock_sm
+
 

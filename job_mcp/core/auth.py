@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any, Optional
@@ -43,48 +44,59 @@ class SessionManager:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self._initialized: bool = False
+        self._lock: asyncio.Lock = asyncio.Lock()
+
+    @property
+    def is_running(self) -> bool:
+        """Check if browser session is currently active and initialized."""
+        return bool(self._initialized and self.context is not None)
 
     async def initialize(self) -> None:
-        """Start Playwright and launch Chromium persistent context."""
+        """Start Playwright and launch Chromium persistent context with double-checked locking."""
         if self._initialized and self.context is not None:
             logger.debug("SessionManager is already initialized.")
             return
 
-        logger.info(
-            "Initializing SessionManager (profile_dir=%s, headless=%s)",
-            self.user_data_dir,
-            self.headless,
-        )
-        self.user_data_dir.mkdir(parents=True, exist_ok=True)
+        async with self._lock:
+            if self._initialized and self.context is not None:
+                logger.debug("SessionManager is already initialized.")
+                return
 
-        self.playwright = await async_playwright().start()
+            logger.info(
+                "Initializing SessionManager (profile_dir=%s, headless=%s)",
+                self.user_data_dir,
+                self.headless,
+            )
+            self.user_data_dir.mkdir(parents=True, exist_ok=True)
 
-        launch_args = [
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-        ]
-        user_agent = (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
-        viewport = {"width": 1280, "height": 800}
+            self.playwright = await async_playwright().start()
 
-        self.context = await self.playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self.user_data_dir),
-            headless=self.headless,
-            args=launch_args,
-            user_agent=user_agent,
-            viewport=viewport,
-        )
+            launch_args = [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ]
+            user_agent = (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            )
+            viewport = {"width": 1280, "height": 800}
 
-        if self.context.pages:
-            self.page = self.context.pages[0]
-        else:
-            self.page = await self.context.new_page()
+            self.context = await self.playwright.chromium.launch_persistent_context(
+                user_data_dir=str(self.user_data_dir),
+                headless=self.headless,
+                args=launch_args,
+                user_agent=user_agent,
+                viewport=viewport,
+            )
 
-        self._initialized = True
-        logger.info("SessionManager initialized successfully.")
+            if self.context.pages:
+                self.page = self.context.pages[0]
+            else:
+                self.page = await self.context.new_page()
+
+            self._initialized = True
+            logger.info("SessionManager initialized successfully.")
 
     async def get_page(self) -> Page:
         """Get or create the active browser page."""
@@ -221,6 +233,7 @@ class SessionManager:
         """Initialize, health-check, and auto-recover the browser session.
 
         Retries up to max_retries times, performing full recovery between attempts.
+        Thread/async concurrency safe using internal lock.
 
         Args:
             max_retries: Maximum number of initialization/recovery attempts.
@@ -290,27 +303,28 @@ class SessionManager:
 
     async def shutdown(self) -> None:
         """Cleanly close page, browser context, and stop Playwright."""
-        logger.info("Shutting down SessionManager...")
-        if self.page and not self.page.is_closed():
-            try:
-                await self.page.close()
-            except Exception as exc:
-                logger.debug("Error closing page: %s", exc)
-        self.page = None
+        async with self._lock:
+            logger.info("Shutting down SessionManager...")
+            if self.page and not self.page.is_closed():
+                try:
+                    await self.page.close()
+                except Exception as exc:
+                    logger.debug("Error closing page: %s", exc)
+            self.page = None
 
-        if self.context:
-            try:
-                await self.context.close()
-            except Exception as exc:
-                logger.debug("Error closing context: %s", exc)
-        self.context = None
+            if self.context:
+                try:
+                    await self.context.close()
+                except Exception as exc:
+                    logger.debug("Error closing context: %s", exc)
+            self.context = None
 
-        if self.playwright:
-            try:
-                await self.playwright.stop()
-            except Exception as exc:
-                logger.debug("Error stopping Playwright: %s", exc)
-        self.playwright = None
+            if self.playwright:
+                try:
+                    await self.playwright.stop()
+                except Exception as exc:
+                    logger.debug("Error stopping Playwright: %s", exc)
+            self.playwright = None
 
-        self._initialized = False
-        logger.info("SessionManager shutdown complete.")
+            self._initialized = False
+            logger.info("SessionManager shutdown complete.")
