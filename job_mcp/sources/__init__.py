@@ -33,6 +33,13 @@ from job_mcp.sources.workday import (
     WorkdaySource,
     parse_workday_position,
 )
+from job_mcp.sources.eightfold import (
+    DEFAULT_EIGHTFOLD_COMPANIES,
+    EIGHTFOLD_COMPANIES,
+    EightfoldAISource,
+    EightfoldCompany,
+    parse_eightfold_position,
+)
 from job_mcp.sources.hiremetech import HireMeTechSource
 from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
 
@@ -137,6 +144,10 @@ def create_default_registry(session_manager: Optional[Any] = None) -> SourceRegi
     enable_workday = os.getenv("ENABLE_WORKDAY", "false").strip().lower() in ("true", "1", "yes")
     if enable_workday:
         reg.register(WorkdaySource())
+
+    enable_eightfold = os.getenv("ENABLE_EIGHTFOLD", "false").strip().lower() in ("true", "1", "yes")
+    if enable_eightfold:
+        reg.register(EightfoldAISource())
     return reg
 
 
@@ -158,6 +169,11 @@ __all__ = [
     "WORKDAY_COMPANIES",
     "DEFAULT_WORKDAY_COMPANIES",
     "parse_workday_position",
+    "EightfoldAISource",
+    "EightfoldCompany",
+    "EIGHTFOLD_COMPANIES",
+    "DEFAULT_EIGHTFOLD_COMPANIES",
+    "parse_eightfold_position",
     "AllJobsSource",
     "ALLJOBS_BASE_URL",
     "ALLJOBS_HEADERS",
