@@ -708,6 +708,19 @@ async def bookmark_job(
         dict: ToolResponse indicating bookmark success or failure.
     """
     try:
+        cache = _get_cache(ctx)
+
+        # Handle external ATS job sources (Comeet, AllJobs, etc.)
+        if job_id.startswith(("comeet_", "alljobs_")):
+            cached_job = cache.get_by_id(job_id)
+            if cached_job:
+                cached_job.is_bookmarked = True
+            return _response(
+                success=True,
+                message=f"Successfully bookmarked external ATS job '{job_id}' in cache.",
+                data={"job_id": job_id, "is_bookmarked": True},
+            )
+
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
             return _response(
@@ -720,7 +733,6 @@ async def bookmark_job(
         await browser_bookmark_job(page, job_id)
 
         # Update cache if job present
-        cache = _get_cache(ctx)
         cached_job = cache.get_by_id(job_id)
         if cached_job:
             cached_job.is_bookmarked = True
@@ -755,6 +767,18 @@ async def delete_job(
         dict: ToolResponse indicating dismissal success or failure.
     """
     try:
+        cache = _get_cache(ctx)
+
+        # Handle external ATS job sources (Comeet, AllJobs, etc.)
+        if job_id.startswith(("comeet_", "alljobs_")):
+            updated_jobs = [j for j in cache.get_all() if j.job_id != job_id]
+            cache.update(updated_jobs)
+            return _response(
+                success=True,
+                message=f"Successfully dismissed external ATS job '{job_id}' from view and cache.",
+                data={"job_id": job_id},
+            )
+
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
             return _response(
@@ -767,7 +791,6 @@ async def delete_job(
         await browser_delete_job(page, job_id)
 
         # Update cache
-        cache = _get_cache(ctx)
         updated_jobs = [j for j in cache.get_all() if j.job_id != job_id]
         cache.update(updated_jobs)
 
