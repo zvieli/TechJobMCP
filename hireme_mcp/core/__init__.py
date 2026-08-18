@@ -3,7 +3,11 @@
 from hireme_mcp.core.api_client import (
     JobCache,
     extract_cv_keywords,
+    fetch_jobs_via_api,
+    fetch_saved_jobs_batch,
+    fetch_user_resume_profile,
     filter_jobs,
+    parse_api_job_dict,
 )
 from hireme_mcp.core.auth import (
     BASE_URL,
@@ -50,4 +54,8 @@ __all__ = [
     "JobCache",
     "extract_cv_keywords",
     "filter_jobs",
+    "parse_api_job_dict",
+    "fetch_jobs_via_api",
+    "fetch_saved_jobs_batch",
+    "fetch_user_resume_profile",
 ]

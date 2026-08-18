@@ -1,4 +1,4 @@
-"""Caching, CV keyword extraction, and job filtering logic for HireMeTech MCP server."""
+"""Caching, CV keyword extraction, and direct API client logic for HireMeTech MCP server."""
 
 from __future__ import annotations
 
@@ -8,8 +8,9 @@ import time
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+from hireme_mcp.core.auth import BASE_URL
 from hireme_mcp.models.schemas import Job, JobPreferences, WorkMode
 from hireme_mcp.utils.logger import get_logger
 
@@ -206,6 +207,26 @@ def extract_cv_keywords(cv_path: str) -> list[str]:
     return result
 
 
+def _extract_text_tech_keywords(text: str) -> list[str]:
+    """Extract curated tech keywords present in a given string.
+
+    Args:
+        text: Input text string.
+
+    Returns:
+        list[str]: Matched tech keywords.
+    """
+    if not text:
+        return []
+    found: list[str] = []
+    text_lower = text.lower()
+    for tech in CURATED_TECH_KEYWORDS:
+        pattern = r"(?<![a-zA-Z0-9_])" + re.escape(tech.lower()) + r"(?![a-zA-Z0-9_])"
+        if re.search(pattern, text_lower):
+            found.append(tech)
+    return found
+
+
 def _parse_salary_number(salary_str: str) -> Optional[int]:
     """Extract numeric salary value from salary text string."""
     clean = salary_str.lower().replace(",", "").replace("$", "").replace("€", "").replace("£", "")
@@ -325,3 +346,274 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
     filtered.sort(key=lambda j: (j.match_score or 0.0), reverse=True)
     logger.info("Filtered %d jobs down to %d matching jobs.", len(jobs), len(filtered))
     return filtered
+
+
+def parse_api_job_dict(raw: dict) -> Job:
+    """Map a raw API job dictionary payload into a Job model.
+
+    Args:
+        raw: Dictionary representing a job listing from the HireMeTech API.
+
+    Returns:
+        Job: Populated Pydantic Job model instance.
+    """
+    job_id = str(raw.get("id") or raw.get("job_id") or raw.get("_id") or "").strip()
+    title = str(raw.get("title") or "").strip()
+
+    # Company resolution
+    company = ""
+    if raw.get("company_name"):
+        company = str(raw["company_name"]).strip()
+    elif isinstance(raw.get("company"), dict):
+        company = str(raw["company"].get("name") or "").strip()
+    elif isinstance(raw.get("company"), str):
+        company = raw["company"].strip()
+
+    # Location & Work Mode resolution
+    location_str = ""
+    work_mode: Optional[WorkMode] = None
+
+    loc_obj = raw.get("location")
+    if isinstance(loc_obj, dict):
+        basic = loc_obj.get("basic") if isinstance(loc_obj.get("basic"), dict) else {}
+        city = loc_obj.get("city") or basic.get("city") or ""
+        display = basic.get("display_name") or loc_obj.get("full_address") or city
+        location_str = str(display or city or "").strip()
+
+        # Work model resolution inside location dict
+        work_model = loc_obj.get("work_model")
+        if isinstance(work_model, dict):
+            wm_type = str(work_model.get("type") or "").strip().lower()
+            if work_model.get("is_remote") is True or wm_type == "remote":
+                work_mode = WorkMode.REMOTE
+            elif work_model.get("is_hybrid") is True or wm_type == "hybrid":
+                work_mode = WorkMode.HYBRID
+            elif wm_type in ("onsite", "on-site", "office"):
+                work_mode = WorkMode.ONSITE
+        elif isinstance(work_model, str):
+            wm_str = work_model.strip().lower()
+            if "remote" in wm_str:
+                work_mode = WorkMode.REMOTE
+            elif "hybrid" in wm_str:
+                work_mode = WorkMode.HYBRID
+            elif "onsite" in wm_str or "on-site" in wm_str or "office" in wm_str:
+                work_mode = WorkMode.ONSITE
+    elif isinstance(loc_obj, str):
+        location_str = loc_obj.strip()
+
+    # Fallback work mode resolution if not already set
+    if work_mode is None:
+        raw_wm = raw.get("work_model") or raw.get("work_mode")
+        if isinstance(raw_wm, dict):
+            wm_type = str(raw_wm.get("type") or "").strip().lower()
+            if raw_wm.get("is_remote") is True or wm_type == "remote":
+                work_mode = WorkMode.REMOTE
+            elif raw_wm.get("is_hybrid") is True or wm_type == "hybrid":
+                work_mode = WorkMode.HYBRID
+            elif wm_type in ("onsite", "on-site", "office"):
+                work_mode = WorkMode.ONSITE
+        elif isinstance(raw_wm, str):
+            wm_str = raw_wm.strip().lower()
+            if "remote" in wm_str:
+                work_mode = WorkMode.REMOTE
+            elif "hybrid" in wm_str:
+                work_mode = WorkMode.HYBRID
+            elif "onsite" in wm_str or "on-site" in wm_str or "office" in wm_str:
+                work_mode = WorkMode.ONSITE
+        elif raw.get("is_remote") is True:
+            work_mode = WorkMode.REMOTE
+        elif raw.get("is_hybrid") is True:
+            work_mode = WorkMode.HYBRID
+        elif "remote" in location_str.lower():
+            work_mode = WorkMode.REMOTE
+        elif "hybrid" in location_str.lower():
+            work_mode = WorkMode.HYBRID
+        elif "onsite" in location_str.lower() or "on-site" in location_str.lower():
+            work_mode = WorkMode.ONSITE
+
+    # Description and requirements combination
+    desc = str(raw.get("description") or "").strip()
+    reqs = str(raw.get("requirements") or "").strip()
+    if desc and reqs and reqs not in desc:
+        combined_desc = f"{desc}\n\n{reqs}"
+    else:
+        combined_desc = desc or reqs
+
+    # Tech stack extraction
+    tech_candidates: list[str] = []
+    for field in ("skills_required", "skills", "tech_stack"):
+        val = raw.get(field)
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, str) and item.strip():
+                    tech_candidates.append(item.strip())
+                elif isinstance(item, dict):
+                    name = item.get("name") or item.get("title") or item.get("skill")
+                    if name and isinstance(name, str) and name.strip():
+                        tech_candidates.append(name.strip())
+
+    # Heuristic tech keyword extraction from title & description
+    text_tech = _extract_text_tech_keywords(f"{title} {combined_desc}")
+    tech_candidates.extend(text_tech)
+
+    # Normalize & deduplicate preserving order/casing
+    seen_lower = set()
+    final_tech_stack: list[str] = []
+    for t in tech_candidates:
+        t_low = t.lower()
+        if t_low not in seen_lower:
+            seen_lower.add(t_low)
+            final_tech_stack.append(t)
+
+    # Salary resolution
+    salary_range: Optional[str] = None
+    sal_obj = raw.get("salary")
+    if isinstance(sal_obj, dict):
+        if sal_obj.get("formatted"):
+            salary_range = str(sal_obj["formatted"]).strip()
+        elif sal_obj.get("min") is not None or sal_obj.get("max") is not None:
+            min_v = sal_obj.get("min")
+            max_v = sal_obj.get("max")
+            curr = sal_obj.get("currency", "ILS")
+            if min_v is not None and max_v is not None:
+                salary_range = f"{min_v:,} - {max_v:,} {curr}"
+            elif min_v is not None:
+                salary_range = f"{min_v:,}+ {curr}"
+            elif max_v is not None:
+                salary_range = f"Up to {max_v:,} {curr}"
+    elif isinstance(sal_obj, str) and sal_obj.strip():
+        salary_range = sal_obj.strip()
+    elif raw.get("salary_range"):
+        salary_range = str(raw["salary_range"]).strip()
+
+    posted_date = raw.get("posted_date") or raw.get("reposted_at") or raw.get("created_at")
+    if posted_date is not None:
+        posted_date = str(posted_date).strip()
+
+    url = raw.get("job_url") or raw.get("url") or raw.get("link")
+    if url is not None:
+        url = str(url).strip()
+
+    is_bookmarked = bool(raw.get("is_saved") or raw.get("is_bookmarked") or False)
+    match_score = float(raw["match_score"]) if raw.get("match_score") is not None else None
+
+    return Job(
+        job_id=job_id,
+        title=title,
+        company=company,
+        location=location_str,
+        work_mode=work_mode,
+        tech_stack=final_tech_stack,
+        description=combined_desc,
+        salary_range=salary_range,
+        posted_date=posted_date,
+        url=url,
+        is_bookmarked=is_bookmarked,
+        match_score=match_score,
+    )
+
+
+async def fetch_jobs_via_api(
+    request_context: Any,
+    page: int = 1,
+    size: int = 50,
+    sort_by: str = "posted_date",
+    sort_order: str = "desc",
+) -> list[Job]:
+    """Fetch jobs directly via the HireMeTech REST API using an active APIRequestContext.
+
+    Args:
+        request_context: Playwright APIRequestContext instance.
+        page: Page number (1-indexed).
+        size: Number of jobs per page.
+        sort_by: Field to sort by ('posted_date', 'relevance', etc.).
+        sort_order: Sort direction ('desc' or 'asc').
+
+    Returns:
+        list[Job]: Parsed list of Job objects.
+
+    Raises:
+        RuntimeError: If the API returns a non-200 status code.
+    """
+    url = f"{BASE_URL}/api/jobs/search?page={page}&size={size}&sort_by={sort_by}&sort_order={sort_order}&country=Israel&israeli=true"
+    logger.info("Fetching jobs from API: %s", url)
+    resp = await request_context.get(url)
+    if resp.status != 200:
+        error_msg = f"HireMe API returned status {resp.status} for {url}"
+        logger.warning(error_msg)
+        raise RuntimeError(error_msg)
+
+    data = await resp.json()
+    raw_jobs = data.get("jobs", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+    if isinstance(data, dict) and not raw_jobs and "data" in data:
+        raw_jobs = data["data"]
+
+    jobs = [parse_api_job_dict(item) for item in raw_jobs if isinstance(item, dict)]
+    logger.info("Successfully fetched and parsed %d jobs from API", len(jobs))
+    return jobs
+
+
+async def fetch_saved_jobs_batch(
+    request_context: Any,
+    job_ids: list[str],
+) -> dict[str, dict]:
+    """Batch check saved status for job IDs via the HireMeTech REST API.
+
+    Args:
+        request_context: Playwright APIRequestContext instance.
+        job_ids: List of job ID strings to query.
+
+    Returns:
+        dict[str, dict]: Mapping of job_id to saved status details.
+
+    Raises:
+        RuntimeError: If the API returns a non-200 status code.
+    """
+    if not job_ids:
+        return {}
+
+    clean_ids = [str(jid).strip() for jid in job_ids if str(jid).strip()]
+    if not clean_ids:
+        return {}
+
+    ids_param = ",".join(clean_ids)
+    url = f"{BASE_URL}/api/saved-jobs/check-batch?job_ids={ids_param}"
+    logger.info("Batch checking %d saved jobs via API: %s", len(clean_ids), url)
+    resp = await request_context.get(url)
+    if resp.status != 200:
+        error_msg = f"HireMe saved-jobs batch check returned status {resp.status} for {url}"
+        logger.warning(error_msg)
+        raise RuntimeError(error_msg)
+
+    data = await resp.json()
+    if isinstance(data, dict):
+        return data.get("jobs", data)
+    return {}
+
+
+async def fetch_user_resume_profile(
+    request_context: Any,
+) -> dict:
+    """Fetch the authenticated user's resume profile via the HireMeTech REST API.
+
+    Args:
+        request_context: Playwright APIRequestContext instance.
+
+    Returns:
+        dict: User resume profile dictionary.
+
+    Raises:
+        RuntimeError: If the API returns a non-200 status code.
+    """
+    url = f"{BASE_URL}/api/resume/profile"
+    logger.info("Fetching user resume profile from API: %s", url)
+    resp = await request_context.get(url)
+    if resp.status != 200:
+        error_msg = f"HireMe resume profile fetch returned status {resp.status} for {url}"
+        logger.warning(error_msg)
+        raise RuntimeError(error_msg)
+
+    data = await resp.json()
+    if isinstance(data, dict):
+        return data
+    return {}
