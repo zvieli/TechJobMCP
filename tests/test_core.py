@@ -345,6 +345,131 @@ class TestApiClient(unittest.TestCase):
         self.assertEqual(scored[0].job_id, "1")
         self.assertGreater(scored[0].match_score, 80.0)
 
+        # 3. Test explainability fields populated on job 1
+        top_job = scored[0]
+        self.assertIn("Python", top_job.matched_skills)
+        self.assertIn("FastAPI", top_job.matched_skills)
+        self.assertIn("Docker", top_job.matched_skills)
+        self.assertEqual(top_job.missing_skills, [])
+        self.assertEqual(top_job.seniority_level, "Senior")
+        self.assertIsNotNone(top_job.description_summary)
+        self.assertTrue(len(top_job.match_reasons) > 0)
+        self.assertTrue(any("stack matched" in r.lower() for r in top_job.match_reasons))
+
+    def test_job_schema_explainability_defaults_and_serialization(self):
+        """Test Job schema defaults for new explainability fields and serialization."""
+        job = Job(job_id="test-1", title="Backend Engineer", company="TestCo")
+        self.assertEqual(job.matched_skills, [])
+        self.assertEqual(job.missing_skills, [])
+        self.assertEqual(job.match_reasons, [])
+        self.assertIsNone(job.description_summary)
+        self.assertIsNone(job.seniority_level)
+
+        dumped = job.model_dump()
+        self.assertIn("matched_skills", dumped)
+        self.assertIn("missing_skills", dumped)
+        self.assertIn("match_reasons", dumped)
+        self.assertIn("description_summary", dumped)
+        self.assertIn("seniority_level", dumped)
+
+    def test_detect_seniority_level_titles(self):
+        """Test seniority detection across different title variations."""
+        from job_mcp.core.api_client import detect_seniority_level
+
+        # Junior variations
+        self.assertEqual(detect_seniority_level("Junior Python Developer"), "Junior")
+        self.assertEqual(detect_seniority_level("Entry Level Backend Engineer"), "Junior")
+        self.assertEqual(detect_seniority_level("Graduate Software Engineer"), "Junior")
+
+        # Student / Intern variations
+        self.assertEqual(detect_seniority_level("Student Software Developer"), "Student")
+        self.assertEqual(detect_seniority_level("Software Engineering Intern"), "Intern")
+        self.assertEqual(detect_seniority_level("Summer Internship - Dev"), "Intern")
+
+        # Senior variations
+        self.assertEqual(detect_seniority_level("Senior Fullstack Developer"), "Senior")
+        self.assertEqual(detect_seniority_level("Sr. Backend Engineer"), "Senior")
+        self.assertEqual(detect_seniority_level("Sr Software Engineer"), "Senior")
+        self.assertEqual(detect_seniority_level("Principal DevOps Engineer"), "Senior")
+        self.assertEqual(detect_seniority_level("Staff Infrastructure Engineer"), "Senior")
+        self.assertEqual(detect_seniority_level("Cloud Solutions Architect"), "Senior")
+
+        # Lead variations
+        self.assertEqual(detect_seniority_level("Tech Lead"), "Lead")
+        self.assertEqual(detect_seniority_level("Engineering Team Lead"), "Lead")
+        self.assertEqual(detect_seniority_level("Head of Engineering"), "Lead")
+        self.assertEqual(detect_seniority_level("Director of R&D"), "Lead")
+        self.assertEqual(detect_seniority_level("VP Engineering"), "Lead")
+
+        # Mid variations
+        self.assertEqual(detect_seniority_level("Mid Python Developer"), "Mid")
+        self.assertEqual(detect_seniority_level("Intermediate Frontend Engineer"), "Mid")
+
+        # Unspecified
+        self.assertIsNone(detect_seniority_level("Software Engineer"))
+
+    def test_detect_seniority_level_text_fallback(self):
+        """Test seniority detection falls back to description text when title is neutral."""
+        from job_mcp.core.api_client import detect_seniority_level
+
+        self.assertEqual(
+            detect_seniority_level("Software Engineer", "This is an entry-level position for fast learners."),
+            "Junior"
+        )
+        self.assertEqual(
+            detect_seniority_level("Software Engineer", "Looking for a student in computer science."),
+            "Student"
+        )
+        self.assertEqual(
+            detect_seniority_level("Backend Developer", "Role as a senior engineer mentoring junior members."),
+            "Senior"
+        )
+
+    def test_generate_description_summary(self):
+        """Test description summary generator logic."""
+        from job_mcp.core.api_client import generate_description_summary
+
+        self.assertIsNone(generate_description_summary(""))
+        self.assertIsNone(generate_description_summary("   "))
+
+        short_desc = "Build next-gen cloud platforms with Python. Collaborate with international team. Excellent compensation."
+        summary = generate_description_summary(short_desc, max_chars=150)
+        self.assertIsNotNone(summary)
+        self.assertIn("Build next-gen", summary)
+        self.assertTrue(len(summary) <= 150)
+
+    def test_filter_jobs_junior_with_senior_in_body_not_disqualified(self):
+        """Test Junior job mentioning senior in description is NOT excluded when exclude_keywords=['Senior']."""
+        junior_job = Job(
+            job_id="j-1",
+            title="Junior Python Developer",
+            company="StartupCo",
+            tech_stack=["Python", "FastAPI"],
+            description="You will be mentored by senior engineers and architects on high-load services.",
+        )
+        senior_job = Job(
+            job_id="s-1",
+            title="Senior Python Architect",
+            company="BigCorp",
+            tech_stack=["Python", "FastAPI"],
+            description="Lead architecture and mentor developers.",
+        )
+
+        prefs = JobPreferences(
+            tech_stack=["Python", "FastAPI"],
+            exclude_keywords=["Senior", "Architect"],
+        )
+
+        results = filter_jobs([junior_job, senior_job], prefs)
+        result_ids = [j.job_id for j in results]
+
+        self.assertIn("j-1", result_ids)
+        self.assertNotIn("s-1", result_ids)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].seniority_level, "Junior")
+        self.assertIn("Python", results[0].matched_skills)
+        self.assertIn("FastAPI", results[0].matched_skills)
+
 
 if __name__ == "__main__":
     unittest.main()

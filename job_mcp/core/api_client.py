@@ -227,6 +227,98 @@ def _extract_text_tech_keywords(text: str) -> list[str]:
     return found
 
 
+SENIORITY_EXCLUDE_TERMS = {
+    "senior", "sr", "sr.", "lead", "principal", "staff", "architect", "director", "vp", "head"
+}
+
+
+def detect_seniority_level(title: str, text: str = "") -> Optional[str]:
+    """Detect seniority level from job title and description.
+
+    Args:
+        title: Job title string.
+        text: Optional job description or body text.
+
+    Returns:
+        Optional[str]: Detected seniority level ('Student', 'Intern', 'Junior', 'Mid', 'Senior', 'Lead') or None.
+    """
+    title_clean = (title or "").lower()
+
+    # 1. Check title first (highest precision)
+    if re.search(r"\b(student)\b", title_clean, re.IGNORECASE):
+        return "Student"
+    if re.search(r"\b(intern|internship)\b", title_clean, re.IGNORECASE):
+        return "Intern"
+    if re.search(r"\b(junior|entry|graduate)\b", title_clean, re.IGNORECASE):
+        return "Junior"
+    if re.search(r"\b(lead|director|vp)\b|\bhead(\s+of)?\b", title_clean, re.IGNORECASE):
+        return "Lead"
+    if re.search(r"\b(senior|principal|staff|architect)\b|\bsr\b|\bsr\.", title_clean, re.IGNORECASE):
+        return "Senior"
+    if re.search(r"\b(mid|intermediate)\b", title_clean, re.IGNORECASE):
+        return "Mid"
+
+    # 2. Check text fallback if title has no clear indication
+    text_clean = (text or "").lower()
+    if text_clean:
+        if re.search(r"\b(tech\s+lead|team\s+lead|lead\s+developer|lead\s+engineer|head\s+of|director|vp)\b", text_clean, re.IGNORECASE):
+            return "Lead"
+        if re.search(r"\b(senior\s+developer|senior\s+engineer|senior\s+fullstack|senior\s+backend|senior\s+frontend|principal\s+engineer|staff\s+engineer|software\s+architect)\b", text_clean, re.IGNORECASE):
+            return "Senior"
+        if re.search(r"\b(junior\s+developer|junior\s+engineer|junior\s+position|entry[\s-]level|graduate\s+program)\b", text_clean, re.IGNORECASE):
+            return "Junior"
+        if re.search(r"\b(student\s+position|student\s+developer|internship|intern\s+position)\b", text_clean, re.IGNORECASE):
+            return "Intern" if "intern" in text_clean else "Student"
+        if re.search(r"\b(mid[\s-]level|intermediate)\b", text_clean, re.IGNORECASE):
+            return "Mid"
+        if re.search(r"\b(junior|entry|graduate)\b", text_clean, re.IGNORECASE):
+            return "Junior"
+        if re.search(r"\b(intern|internship)\b", text_clean, re.IGNORECASE):
+            return "Intern"
+        if re.search(r"\b(student)\b", text_clean, re.IGNORECASE):
+            return "Student"
+        if re.search(r"\b(senior|lead|principal|staff|architect)\b", text_clean, re.IGNORECASE):
+            return "Senior"
+
+    return None
+
+
+def generate_description_summary(text: str, max_chars: int = 250) -> Optional[str]:
+    """Generate a clean 2-3 sentence summary of the job description (up to ~250 chars).
+
+    Args:
+        text: Full job description.
+        max_chars: Target max character limit.
+
+    Returns:
+        Optional[str]: Concise description summary.
+    """
+    if not text:
+        return None
+    cleaned = " ".join(text.split()).strip()
+    if not cleaned:
+        return None
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+    if not sentences:
+        if len(cleaned) <= max_chars:
+            return cleaned
+        return cleaned[:max_chars].rsplit(" ", 1)[0].rstrip(".,;:- ") + "..."
+
+    selected: list[str] = []
+    current_len = 0
+    for s in sentences[:3]:
+        if selected and (current_len + len(s) + 1 > max_chars):
+            break
+        selected.append(s)
+        current_len += len(s) + 1
+
+    summary = " ".join(selected)
+    if len(summary) > max_chars:
+        summary = summary[:max_chars].rsplit(" ", 1)[0].rstrip(".,;:- ") + "..."
+    return summary
+
+
 def _parse_salary_number(salary_str: str) -> Optional[int]:
     """Extract numeric salary value from salary text string."""
     clean = salary_str.lower().replace(",", "").replace("$", "").replace("€", "").replace("£", "")
@@ -254,23 +346,53 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
     filtered: list[Job] = []
 
     # Prepare normalized exclusion keywords
-    exclude_set = {k.strip().lower() for k in prefs.exclude_keywords if k.strip()}
+    raw_exclude = [k.strip() for k in prefs.exclude_keywords if k.strip()]
 
-    # Prepare desired skills from tech_stack, keywords, and CV
+    # Prepare desired skills and display mapping to preserve original casing
+    display_map: dict[str, str] = {k.lower(): k for k in CURATED_TECH_KEYWORDS}
+    for t in prefs.tech_stack:
+        if t.strip():
+            display_map[t.strip().lower()] = t.strip()
+    for k in prefs.keywords:
+        if k.strip():
+            display_map[k.strip().lower()] = k.strip()
+
+    extracted_cv: list[str] = []
+    if prefs.cv_path:
+        extracted_cv = extract_cv_keywords(prefs.cv_path)
+        for c in extracted_cv:
+            if c.strip():
+                display_map[c.strip().lower()] = c.strip()
+
     desired_tech = {t.strip().lower() for t in prefs.tech_stack if t.strip()}
     desired_keywords = {k.strip().lower() for k in prefs.keywords if k.strip()}
-    cv_keywords = set()
-    if prefs.cv_path:
-        extracted = extract_cv_keywords(prefs.cv_path)
-        cv_keywords = {c.strip().lower() for c in extracted if c.strip()}
-
+    cv_keywords = {c.strip().lower() for c in extracted_cv if c.strip()}
     total_desired = desired_tech | desired_keywords | cv_keywords
 
     for job in jobs:
         job_full_text = f"{job.title} {job.company} {job.location} {job.description} {' '.join(job.tech_stack)}".lower()
 
         # 1. Exclude keywords check
-        if any(exc in job_full_text for exc in exclude_set):
+        is_excluded = False
+        for exc in raw_exclude:
+            exc_lower = exc.lower()
+            if exc_lower in SENIORITY_EXCLUDE_TERMS or re.search(r"^(senior|sr\.?|principal|lead|staff|architect|director|vp|head)$", exc_lower):
+                # Seniority exclusion: check job title with word boundaries
+                if exc_lower in ("senior", "sr", "sr."):
+                    term_pattern = r"\b(senior|sr)\b|\bsr\."
+                else:
+                    term_pattern = r"\b" + re.escape(exc_lower) + r"\b"
+                if re.search(term_pattern, job.title, re.IGNORECASE):
+                    is_excluded = True
+                    break
+            else:
+                # Custom exclusion: check full text with word boundary matching
+                term_pattern = r"(?<![a-zA-Z0-9_])" + re.escape(exc_lower) + r"(?![a-zA-Z0-9_])"
+                if re.search(term_pattern, job_full_text, re.IGNORECASE):
+                    is_excluded = True
+                    break
+
+        if is_excluded:
             continue
 
         # 2. Work mode filter
@@ -302,10 +424,59 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
             if parsed_salary is not None and parsed_salary < prefs.min_salary:
                 continue
 
-        # 5. Compute match score (0 to 100)
+        # 5. Compute match score (0 to 100) & explainability fields
         job_tech_tokens = {t.strip().lower() for t in job.tech_stack}
         job_words = set(re.findall(r"[a-zA-Z0-9_\.\#\+]+", job_full_text))
         all_job_tokens = job_tech_tokens | job_words
+
+        matched_tokens = total_desired & all_job_tokens
+        missing_tokens = total_desired - all_job_tokens
+
+        job.matched_skills = sorted([display_map.get(s, s.title()) for s in matched_tokens], key=lambda s: s.lower())
+        job.missing_skills = sorted([display_map.get(s, s.title()) for s in missing_tokens], key=lambda s: s.lower())
+
+        if not job.seniority_level:
+            job.seniority_level = detect_seniority_level(job.title, job.description)
+
+        if not job.description_summary and job.description:
+            job.description_summary = generate_description_summary(job.description)
+
+        # Structured match reasons
+        reasons: list[str] = []
+        if cv_keywords:
+            matched_cv = cv_keywords & all_job_tokens
+            if matched_cv:
+                cv_names = sorted([display_map.get(s, s.title()) for s in matched_cv], key=lambda s: s.lower())
+                reasons.append(f"CV matched skills: {', '.join(cv_names)}")
+
+        if desired_tech:
+            matched_tech = desired_tech & all_job_tokens
+            if matched_tech:
+                tech_names = sorted([display_map.get(s, s.title()) for s in matched_tech], key=lambda s: s.lower())
+                reasons.append(f"Target stack matched: {', '.join(tech_names)}")
+
+        if desired_keywords:
+            matched_kw = desired_keywords & all_job_tokens
+            if matched_kw:
+                kw_names = sorted([display_map.get(s, s.title()) for s in matched_kw], key=lambda s: s.lower())
+                reasons.append(f"Keywords matched: {', '.join(kw_names)}")
+
+        if prefs.work_mode:
+            pref_wm = prefs.work_mode.value if isinstance(prefs.work_mode, WorkMode) else str(prefs.work_mode)
+            reasons.append(f"{pref_wm.capitalize()} work mode aligned with preference")
+        elif job.work_mode == WorkMode.REMOTE:
+            reasons.append("Remote work mode aligned with preference")
+
+        if job.seniority_level:
+            reasons.append(f"{job.seniority_level} level position")
+
+        if prefs.location and (prefs.location.lower() in job.location.lower() or prefs.location.lower() in job_full_text):
+            reasons.append(f"Location aligned with preference ({prefs.location})")
+
+        if prefs.min_salary and job.salary_range:
+            reasons.append(f"Salary range meets requirement ({job.salary_range})")
+
+        job.match_reasons = reasons
 
         if not total_desired:
             # If no skills or keywords specified in preferences, score is 100.0
@@ -497,6 +668,9 @@ def parse_api_job_dict(raw: dict) -> Job:
     is_bookmarked = bool(raw.get("is_saved") or raw.get("is_bookmarked") or False)
     match_score = float(raw["match_score"]) if raw.get("match_score") is not None else None
 
+    seniority_level = detect_seniority_level(title, combined_desc)
+    description_summary = generate_description_summary(combined_desc)
+
     return Job(
         job_id=job_id,
         title=title,
@@ -510,6 +684,8 @@ def parse_api_job_dict(raw: dict) -> Job:
         url=url,
         is_bookmarked=is_bookmarked,
         match_score=match_score,
+        seniority_level=seniority_level,
+        description_summary=description_summary,
     )
 
 

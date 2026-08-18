@@ -29,3 +29,6 @@ Spark Timeout Fix Task 3: complete (commits 8d8be88..4f63f7f, review clean)
 E2E Mock LLM Task 1: complete (commits 4f63f7f..e365bce, review clean)
 E2E Mock LLM Task 2: complete (commits e365bce..acd61fb, review clean)
 E2E Mock LLM Task 3: complete
+E2E Mock LLM Task 3: complete (commits acd61fb..5d3692a, review clean)
+Explainable Scoring Task 1: complete (in progress)
+

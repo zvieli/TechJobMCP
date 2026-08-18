@@ -282,6 +282,13 @@ def merge_job_entities(primary: Job, secondary: Job) -> Job:
     else:
         match_score = secondary.match_score
 
+    # Explainability & Enrichment fields
+    matched_skills = list(dict.fromkeys(primary.matched_skills + secondary.matched_skills))
+    missing_skills = list(dict.fromkeys(primary.missing_skills + secondary.missing_skills))
+    match_reasons = list(dict.fromkeys(primary.match_reasons + secondary.match_reasons))
+    description_summary = primary.description_summary or secondary.description_summary
+    seniority_level = primary.seniority_level or secondary.seniority_level
+
     return Job(
         job_id=primary.job_id,
         title=primary.title if primary.title.strip() else secondary.title,
@@ -299,6 +306,11 @@ def merge_job_entities(primary: Job, secondary: Job) -> Job:
         sources=sources_combined,
         apply_url=best_apply_url,
         department=department,
+        matched_skills=matched_skills,
+        missing_skills=missing_skills,
+        match_reasons=match_reasons,
+        description_summary=description_summary,
+        seniority_level=seniority_level,
     )
 
 

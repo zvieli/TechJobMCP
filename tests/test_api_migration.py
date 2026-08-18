@@ -689,3 +689,130 @@ async def test_filter_jobs_by_preferences_supplements_skills_from_resume_profile
         mock_profile.assert_awaited_once_with(mock_page.request)
 
 
+# ==========================================
+# 7. Tests for Explainability & Seniority Detection
+# ==========================================
+
+
+def test_parse_api_job_dict_seniority_and_summary_enrichment():
+    """Verify parse_api_job_dict automatically enriches seniority_level and description_summary."""
+    raw = {
+        "id": "enrich-1",
+        "title": "Senior Staff Backend Engineer (Python)",
+        "company_name": "DeepScale",
+        "description": "We are seeking a seasoned engineer. You will lead system architecture and scalability. Competitive package offered.",
+        "skills_required": ["Python", "Docker"],
+    }
+    job = parse_api_job_dict(raw)
+    assert job.seniority_level == "Senior"
+    assert job.description_summary is not None
+    assert "seasoned engineer" in job.description_summary
+    assert len(job.description_summary) <= 250
+
+
+def test_filter_jobs_explainable_match_reasons():
+    """Verify filter_jobs produces structured explainability details."""
+    from job_mcp.core.api_client import filter_jobs
+    from job_mcp.models.schemas import JobPreferences
+
+    jobs = [
+        Job(
+            job_id="exp-1",
+            title="Junior Cloud Developer",
+            company="CloudCo",
+            location="Tel Aviv",
+            work_mode=WorkMode.REMOTE,
+            tech_stack=["Python", "FastAPI", "Docker", "PostgreSQL"],
+            description="Build modern cloud APIs. Great environment for entry-level developers.",
+            salary_range="25,000 - 30,000 ILS",
+        ),
+    ]
+
+    prefs = JobPreferences(
+        tech_stack=["Python", "FastAPI", "Kubernetes"],
+        work_mode=WorkMode.REMOTE,
+        location="Tel Aviv",
+        min_salary=20000,
+    )
+
+    filtered = filter_jobs(jobs, prefs)
+    assert len(filtered) == 1
+    job = filtered[0]
+
+    assert "Python" in job.matched_skills
+    assert "FastAPI" in job.matched_skills
+    assert "Kubernetes" in job.missing_skills
+    assert job.seniority_level == "Junior"
+    assert job.description_summary is not None
+
+    # Verify structured match reasons
+    assert any("Target stack matched" in r for r in job.match_reasons)
+    assert any("Remote work mode aligned" in r for r in job.match_reasons)
+    assert any("Junior level position" in r for r in job.match_reasons)
+    assert any("Location aligned" in r for r in job.match_reasons)
+    assert any("Salary range meets requirement" in r for r in job.match_reasons)
+
+
+def test_filter_jobs_senior_exclusion_smart_boundary():
+    """Verify smart seniority exclusion checks title vs custom exclusion keywords."""
+    from job_mcp.core.api_client import filter_jobs
+    from job_mcp.models.schemas import JobPreferences
+
+    jobs = [
+        # 1. Junior job mentioning senior in description (should be KEPT)
+        Job(
+            job_id="keep-1",
+            title="Junior Backend Engineer",
+            company="StartupCo",
+            tech_stack=["Python"],
+            description="You will work alongside senior software engineers on scalable microservices.",
+        ),
+        # 2. Senior title (should be EXCLUDED)
+        Job(
+            job_id="drop-senior",
+            title="Senior Python Architect",
+            company="BigTech",
+            tech_stack=["Python"],
+            description="Drive product architecture.",
+        ),
+        # 3. Lead title (should be EXCLUDED)
+        Job(
+            job_id="drop-lead",
+            title="Team Lead (Python)",
+            company="ScaleCo",
+            tech_stack=["Python"],
+            description="Manage backend development team.",
+        ),
+        # 4. Job mentioning JavaScript when Java is excluded (word boundary should NOT exclude JavaScript)
+        Job(
+            job_id="keep-js",
+            title="Fullstack Developer",
+            company="WebTech",
+            tech_stack=["JavaScript", "React"],
+            description="Frontend & fullstack web application development.",
+        ),
+        # 5. Job mentioning Java when Java is excluded (should be EXCLUDED)
+        Job(
+            job_id="drop-java",
+            title="Backend Developer",
+            company="LegacyCo",
+            tech_stack=["Java", "Spring"],
+            description="Enterprise Java and Spring development.",
+        ),
+    ]
+
+    prefs = JobPreferences(
+        exclude_keywords=["Senior", "Lead", "Java"],
+    )
+
+    filtered = filter_jobs(jobs, prefs)
+    kept_ids = {j.job_id for j in filtered}
+
+    assert "keep-1" in kept_ids
+    assert "keep-js" in kept_ids
+    assert "drop-senior" not in kept_ids
+    assert "drop-lead" not in kept_ids
+    assert "drop-java" not in kept_ids
+
+
+

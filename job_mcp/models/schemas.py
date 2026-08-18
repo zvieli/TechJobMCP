@@ -37,6 +37,11 @@ class Job(BaseModel):
     sources: list[str] = Field(default_factory=lambda: ["hiremetech"])
     apply_url: Optional[str] = None
     department: Optional[str] = None
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    match_reasons: list[str] = Field(default_factory=list)
+    description_summary: Optional[str] = None
+    seniority_level: Optional[str] = None
 
     @model_validator(mode="after")
     def _sync_sources(self) -> "Job":

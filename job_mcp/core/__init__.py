@@ -2,11 +2,13 @@
 
 from job_mcp.core.api_client import (
     JobCache,
+    detect_seniority_level,
     extract_cv_keywords,
     fetch_jobs_via_api,
     fetch_saved_jobs_batch,
     fetch_user_resume_profile,
     filter_jobs,
+    generate_description_summary,
     parse_api_job_dict,
 )
 from job_mcp.core.auth import (
@@ -53,6 +55,8 @@ __all__ = [
     "execute_application",
     "JobCache",
     "extract_cv_keywords",
+    "detect_seniority_level",
+    "generate_description_summary",
     "filter_jobs",
     "parse_api_job_dict",
     "fetch_jobs_via_api",
