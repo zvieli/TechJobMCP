@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import time
 from typing import Any, Optional
@@ -19,6 +20,7 @@ logger = get_logger(__name__)
 
 ALLJOBS_BASE_URL = "https://www.alljobs.co.il"
 SEARCH_MOBILE_ENDPOINT = "/SearchResultsMobile.ashx"
+ALLJOBS_REQUEST_TIMEOUT: float = 2.0
 
 ALLJOBS_HEADERS: dict[str, str] = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -195,7 +197,7 @@ class AllJobsSource(BaseJobSource):
         headers: Optional[dict[str, str]] = None,
         cache_ttl_seconds: int = 3600,
         client: Optional[httpx.AsyncClient] = None,
-        timeout: float = 15.0,
+        timeout: float = ALLJOBS_REQUEST_TIMEOUT,
         health_timeout: float = 5.0,
     ) -> None:
         """Initialize AllJobsSource.
@@ -255,7 +257,7 @@ class AllJobsSource(BaseJobSource):
         should_close_client = False
         active_client = client or self._client
         if active_client is None:
-            active_client = httpx.AsyncClient()
+            active_client = httpx.AsyncClient(timeout=self.timeout)
             should_close_client = True
 
         url = f"{self.base_url}{SEARCH_MOBILE_ENDPOINT}"
@@ -313,7 +315,7 @@ class AllJobsSource(BaseJobSource):
         should_close_client = False
         client = self._client
         if client is None:
-            client = httpx.AsyncClient()
+            client = httpx.AsyncClient(timeout=self.health_timeout)
             should_close_client = True
 
         url = f"{self.base_url}{SEARCH_MOBILE_ENDPOINT}"
@@ -372,7 +374,16 @@ class AllJobsSource(BaseJobSource):
                 )
                 return []
 
-            data = response.json()
+            try:
+                data = response.json()
+            except (json.JSONDecodeError, ValueError) as json_err:
+                logger.debug(
+                    "AllJobs search feed returned non-JSON response for params %s: %s",
+                    params,
+                    json_err,
+                )
+                return []
+
             jobs_raw: list[dict[str, Any]] = []
             if isinstance(data, list):
                 jobs_raw = data
@@ -418,7 +429,7 @@ class AllJobsSource(BaseJobSource):
         should_close_client = False
         client = self._client
         if client is None:
-            client = httpx.AsyncClient()
+            client = httpx.AsyncClient(timeout=self.timeout)
             should_close_client = True
 
         try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +18,7 @@ from job_mcp.sources import (
 from job_mcp.sources.alljobs import (
     ALLJOBS_BASE_URL,
     ALLJOBS_HEADERS,
+    ALLJOBS_REQUEST_TIMEOUT,
     DEFAULT_TECH_CATEGORIES,
     AllJobsSource,
     parse_alljobs_position,
@@ -93,6 +95,16 @@ class TestAllJobsHeadersAndMetadata:
         assert metadata.is_authenticated is False
         assert metadata.supports_bookmarks is False
         assert metadata.supports_auto_apply is False
+
+    def test_default_request_timeout_constant(self) -> None:
+        """Verify default fast request timeout constant is 2.0s."""
+        assert ALLJOBS_REQUEST_TIMEOUT == 2.0
+
+    def test_alljobs_source_default_timeout(self) -> None:
+        """Verify AllJobsSource default timeout is set to 2.0s."""
+        source = AllJobsSource()
+        assert source.timeout == 2.0
+
 
 
 class TestAllJobsPositionParser:
@@ -317,6 +329,44 @@ class TestAllJobsFetchJobs:
         assert len(jobs3) == 1
         assert call_count > initial_calls
 
+    @pytest.mark.asyncio
+    async def test_fetch_jobs_runs_category_feeds_in_parallel(self) -> None:
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        cat_response = MagicMock(spec=httpx.Response)
+        cat_response.status_code = 200
+        cat_response.json.return_value = SAMPLE_CATEGORIES_PAYLOAD
+
+        async def mock_get(url: str, *args: Any, **kwargs: Any) -> MagicMock:
+            params = kwargs.get("params", {})
+            if params.get("categories") == "true":
+                return cat_response
+            # Add a small delay to simulate network latency
+            await asyncio.sleep(0.05)
+            mock_resp = MagicMock(spec=httpx.Response)
+            mock_resp.status_code = 200
+            cat_id = params.get("cat", "default")
+            mock_resp.json.return_value = {
+                "Jobs": [
+                    {
+                        "JobID": f"job_cat_{cat_id}",
+                        "JobTitle": f"Engineer in Cat {cat_id}",
+                        "CompanyName": "Tech Co",
+                    }
+                ]
+            }
+            return mock_resp
+
+        mock_client.get.side_effect = mock_get
+        source = AllJobsSource(client=mock_client)
+
+        start = asyncio.get_event_loop().time()
+        jobs = await source.fetch_jobs(limit=10)
+        elapsed = asyncio.get_event_loop().time() - start
+
+        assert len(jobs) == 3  # 3 primary category feeds (235, 1998, 357)
+        # 3 parallel calls of 0.05s should take well under 0.12s total (sequential would be >= 0.15s)
+        assert elapsed < 0.12, f"Expected concurrent execution under 0.12s, took {elapsed:.2f}s"
+
 
 class TestAllJobsErrorIsolation:
     """Tests for graceful error isolation across network and HTTP failures."""
@@ -342,7 +392,37 @@ class TestAllJobsErrorIsolation:
         assert jobs == []
 
     @pytest.mark.asyncio
-    async def test_fetch_jobs_creates_and_closes_client_if_none_provided(self) -> None:
+    async def test_fetch_feed_json_decode_error_returns_empty_list(self) -> None:
+        """Verify malformed JSON responses catch JSONDecodeError cleanly and return empty list."""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "", 0)
+        mock_client.get.return_value = mock_response
+
+        source = AllJobsSource(client=mock_client)
+        result = await source._fetch_feed(mock_client, {"action": "getJobs", "cat": 235})
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_feed_uses_request_timeout(self) -> None:
+        """Verify _fetch_feed passes the default 2.0s request timeout."""
+        mock_client = AsyncMock(spec=httpx.AsyncClient)
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"Jobs": []}
+        mock_client.get.return_value = mock_response
+
+        source = AllJobsSource(client=mock_client)
+        await source._fetch_feed(mock_client, {"action": "getJobs", "cat": 235})
+
+        mock_client.get.assert_called_once()
+        _, kwargs = mock_client.get.call_args
+        assert kwargs["timeout"] == 2.0
+
+    @pytest.mark.asyncio
+    async def test_fetch_jobs_creates_client_with_fast_timeout(self) -> None:
+        """Verify standalone fetch_jobs initializes httpx.AsyncClient with fast timeout=2.0."""
         with patch("httpx.AsyncClient") as mock_client_cls:
             mock_instance = AsyncMock()
             mock_client_cls.return_value = mock_instance
@@ -355,6 +435,7 @@ class TestAllJobsErrorIsolation:
             jobs = await source.fetch_jobs(limit=10)
 
             assert len(jobs) == 1
+            mock_client_cls.assert_called_with(timeout=2.0)
             mock_instance.aclose.assert_awaited_once()
 
 
