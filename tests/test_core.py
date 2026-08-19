@@ -582,21 +582,21 @@ class TestApiClient(unittest.TestCase):
         """Test resolve_cv_path finds workspace CV files when cv_path is omitted and env is empty."""
         with patch.dict(os.environ, {}, clear=True):
             resolved = resolve_cv_path()
-            if (Path.cwd() / "lior_zvieli_cv.pdf").is_file():
+            if (Path.cwd() / "cv.pdf").is_file():
                 self.assertIsNotNone(resolved)
-                self.assertEqual(resolved, (Path.cwd() / "lior_zvieli_cv.pdf").resolve())
+                self.assertEqual(resolved, (Path.cwd() / "cv.pdf").resolve())
 
     def test_resolve_cv_path_container_fallback(self):
         """Test resolve_cv_path resolves container paths when running inside container."""
         def mock_is_file(path_obj):
-            return str(path_obj) == "/app/lior_zvieli_cv.pdf"
+            return str(path_obj) == "/app/cv.pdf"
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch.object(Path, "is_file", autospec=True, side_effect=lambda self: str(self) == "/app/lior_zvieli_cv.pdf"):
+            with patch.object(Path, "is_file", autospec=True, side_effect=lambda self: str(self) == "/app/cv.pdf"):
                 with patch.object(Path, "resolve", autospec=True, side_effect=lambda self: self):
                     resolved = resolve_cv_path()
                     self.assertIsNotNone(resolved)
-                    self.assertEqual(str(resolved), "/app/lior_zvieli_cv.pdf")
+                    self.assertEqual(str(resolved), "/app/cv.pdf")
 
     def test_resolve_cv_path_nonexistent_returns_none(self):
         """Test resolve_cv_path returns None when no candidates exist."""
@@ -656,11 +656,12 @@ class TestApiClient(unittest.TestCase):
             finally:
                 os.chdir(orig_cwd)
 
-        # 2. Real workspace CV extraction (if lior_zvieli_cv.pdf exists)
-        if (Path.cwd() / "lior_zvieli_cv.pdf").is_file():
-            keywords = extract_cv_keywords()
-            self.assertIsInstance(keywords, list)
-            self.assertGreater(len(keywords), 0)
+        # 2. Real workspace CV extraction (if cv.pdf or resume.pdf exists)
+        for candidate_cv in [Path.cwd() / "cv.pdf", Path.cwd() / "resume.pdf"]:
+            if candidate_cv.is_file():
+                keywords = extract_cv_keywords(str(candidate_cv))
+                self.assertIsInstance(keywords, list)
+                self.assertGreater(len(keywords), 0)
 
     def test_filter_jobs_cv_scoring_tuning_and_coverage(self):
         """Test CV scoring formula does not penalize rich CVs and computes job coverage properly."""
@@ -837,47 +838,41 @@ ZK Credit Agent – Privacy-Preserving Credit Oracle
     def test_extract_dynamic_cv_skills_stopword_rejection(self):
         """Test stopword rejection ensures resume structural words, dates, and noise are filtered out."""
         noisy_text = """
-Lior Zvieli
-liorzvieli@gmail.com — LinkedIn — GitHub — +972-52-2276810
+Alex Rivera
+candidate@example.com — LinkedIn — GitHub — +1-555-0199
 Professional Summary
-Computer Science student at HIT with a strong background in engineering high-performance decentralized protocols.
+Computer Science student at Tech Institute with a strong background in engineering high-performance decentralized protocols.
 March 2026 – Present, Summer 2025, Winter, Fall, Spring
 Education
-B.Sc. in Computer Science, Holon Institute of Technology (HIT), Degree, Expected: Summer 2026
-Experience at Client Project MAG Corps IDF, Senior Architect & Developer
+B.Sc. in Computer Science, Tech Institute, Degree, Expected: Summer 2026
+Experience at Client Project Core Systems, Senior Architect & Developer
 Key Courses: 100, 94, 92, 87, 0.8
 """
         skills = extract_dynamic_cv_skills(noisy_text)
         forbidden_stopwords = [
-            "LinkedIn", "March", "Education", "Summary", "Hit", "Developer", "Architect",
-            "Engineer", "BSc", "Computer", "Science", "Professional", "Student", "Israel",
+            "LinkedIn", "March", "Education", "Summary", "Developer", "Architect",
+            "Engineer", "BSc", "Computer", "Science", "Professional", "Student",
             "Summer", "Winter", "Fall", "Spring", "Present", "Experience", "Projects",
-            "Client", "Project", "Systems", "Expected", "Courses", "Legal", "Hebrew",
-            "Mainnet", "Key", "Github", "Email", "Phone", "University", "College", "Degree",
-            "Idf", "Work", "Strong", "Background", "Script", "Level"
+            "Client", "Project", "Systems", "Expected", "Courses",
+            "Key", "Github", "Email", "Phone", "University", "College", "Degree",
+            "Work", "Strong", "Background", "Script", "Level"
         ]
         for word in forbidden_stopwords:
             self.assertNotIn(word, skills, f"Stopword '{word}' should have been filtered out but was present in: {skills}")
             self.assertNotIn(word.upper(), skills, f"Stopword '{word.upper()}' should have been filtered out.")
 
-    def test_extract_cv_keywords_lior_zvieli_pdf(self):
-        """Test extract_cv_keywords extracts 40+ dynamic skills from real lior_zvieli_cv.pdf."""
-        cv_path = Path("lior_zvieli_cv.pdf")
-        if not cv_path.is_file():
-            self.skipTest("lior_zvieli_cv.pdf not present in workspace")
+    def test_extract_cv_keywords_sample_pdf(self):
+        """Test extract_cv_keywords extracts dynamic skills from sample workspace CV if present."""
+        cv_path = None
+        for cand in [Path("cv.pdf"), Path("resume.pdf"), Path("sample_cv.pdf")]:
+            if cand.is_file():
+                cv_path = cand
+                break
+        if not cv_path:
+            self.skipTest("Sample CV PDF not present in workspace")
 
         keywords = extract_cv_keywords(str(cv_path))
-        self.assertGreaterEqual(len(keywords), 40, f"Expected 40+ skills, got {len(keywords)}: {keywords}")
-
-        expected_skills = [
-            "GraphRAG", "LangGraph", "LangChain", "LlamaIndex", "FastAPI",
-            "AI Search", "Azure", "NetworkX", "Ollama", "React", "Node.js",
-            "Docker", "Linux", "Git", "Python", "TypeScript", "JavaScript",
-            "Solidity", "Noir", "Foundry", "TailwindCSS", "Vite", "ZK",
-            "Scikit-Learn", "Hugging Face", "Elasticsearch", "SQL"
-        ]
-        for s in expected_skills:
-            self.assertIn(s, keywords, f"Expected skill '{s}' not found in extracted CV keywords.")
+        self.assertGreaterEqual(len(keywords), 5, f"Expected 5+ skills, got {len(keywords)}: {keywords}")
 
 
 class TestCandidateProfile(unittest.TestCase):
@@ -1077,8 +1072,8 @@ class TestCandidateProfile(unittest.TestCase):
     def test_extract_candidate_profile_web3_engineer(self):
         """Test profile extraction for a Web3 / Smart Contracts engineer."""
         cv_text = """
-        Lior Dev
-        lior@crypto.io
+        Alex Rivera
+        candidate@example.com
         
         Summary:
         Smart Contract & Web3 Engineer specializing in Solidity, ZK proofs (Noir), Foundry, and decentralized protocols.

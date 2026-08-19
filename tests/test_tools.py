@@ -295,7 +295,7 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
             job_title="Senior Backend Python Developer",
             company="TechCorp",
             application_method="direct_submission",
-            fields_to_submit={"full_name": "Lior Zvieli", "email": "test@example.com"},
+            fields_to_submit={"full_name": "Alex Rivera", "email": "candidate@example.com"},
             warnings=["Resume file auto-attached"],
         )
         mock_execute.return_value = True

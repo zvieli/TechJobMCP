@@ -100,7 +100,7 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
     """Test 1: Comprehensive E2E discovery-to-apply autonomous pipeline.
 
     Requirements:
-    - Initialize MockLLMAgent with real lior_zvieli_cv.pdf (or temp CV).
+    - Initialize MockLLMAgent with candidate CV (or temp CV).
     - Set up test environment with realistic multi-source jobs (HireMeTech, Comeet, AllJobs).
     - Run agent.run_pipeline with tech stack and seniority exclusion preferences.
     - Assert:
@@ -114,14 +114,18 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
     """
     ctx, cache, session_mgr, registry, aggregator = test_lifespan_context
 
-    # Resolve CV path (use repository lior_zvieli_cv.pdf if present, else temporary PDF/text)
-    repo_cv = Path("/home/lior/data/projects/hireme_mcp/lior_zvieli_cv.pdf")
-    if repo_cv.exists():
+    # Resolve CV path (use workspace CV if present, else temporary text CV)
+    repo_cv = None
+    for cand in [Path("cv.pdf"), Path("resume.pdf")]:
+        if cand.exists():
+            repo_cv = cand
+            break
+    if repo_cv:
         cv_path = str(repo_cv)
     else:
         temp_cv = tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False)
         temp_cv.write(
-            "Candidate: Lior Zvieli\n"
+            "Candidate: Alex Rivera\n"
             "Skills: Python, FastAPI, LangGraph, LLM, NLP, LangChain, Docker, Git, Linux, React, TypeScript, Azure, Pandas, Scikit-Learn\n"
         )
         temp_cv.close()
@@ -205,7 +209,7 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
             job_title="Python AI Engineer (FastAPI & LangGraph)",
             company="TechNova",
             application_method="1-Click Apply",
-            fields_to_submit={"name": "Lior Zvieli", "email": "lior@example.com"},
+            fields_to_submit={"name": "Alex Rivera", "email": "candidate@example.com"},
             warnings=[],
         )
 
@@ -310,12 +314,14 @@ async def test_e2e_scoring_and_filtering_accuracy(test_lifespan_context):
         assert expected_docx_keywords.issubset(set(docx_keywords)), f"Missing keywords in DOCX: {docx_keywords}"
 
         # C. Real PDF or Fallback PDF CV extraction
-        repo_cv = Path("/home/lior/data/projects/hireme_mcp/lior_zvieli_cv.pdf")
-        if repo_cv.exists():
+        repo_cv = None
+        for cand in [Path("cv.pdf"), Path("resume.pdf")]:
+            if cand.exists():
+                repo_cv = cand
+                break
+        if repo_cv and repo_cv.exists():
             pdf_keywords = extract_cv_keywords(str(repo_cv))
-            assert "Python" in pdf_keywords
-            assert "Docker" in pdf_keywords
-            assert len(pdf_keywords) >= 10
+            assert len(pdf_keywords) >= 5
 
         # D. Scoring hierarchy verification: full match > partial match > irrelevant match
         sample_jobs = [

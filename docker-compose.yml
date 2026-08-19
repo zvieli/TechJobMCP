@@ -8,17 +8,17 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /home/lior/.hireme_mcp/browser_profile:/app/browser_profile
+      - ./browser_profile:/app/browser_profile
       - ./job_mcp:/app/job_mcp
-      - ./lior_zvieli_cv.pdf:/app/lior_zvieli_cv.pdf:ro
-      - ./lior_zvieli_cv.pdf:/app/cv.pdf:ro
+      - ./cv.pdf:/app/cv.pdf:ro
     environment:
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=8000
       - BROWSER_HEADLESS=true
       - BROWSER_PROFILE_DIR=/app/browser_profile
-      - DEFAULT_CV_PATH=/app/lior_zvieli_cv.pdf
+      - DEFAULT_CV_PATH=/app/cv.pdf
+      - CANDIDATE_EMAIL=candidate@example.com
       - CACHE_TTL_MINUTES=60
       - LOG_LEVEL=INFO
 

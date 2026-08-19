@@ -289,8 +289,8 @@ def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
     Resolution candidate order:
     1. Path(cv_path).expanduser() if cv_path is provided and non-empty.
     2. Path(os.getenv("DEFAULT_CV_PATH")).expanduser() if DEFAULT_CV_PATH is set.
-    3. Container paths: Path("/app/lior_zvieli_cv.pdf"), Path("/app/cv.pdf").
-    4. Local workspace paths: Path("lior_zvieli_cv.pdf").resolve(), Path("cv.pdf").resolve().
+    3. Container paths: Path("/app/cv.pdf"), Path("/app/resume.pdf").
+    4. Local workspace paths: Path("cv.pdf").resolve(), Path("resume.pdf").resolve().
     5. Any .pdf in working directory matching *cv*.pdf or *.pdf.
     6. Any .pdf in /app if /app directory exists.
 
@@ -315,13 +315,15 @@ def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
         candidates.append(Path(env_cv.strip()).expanduser())
 
     # 3. Container paths
-    candidates.append(Path("/app/lior_zvieli_cv.pdf"))
     candidates.append(Path("/app/cv.pdf"))
+    candidates.append(Path("/app/resume.pdf"))
+    candidates.append(Path("/app/lior_zvieli_cv.pdf"))
 
     # 4. Local workspace paths
     cwd = Path.cwd()
-    candidates.append(cwd / "lior_zvieli_cv.pdf")
     candidates.append(cwd / "cv.pdf")
+    candidates.append(cwd / "resume.pdf")
+    candidates.append(cwd / "lior_zvieli_cv.pdf")
 
     # 5. Any .pdf in working directory matching *cv*.pdf or *.pdf
     try:

@@ -214,7 +214,7 @@ class TestRichRendering:
     def test_render_header(self, string_console):
         console, file = string_console
         parser = build_parser()
-        args = parser.parse_args(["--cv", "lior_zvieli_cv.pdf", "--work-mode", "remote", "--location", "Tel Aviv"])
+        args = parser.parse_args(["--cv", "cv.pdf", "--work-mode", "remote", "--location", "Tel Aviv"])
         render_header(
             console,
             args,
