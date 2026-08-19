@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from rich.console import Console
 
+from job_mcp.models.schemas import CandidateProfile
 from job_mcp.testing.mock_llm import MockLLMAgent, PipelineResult, StepTrace
 from scripts.run_mock_llm_pipeline import (
     build_parser,
@@ -28,6 +29,7 @@ from scripts.run_mock_llm_pipeline import (
     render_job_insight_card,
     render_step_trace,
     render_summary_dashboard,
+    resolve_default_cv,
     summarize_observation,
 )
 
@@ -39,8 +41,8 @@ class TestArgumentParsing:
         parser = build_parser()
         args = parser.parse_args([])
 
-        assert args.stack == "Python,FastAPI,AI,Agentic AI,LangGraph,React,TypeScript,Docker"
-        assert args.exclude == "Senior,Lead,5+ years,10+ years"
+        assert args.stack is None
+        assert args.exclude is None
         assert args.top_tier == 85
         assert args.strong_match == 70
         assert args.disqualify_threshold == 50
@@ -56,6 +58,18 @@ class TestArgumentParsing:
         assert args.json is False
         assert args.verbose is False
         assert args.inspect is True
+
+    def test_resolve_default_cv(self, tmp_path, monkeypatch):
+        # 1. Test when DEFAULT_CV_PATH is set
+        custom_cv = tmp_path / "custom_cv.pdf"
+        custom_cv.write_text("Dummy content")
+        monkeypatch.setenv("DEFAULT_CV_PATH", str(custom_cv))
+        assert resolve_default_cv() == str(custom_cv)
+
+        # 2. Test when CV_PATH is set
+        monkeypatch.delenv("DEFAULT_CV_PATH", raising=False)
+        monkeypatch.setenv("CV_PATH", str(custom_cv))
+        assert resolve_default_cv() == str(custom_cv)
 
     def test_custom_arguments(self):
         parser = build_parser()
@@ -213,6 +227,34 @@ class TestRichRendering:
         assert "Python, FastAPI" in output
         assert "Senior" in output
         assert "Top-Tier" in output
+
+    def test_render_header_with_candidate_profile(self, string_console):
+        console, file = string_console
+        parser = build_parser()
+        args = parser.parse_args(["--cv", "cv.pdf"])
+        profile = CandidateProfile(
+            skills=["Python", "FastAPI", "Docker", "LangGraph"],
+            top_skills=["Python", "FastAPI", "Docker", "LangGraph"],
+            seniority_level="Junior",
+            target_roles=["AI Engineer", "Backend Developer"],
+            suggested_exclusions=["Senior", "Lead", "10+ years"],
+        )
+        render_header(
+            console,
+            args,
+            tech_stack=[],
+            exclude_keywords=[],
+            profile=profile,
+        )
+        output = file.getvalue()
+        assert "Candidate CV" in output
+        assert "Seniority Level" in output
+        assert "Junior" in output
+        assert "Top Skills" in output
+        assert "Python" in output
+        assert "Target Roles" in output
+        assert "AI Engineer" in output
+        assert "Senior, Lead" in output
 
     def test_render_step_trace(self, string_console):
         console, file = string_console
@@ -478,6 +520,34 @@ class TestExecuteCliPipeline:
             assert call_kwargs["tech_stack"] == ["Python", "AI"]
             assert call_kwargs["auto_apply"] is False
             assert callable(call_kwargs["step_callback"])
+
+    @pytest.mark.asyncio
+    async def test_execute_cli_pipeline_dynamic_cv(self, tmp_path):
+        cv_file = tmp_path / "resume.txt"
+        cv_file.write_text("Junior Developer with skills in Python, FastAPI, Docker, and React.")
+
+        mock_result = PipelineResult(
+            success=True,
+            steps=[StepTrace(step_number=1, tool_name="list_job_sources", duration_ms=5.0)],
+            sources_found=["hiremetech"],
+            total_jobs_fetched=5,
+            execution_time_ms=50.0,
+        )
+
+        parser = build_parser()
+        args = parser.parse_args(["--cv", str(cv_file)])
+        console = Console(file=io.StringIO(), force_terminal=False)
+
+        with patch.object(MockLLMAgent, "run_pipeline", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = mock_result
+            res = await execute_cli_pipeline(args, console=console)
+
+            assert res == mock_result
+            mock_run.assert_called_once()
+            call_kwargs = mock_run.call_args.kwargs
+            assert call_kwargs["cv_path"] == str(cv_file)
+            # Verify tech_stack and exclude_keywords are passed as None or dynamic list derived from CV
+            assert call_kwargs.get("tech_stack") is None or "Python" in call_kwargs.get("tech_stack", [])
 
     @pytest.mark.asyncio
     async def test_execute_cli_pipeline_json_mode(self, capsys):

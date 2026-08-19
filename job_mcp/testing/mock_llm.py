@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any, Callable, Optional
 
 from fastmcp import Context
 from pydantic import BaseModel, Field
 
+from job_mcp.core.api_client import extract_candidate_profile
 from job_mcp.main import (
     auto_apply_job,
     bookmark_job,
@@ -20,6 +22,7 @@ from job_mcp.main import (
     list_job_sources,
     set_operation_mode,
 )
+from job_mcp.models.schemas import CandidateProfile
 
 
 class StepTrace(BaseModel):
@@ -37,6 +40,7 @@ class PipelineResult(BaseModel):
     """Structured outcome of an end-to-end LLM job hunt pipeline execution."""
 
     success: bool
+    profile: Optional[CandidateProfile] = None
     steps: list[StepTrace] = Field(default_factory=list)
     sources_found: list[str] = Field(default_factory=list)
     total_jobs_fetched: int = 0
@@ -261,10 +265,34 @@ class MockLLMAgent:
                 step_callback=step_callback,
             )
 
-        effective_cv = cv_path or self.cv_path
-        combined_keywords = list(keywords or [])
-        if target_roles:
-            for r in target_roles:
+        effective_cv = cv_path or self.cv_path or os.getenv("DEFAULT_CV_PATH")
+        profile: Optional[CandidateProfile] = None
+        if effective_cv:
+            profile = extract_candidate_profile(effective_cv)
+
+        # Dynamic population from CandidateProfile if not explicitly passed
+        effective_tech_stack = list(tech_stack) if tech_stack is not None else None
+        if effective_tech_stack is None and profile is not None:
+            if profile.top_skills:
+                effective_tech_stack = list(profile.top_skills)
+            elif profile.skills:
+                effective_tech_stack = list(profile.skills)
+
+        effective_exclude = list(exclude_keywords) if exclude_keywords is not None else None
+        if effective_exclude is None and profile is not None and profile.suggested_exclusions:
+            effective_exclude = list(profile.suggested_exclusions)
+
+        effective_keywords = list(keywords) if keywords is not None else None
+        if effective_keywords is None and profile is not None and profile.search_queries:
+            effective_keywords = list(profile.search_queries)
+
+        effective_target_roles = list(target_roles) if target_roles is not None else None
+        if effective_target_roles is None and profile is not None and profile.target_roles:
+            effective_target_roles = list(profile.target_roles)
+
+        combined_keywords = list(effective_keywords or [])
+        if effective_target_roles:
+            for r in effective_target_roles:
                 if r not in combined_keywords:
                     combined_keywords.append(r)
 
@@ -296,9 +324,25 @@ class MockLLMAgent:
                         sources_found.append(s)
 
         # Step 2: Fetch aggregated jobs
+        get_matches_args: dict[str, Any] = {"force_refresh": force_refresh}
+        if effective_cv is not None:
+            get_matches_args["cv_path"] = effective_cv
+        if effective_tech_stack is not None:
+            get_matches_args["tech_stack"] = effective_tech_stack
+        if effective_exclude is not None:
+            get_matches_args["exclude_keywords"] = effective_exclude
+        if combined_keywords:
+            get_matches_args["keywords"] = combined_keywords
+        if work_mode is not None:
+            get_matches_args["work_mode"] = work_mode
+        if location is not None:
+            get_matches_args["location"] = location
+        if min_salary is not None:
+            get_matches_args["min_salary"] = min_salary
+
         res2 = await self.call_tool(
             "get_job_matches",
-            arguments={"force_refresh": force_refresh},
+            arguments=get_matches_args,
             thought="Fetching aggregated jobs across sources...",
             step_callback=step_callback,
         )
@@ -311,10 +355,10 @@ class MockLLMAgent:
 
         # Step 3: Scoring jobs against preferences and CV
         filter_args: dict[str, Any] = {}
-        if tech_stack is not None:
-            filter_args["tech_stack"] = tech_stack
-        if exclude_keywords is not None:
-            filter_args["exclude_keywords"] = exclude_keywords
+        if effective_tech_stack is not None:
+            filter_args["tech_stack"] = effective_tech_stack
+        if effective_exclude is not None:
+            filter_args["exclude_keywords"] = effective_exclude
         if effective_cv is not None:
             filter_args["cv_path"] = effective_cv
         if work_mode is not None:
@@ -443,6 +487,7 @@ class MockLLMAgent:
 
         return PipelineResult(
             success=pipeline_success,
+            profile=profile,
             steps=pipeline_steps,
             sources_found=sources_found,
             total_jobs_fetched=total_jobs_fetched,

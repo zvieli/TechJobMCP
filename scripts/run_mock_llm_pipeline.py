@@ -22,12 +22,35 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
+from job_mcp.core.api_client import extract_candidate_profile
+from job_mcp.models.schemas import CandidateProfile
 from job_mcp.testing.mock_llm import MockLLMAgent, PipelineResult, StepTrace
+
+
+def resolve_default_cv() -> Optional[str]:
+    """Resolve default CV file path from environment or common candidate file names."""
+    env_cv = os.getenv("DEFAULT_CV_PATH") or os.getenv("CV_PATH")
+    if env_cv and os.path.exists(env_cv):
+        return env_cv
+
+    candidate_files = [
+        "cv.pdf",
+        "resume.pdf",
+        "lior_zvieli_cv.pdf",
+        "cv.docx",
+        "resume.docx",
+        "cv.txt",
+        "resume.txt",
+    ]
+    for fname in candidate_files:
+        if os.path.exists(fname):
+            return fname
+    return env_cv if env_cv else None
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build and configure the CLI argument parser."""
-    default_cv = "lior_zvieli_cv.pdf" if os.path.exists("lior_zvieli_cv.pdf") else None
+    default_cv = resolve_default_cv()
 
     parser = argparse.ArgumentParser(
         prog="run_mock_llm_pipeline",
@@ -44,14 +67,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--stack",
         type=str,
-        default="Python,FastAPI,AI,Agentic AI,LangGraph,React,TypeScript,Docker",
-        help="Comma-separated target technology stack keywords",
+        default=None,
+        help="Comma-separated target technology stack keywords (defaults dynamically to CV skills if omitted)",
     )
     parser.add_argument(
         "--exclude",
         type=str,
-        default="Senior,Lead,5+ years,10+ years",
-        help="Comma-separated exclusion keywords to filter out",
+        default=None,
+        help="Comma-separated exclusion keywords to filter out (defaults dynamically to CV seniority exclusions if omitted)",
     )
     parser.add_argument(
         "--top-tier",
@@ -252,6 +275,7 @@ def render_header(
     args: argparse.Namespace,
     tech_stack: list[str],
     exclude_keywords: list[str],
+    profile: Optional[CandidateProfile] = None,
 ) -> None:
     """Render a header banner and configuration summary."""
     title_text = Text("🚀 HireMeTech - Autonomous Job Search Agent Pipeline", style="bold cyan")
@@ -260,12 +284,34 @@ def render_header(
     config_table.add_column("Key", style="bold white", width=22)
     config_table.add_column("Value", style="cyan")
 
+    # If profile is not passed explicitly, attempt to extract if CV exists
+    effective_cv = args.cv or resolve_default_cv()
+    if profile is None and effective_cv and os.path.exists(effective_cv):
+        try:
+            profile = extract_candidate_profile(effective_cv)
+        except Exception:
+            profile = None
+
     config_table.add_row(
         "Candidate CV",
         f"[green]{args.cv}[/green]" if args.cv and os.path.exists(args.cv) else (f"[yellow]{args.cv} (not found)[/yellow]" if args.cv else "[dim]None (tech stack matching)[/dim]"),
     )
-    config_table.add_row("Tech Stack Target", ", ".join(tech_stack) if tech_stack else "[dim]None[/dim]")
-    config_table.add_row("Seniority Exclusions", ", ".join(exclude_keywords) if exclude_keywords else "[dim]None[/dim]")
+
+    if profile:
+        if profile.seniority_level:
+            config_table.add_row("Seniority Level", f"[bold yellow]{profile.seniority_level}[/bold yellow]")
+        top_skills_display = profile.top_skills or profile.skills
+        if top_skills_display:
+            config_table.add_row("Top Skills", ", ".join(top_skills_display[:6]))
+        if profile.target_roles:
+            config_table.add_row("Target Roles", ", ".join(profile.target_roles[:4]))
+
+    display_stack = tech_stack if tech_stack else (profile.top_skills or profile.skills if profile else [])
+    config_table.add_row("Tech Stack Target", ", ".join(display_stack) if display_stack else "[dim]Dynamic (Extracted from CV)[/dim]")
+
+    display_exclude = exclude_keywords if exclude_keywords else (profile.suggested_exclusions if profile else [])
+    config_table.add_row("Seniority Exclusions", ", ".join(display_exclude) if display_exclude else "[dim]None[/dim]")
+
     config_table.add_row(
         "Score Thresholds",
         f"[green]Top-Tier: ≥{args.top_tier}[/green]  |  [yellow]Strong Match: ≥{args.strong_match}[/yellow]  |  [dim]Disqualify: <{args.disqualify_threshold}[/dim]",
@@ -946,13 +992,28 @@ async def execute_cli_pipeline(
     if console is None:
         console = Console()
 
-    tech_stack = parse_comma_separated(args.stack)
-    exclude_keywords = parse_comma_separated(args.exclude)
-    target_roles = parse_comma_separated(args.target_roles)
-    keywords = parse_comma_separated(args.keywords)
+    # Extract candidate profile if CV is present
+    effective_cv = args.cv or resolve_default_cv()
+    profile: Optional[CandidateProfile] = None
+    if effective_cv and os.path.exists(effective_cv):
+        try:
+            profile = extract_candidate_profile(effective_cv)
+        except Exception:
+            profile = None
+
+    tech_stack = parse_comma_separated(args.stack) if args.stack else None
+    exclude_keywords = parse_comma_separated(args.exclude) if args.exclude else None
+    target_roles = parse_comma_separated(args.target_roles) if args.target_roles else None
+    keywords = parse_comma_separated(args.keywords) if args.keywords else None
 
     if not args.json:
-        render_header(console, args, tech_stack, exclude_keywords)
+        render_header(
+            console,
+            args,
+            tech_stack=tech_stack or [],
+            exclude_keywords=exclude_keywords or [],
+            profile=profile,
+        )
 
     def on_step(trace: StepTrace) -> None:
         if not args.json:
@@ -973,11 +1034,11 @@ async def execute_cli_pipeline(
                 top_tier_threshold=args.top_tier,
                 strong_match_threshold=args.strong_match,
                 auto_apply=args.auto_apply,
-                target_roles=target_roles if target_roles else None,
+                target_roles=target_roles,
                 work_mode=args.work_mode if args.work_mode != "any" else None,
                 location=args.location,
                 min_salary=args.min_salary,
-                keywords=keywords if keywords else None,
+                keywords=keywords,
                 force_refresh=args.force_refresh,
                 disqualify_threshold=args.disqualify_threshold,
                 mode=mode_to_set,
@@ -996,11 +1057,11 @@ async def execute_cli_pipeline(
             top_tier_threshold=args.top_tier,
             strong_match_threshold=args.strong_match,
             auto_apply=args.auto_apply,
-            target_roles=target_roles if target_roles else None,
+            target_roles=target_roles,
             work_mode=args.work_mode if args.work_mode != "any" else None,
             location=args.location,
             min_salary=args.min_salary,
-            keywords=keywords if keywords else None,
+            keywords=keywords,
             force_refresh=args.force_refresh,
             disqualify_threshold=args.disqualify_threshold,
             mode=mode_to_set,

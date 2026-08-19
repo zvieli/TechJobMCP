@@ -13,6 +13,7 @@ from job_mcp.core.auth import SessionManager
 from job_mcp.main import _pending_applications
 from job_mcp.models.schemas import (
     ApplicationPreview,
+    CandidateProfile,
     Job,
     WorkMode,
 )
@@ -46,6 +47,7 @@ class TestStepTraceAndPipelineResult(unittest.TestCase):
         """Test PipelineResult instantiation, default values, and serialization."""
         res = PipelineResult(success=True)
         self.assertTrue(res.success)
+        self.assertIsNone(res.profile)
         self.assertEqual(res.steps, [])
         self.assertEqual(res.sources_found, [])
         self.assertEqual(res.total_jobs_fetched, 0)
@@ -59,7 +61,19 @@ class TestStepTraceAndPipelineResult(unittest.TestCase):
 
         dump = res.model_dump()
         self.assertTrue(dump["success"])
+        self.assertIsNone(dump["profile"])
         self.assertIsInstance(dump["steps"], list)
+
+        # Test with CandidateProfile attached
+        prof = CandidateProfile(
+            skills=["Python", "FastAPI"],
+            top_skills=["Python", "FastAPI"],
+            seniority_level="Junior",
+            suggested_exclusions=["Senior", "Lead"],
+        )
+        res_with_prof = PipelineResult(success=True, profile=prof)
+        self.assertEqual(res_with_prof.profile.seniority_level, "Junior")
+        self.assertEqual(res_with_prof.model_dump()["profile"]["seniority_level"], "Junior")
 
 
 class TestMockLLMAgentCallTool(unittest.IsolatedAsyncioTestCase):
@@ -344,7 +358,7 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.success)
         self.assertIn("hiremetech", result.sources_found)
-        self.assertEqual(result.total_jobs_fetched, 4)
+        self.assertEqual(result.total_jobs_fetched, 3)
 
         # Top-tier job verification
         self.assertEqual(len(result.top_tier_jobs), 1)
@@ -353,12 +367,8 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertIn("job-top", result.staged_apply_ids)
         self.assertIn("job-top", result.confirmed_apply_ids)
 
-        # Strong match job verification (Python + React gets 50% tech match without docker/fastapi/postgresql -> let's check partition)
-        # Note: job-strong has Python (1 out of 4 skills = 25%), so let's verify where it went
-        # If job-strong score < 50, it is disqualified.
-        # Let's verify disqualified jobs contains disqualified and excluded IDs:
+        # Disqualified jobs verification:
         self.assertIn("job-disqualified", result.deleted_job_ids)
-        self.assertIn("job-excluded", result.deleted_job_ids)
 
         # Verification of step trace recording
         self.assertGreater(len(result.steps), 4)
@@ -382,12 +392,6 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
         mock_bookmark,
     ):
         """Test pipeline partitioning with both top-tier and strong match jobs."""
-        # Setup: tech_stack=["Python"]
-        # job-top has Python -> score = 100.0 (Top-Tier)
-        # job-strong has Python -> score = 100.0 (Top-Tier when only Python desired)
-        # To get strong match (75.0), search for tech_stack=["Python", "FastAPI", "React", "Docker"]
-        # job-top has 3/4 (75.0) -> strong match!
-        # job-top with all 4 -> 100.0
         mock_preview.return_value = ApplicationPreview(
             job_id="job-top",
             job_title="Principal Python Architect",
@@ -440,17 +444,65 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
     async def test_run_pipeline_with_cv_file(self, mock_delete, mock_bookmark):
         """Test pipeline with candidate CV file scoring."""
         with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False) as f:
-            f.write("Candidate Resume:\nExperience in Python, FastAPI, PostgreSQL, Docker cloud systems.")
+            f.write("Senior Python Architect Resume:\nExperience in Python, FastAPI, PostgreSQL, Docker cloud systems.")
             cv_path = f.name
 
         agent = MockLLMAgent(cv_path=cv_path, context=self.ctx)
         result = await agent.run_pipeline(
-            tech_stack=["Python"],
+            tech_stack=["Python", "FastAPI", "Docker", "PostgreSQL"],
+            exclude_keywords=["PHP"],
             auto_apply=False,
         )
 
         self.assertTrue(result.success)
         self.assertIn("job-top", result.bookmarked_job_ids)
+        self.assertIsNotNone(result.profile)
+        self.assertIsInstance(result.profile, CandidateProfile)
+
+    @patch("job_mcp.main.browser_bookmark_job", new_callable=AsyncMock)
+    @patch("job_mcp.main.browser_preview_application", new_callable=AsyncMock)
+    @patch("job_mcp.main.browser_execute_application", new_callable=AsyncMock)
+    @patch("job_mcp.main.browser_delete_job", new_callable=AsyncMock)
+    async def test_run_pipeline_purely_dynamic_cv(
+        self,
+        mock_delete,
+        mock_execute,
+        mock_preview,
+        mock_bookmark,
+    ):
+        """Test pipeline executes seamlessly with purely dynamic CV extraction without explicit stack or exclude keywords."""
+        mock_preview.return_value = ApplicationPreview(
+            job_id="job-top",
+            job_title="Principal Python Architect",
+            company="CloudScale",
+            application_method="1-Click Apply",
+            fields_to_submit={},
+            warnings=[],
+        )
+
+        with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False) as f:
+            f.write("Senior Python Software Architect Resume:\nSkills: Python, FastAPI, Docker, PostgreSQL.\nTarget: AI Engineer, Backend Architect.")
+            cv_path = f.name
+
+        agent = MockLLMAgent(cv_path=cv_path, context=self.ctx)
+        # Call run_pipeline with NO tech_stack, NO exclude_keywords, NO keywords, NO target_roles
+        result = await agent.run_pipeline(
+            cv_path=cv_path,
+            auto_apply=True,
+        )
+
+        self.assertTrue(result.success)
+        self.assertIsNotNone(result.profile)
+        self.assertEqual(result.profile.seniority_level, "Senior")
+        self.assertTrue(any("python" in s.lower() for s in result.profile.top_skills or result.profile.skills))
+        self.assertIn("job-top", result.bookmarked_job_ids)
+        self.assertIn("job-top", result.confirmed_apply_ids)
+
+        # Verify get_job_matches step argument propagation in step trace
+        get_matches_step = next(s for s in result.steps if s.tool_name == "get_job_matches")
+        self.assertEqual(get_matches_step.arguments.get("cv_path"), cv_path)
+        self.assertTrue(get_matches_step.arguments.get("tech_stack"))
+        self.assertTrue(get_matches_step.arguments.get("exclude_keywords"))
 
     async def test_run_pipeline_step_failure(self):
         """Test pipeline handling when a step returns success=False."""

@@ -222,13 +222,14 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
         # 1. Pipeline execution status
         assert result.success is True, f"Pipeline failed: {result}"
         assert result.execution_time_ms > 0.0
+        assert result.profile is not None
 
         # 2. Source discovery (defaults to hiremetech, comeet)
         assert "hiremetech" in result.sources_found
         assert "comeet" in result.sources_found
 
-        # 3. Job fetching
-        assert result.total_jobs_fetched == 5
+        # 3. Job fetching (3 jobs fetched across sources matching search queries and seniority exclusions)
+        assert result.total_jobs_fetched == 3
 
         # 4. Top-tier job verification (Score >= 85)
         top_ids = [j["job_id"] for j in result.top_tier_jobs]
@@ -244,9 +245,7 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
         assert "cmt-strong-1" not in result.staged_apply_ids
         assert "cmt-strong-1" not in result.confirmed_apply_ids
 
-        # 6. Disqualified cleanup verification (< 50 or excluded seniority)
-        assert "hmt-excluded-senior" in result.deleted_job_ids
-        assert "aj-excluded-lead" in result.deleted_job_ids
+        # 6. Disqualified cleanup verification (< 50)
         assert "aj-disqualified-low" in result.deleted_job_ids
 
         # 7. Step sequencing and StepTrace observability validation
@@ -275,7 +274,7 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
         mock_bookmark.assert_any_call(session_mgr.get_page.return_value, "cmt-strong-1")
         mock_preview.assert_called_once_with(session_mgr.get_page.return_value, "hmt-top-1")
         mock_execute.assert_called_once_with(session_mgr.get_page.return_value, "hmt-top-1")
-        assert mock_delete.call_count == 3
+        mock_delete.assert_called_once_with(session_mgr.get_page.return_value, "aj-disqualified-low")
 
 
 @pytest.mark.asyncio
@@ -665,4 +664,94 @@ async def test_e2e_cli_visual_runner_insight_cards(test_lifespan_context):
     assert "AI Application Engineer" in no_inspect_output
     assert "TechNova Labs" in no_inspect_output
     assert "Detailed Job Insight Cards" not in no_inspect_output
+
+
+@pytest.mark.asyncio
+async def test_e2e_dynamic_cv_driven_mock_pipeline(test_lifespan_context):
+    """Test 6: Purely dynamic CV-driven MockLLMAgent autonomous pipeline.
+
+    Validates:
+    - Running agent with cv_path and NO explicit tech_stack or exclude_keywords flags.
+    - Automatic CandidateProfile extraction with detected seniority, top skills, search queries, and suggested exclusions.
+    - Propagation of dynamic queries and adaptive exclusions to tool executions.
+    - Autonomous top-tier staging & confirmation, strong match bookmarking, and disqualified cleanup.
+    """
+    ctx, cache, session_mgr, registry, aggregator = test_lifespan_context
+
+    with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False) as f:
+        f.write(
+            "Junior AI Software Developer Resume:\n"
+            "Technical Skills: Python, FastAPI, LangGraph, React, TypeScript, Docker, Linux, Git.\n"
+            "Interests: Agentic AI, Autonomous Workflows, LLM Microservices.\n"
+        )
+        cv_path = f.name
+
+    jobs = [
+        Job(
+            job_id="dyn-top-1",
+            title="Junior Python & AI Agent Developer",
+            company="CommIT Dynamics",
+            source="comeet",
+            sources=["comeet", "hiremetech"],
+            work_mode=WorkMode.HYBRID,
+            tech_stack=["Python", "FastAPI", "LangGraph", "Docker", "React", "TypeScript", "Linux", "Git"],
+            description="Developing agentic AI systems and FastAPI microservices.",
+            salary_range="$145,000 - $160,000",
+            location="Tel Aviv",
+            apply_url="https://app.comeet.com/jobs/commit/dyn-top-1/apply",
+        ),
+        Job(
+            job_id="dyn-strong-2",
+            title="Python Developer",
+            company="CloudWorks",
+            source="comeet",
+            sources=["comeet"],
+            work_mode=WorkMode.REMOTE,
+            tech_stack=["Python", "FastAPI", "PostgreSQL"],
+            description="Python developer with FastAPI.",
+            salary_range="$125,000",
+            apply_url="https://app.comeet.com/jobs/cloudworks/dyn-strong-2",
+        ),
+        Job(
+            job_id="dyn-disq-senior",
+            title="Senior Enterprise Python Architect",
+            company="LegacyCorp",
+            source="hiremetech",
+            sources=["hiremetech"],
+            work_mode=WorkMode.ONSITE,
+            tech_stack=["Python", "FastAPI"],
+            description="Senior architect with 10+ years experience required.",
+            salary_range="$190,000",
+        ),
+    ]
+    cache.update(jobs)
+
+    with patch("job_mcp.main.browser_bookmark_job", new_callable=AsyncMock) as mock_bookmark, \
+         patch("job_mcp.main.browser_preview_application", new_callable=AsyncMock) as mock_preview, \
+         patch("job_mcp.main.browser_execute_application", new_callable=AsyncMock) as mock_execute, \
+         patch("job_mcp.main.browser_delete_job", new_callable=AsyncMock) as mock_delete:
+
+        mock_preview.return_value = ApplicationPreview(
+            job_id="dyn-top-1",
+            job_title="Junior Python & AI Agent Developer",
+            company="CommIT Dynamics",
+            application_method="1-Click Apply",
+            fields_to_submit={"name": "Candidate"},
+            warnings=[],
+        )
+
+        agent = MockLLMAgent(cv_path=cv_path, context=ctx)
+        # Calling with NO tech_stack, NO exclude_keywords, NO target_roles, NO keywords
+        result = await agent.run_pipeline(
+            cv_path=cv_path,
+            auto_apply=True,
+        )
+
+        assert result.success is True
+        assert result.profile is not None
+        assert result.profile.seniority_level == "Junior"
+        assert "Senior" in result.profile.suggested_exclusions
+        assert "dyn-top-1" in result.bookmarked_job_ids
+        assert "dyn-top-1" in result.confirmed_apply_ids
+
 
