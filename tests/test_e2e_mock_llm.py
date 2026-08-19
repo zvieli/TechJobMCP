@@ -273,12 +273,10 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
             assert isinstance(trace_id, str) and len(trace_id) > 0, f"Step {i} missing trace_id"
             assert step.duration_ms >= 0.0
 
-        # Verify underlying browser automation was invoked as expected
-        mock_bookmark.assert_any_call(session_mgr.get_page.return_value, "hmt-top-1")
-        mock_bookmark.assert_any_call(session_mgr.get_page.return_value, "cmt-strong-1")
+        # Verify underlying browser automation was invoked as expected for HireMeTech portal jobs
+        mock_bookmark.assert_called_once_with(session_mgr.get_page.return_value, "hmt-top-1")
         mock_preview.assert_called_once_with(session_mgr.get_page.return_value, "hmt-top-1")
         mock_execute.assert_called_once_with(session_mgr.get_page.return_value, "hmt-top-1")
-        mock_delete.assert_called_once_with(session_mgr.get_page.return_value, "aj-disqualified-low")
 
 
 @pytest.mark.asyncio

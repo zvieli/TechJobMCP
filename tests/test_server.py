@@ -926,7 +926,142 @@ class TestServerDynamicQueryPropagation(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Python", res["data"][0]["matched_skills"])
 
 
+class TestSessionThrottlingAndUnauthenticatedFastActions(unittest.IsolatedAsyncioTestCase):
+    """Tests for non-blocking dismissal, bookmarking, and session recovery cooldown."""
+
+    def setUp(self) -> None:
+        import job_mcp.main as main_module
+        main_module._last_session_failure_time = 0.0
+
+    async def test_delete_hiremetech_job_unauthenticated_skips_portal_recovery(self) -> None:
+        """Verify delete_job on hiremetech source skips portal launch when unauthenticated."""
+        from fastmcp import Context
+        from job_mcp.main import delete_job
+        from job_mcp.models.schemas import Job
+
+        cache = JobCache()
+        job = Job(job_id="hmt_job_101", title="Backend Engineer", company="HireMeTech Co", source="hiremetech")
+        cache.update([job])
+
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session.is_running = False
+        mock_session.is_authenticated = False
+        mock_session.check_session_health.return_value = False
+
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"cache": cache, "session": mock_session}
+
+        res = await delete_job(job_id="hmt_job_101", ctx=ctx)
+
+        self.assertTrue(res["success"])
+        self.assertEqual(res["data"]["job_id"], "hmt_job_101")
+        self.assertFalse(res["data"]["portal_deleted"])
+        self.assertIn("portal dismissal skipped: unauthenticated session", res["message"])
+        self.assertIsNone(cache.get_by_id("hmt_job_101"))
+        mock_session.ensure_ready.assert_not_called()
+
+    async def test_bookmark_hiremetech_job_unauthenticated_skips_portal_recovery(self) -> None:
+        """Verify bookmark_job on hiremetech source updates cache and skips portal launch when unauthenticated."""
+        from fastmcp import Context
+        from job_mcp.main import bookmark_job
+        from job_mcp.models.schemas import Job
+
+        cache = JobCache()
+        job = Job(job_id="hmt_job_202", title="Frontend Engineer", company="HireMeTech Co", source="hiremetech")
+        cache.update([job])
+
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session.is_running = False
+        mock_session.is_authenticated = False
+        mock_session.check_session_health.return_value = False
+
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"cache": cache, "session": mock_session}
+
+        res = await bookmark_job(job_id="hmt_job_202", ctx=ctx)
+
+        self.assertTrue(res["success"])
+        self.assertEqual(res["data"]["job_id"], "hmt_job_202")
+        self.assertTrue(res["data"]["is_bookmarked"])
+        self.assertFalse(res["data"]["portal_bookmarked"])
+        self.assertIn("portal bookmark skipped: unauthenticated session", res["message"])
+        self.assertTrue(cache.get_by_id("hmt_job_202").is_bookmarked)
+        mock_session.ensure_ready.assert_not_called()
+
+    async def test_delete_external_job_by_source_attribute(self) -> None:
+        """Verify delete_job on cached job with non-hiremetech source returns immediately."""
+        from fastmcp import Context
+        from job_mcp.main import delete_job
+        from job_mcp.models.schemas import Job
+
+        cache = JobCache()
+        job = Job(job_id="custom_ext_999", title="DevOps", company="External ATS", source="comeet")
+        cache.update([job])
+
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"cache": cache}
+
+        res = await delete_job(job_id="custom_ext_999", ctx=ctx)
+
+        self.assertTrue(res["success"])
+        self.assertEqual(res["data"]["job_id"], "custom_ext_999")
+        self.assertIn("Successfully dismissed external job", res["message"])
+        self.assertIsNone(cache.get_by_id("custom_ext_999"))
+
+    async def test_bookmark_external_job_by_source_attribute(self) -> None:
+        """Verify bookmark_job on cached job with non-hiremetech source returns immediately."""
+        from fastmcp import Context
+        from job_mcp.main import bookmark_job
+        from job_mcp.models.schemas import Job
+
+        cache = JobCache()
+        job = Job(job_id="custom_ext_888", title="ML Lead", company="External ATS", source="workday")
+        cache.update([job])
+
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"cache": cache}
+
+        res = await bookmark_job(job_id="custom_ext_888", ctx=ctx)
+
+        self.assertTrue(res["success"])
+        self.assertEqual(res["data"]["job_id"], "custom_ext_888")
+        self.assertTrue(res["data"]["is_bookmarked"])
+        self.assertIn("Successfully bookmarked external job", res["message"])
+        self.assertTrue(cache.get_by_id("custom_ext_888").is_bookmarked)
+
+    async def test_ensure_session_cooldown_throttling(self) -> None:
+        """Verify _ensure_session applies cooldown and does not trigger recovery storms."""
+        import time
+        from fastmcp import Context
+        from job_mcp.main import _ensure_session
+        import job_mcp.main as main_module
+
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session.ensure_ready.side_effect = RuntimeError("Browser connection failed")
+
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {"session": mock_session}
+
+        # First call triggers ensure_ready and fails
+        session, is_healthy = await _ensure_session(ctx)
+        self.assertFalse(is_healthy)
+        self.assertEqual(mock_session.ensure_ready.call_count, 1)
+
+        # Immediate second call is throttled by cooldown (does not call ensure_ready)
+        session2, is_healthy2 = await _ensure_session(ctx)
+        self.assertFalse(is_healthy2)
+        self.assertEqual(mock_session.ensure_ready.call_count, 1)
+
+        # After advancing failure timestamp beyond cooldown window, ensure_ready is called again
+        mock_session._last_failure_time = time.monotonic() - 30.0
+        main_module._last_session_failure_time = time.monotonic() - 30.0
+        session3, is_healthy3 = await _ensure_session(ctx)
+        self.assertFalse(is_healthy3)
+        self.assertEqual(mock_session.ensure_ready.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

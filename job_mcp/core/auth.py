@@ -44,12 +44,20 @@ class SessionManager:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self._initialized: bool = False
+        self._is_authenticated: Optional[bool] = None
         self._lock: asyncio.Lock = asyncio.Lock()
 
     @property
     def is_running(self) -> bool:
         """Check if browser session is currently active and initialized."""
         return bool(self._initialized and self.context is not None)
+
+    @property
+    def is_authenticated(self) -> bool:
+        """Check if browser session is authenticated and active."""
+        if self._is_authenticated is not None:
+            return bool(self._is_authenticated and self.is_running)
+        return False
 
     async def initialize(self) -> None:
         """Start Playwright and launch Chromium persistent context with double-checked locking."""
@@ -139,12 +147,14 @@ class SessionManager:
                         "Session health check passed via /api/auth/me for user %s",
                         user_label,
                     )
+                    self._is_authenticated = True
                     return True
             elif resp.status in (401, 403):
                 logger.warning(
                     "Session unauthenticated (HTTP %d on /api/auth/me)",
                     resp.status,
                 )
+                self._is_authenticated = False
                 return False
         except Exception as exc:
             logger.debug(
@@ -169,6 +179,7 @@ class SessionManager:
                     "Session health check failed: received HTTP %d status code.",
                     response.status,
                 )
+                self._is_authenticated = False
                 return False
 
             current_url = page.url
@@ -177,13 +188,16 @@ class SessionManager:
                     "Session health check failed: redirected to login URL (%s)",
                     current_url,
                 )
+                self._is_authenticated = False
                 return False
 
             logger.info("Session health check passed for %s", current_url)
+            self._is_authenticated = True
             return True
 
         except Exception as exc:
             logger.warning("Session health check encountered error: %s", exc)
+            self._is_authenticated = False
             return False
 
     async def attempt_reauth(self) -> bool:
@@ -327,4 +341,5 @@ class SessionManager:
             self.playwright = None
 
             self._initialized = False
+            self._is_authenticated = False
             logger.info("SessionManager shutdown complete.")

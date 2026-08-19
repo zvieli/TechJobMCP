@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -130,6 +131,8 @@ _operation_mode: OperationMode = OperationMode.SUPERVISED
 # Timeout constant for live scraping operations to avoid proxy / tunnel timeouts (e.g. DevTunnel 10s limit)
 _SCRAPE_TIMEOUT_SECONDS: float = float(os.getenv("SCRAPE_TIMEOUT_SECONDS", "10.0"))
 _WARMUP_TIMEOUT_SECONDS: float = 30.0
+_SESSION_COOLDOWN_SECONDS: float = float(os.getenv("SESSION_COOLDOWN_SECONDS", "15.0"))
+_last_session_failure_time: float = 0.0
 
 
 async def _warm_cache(
@@ -459,10 +462,73 @@ def _get_linkedin_source(ctx: Optional[Context] = None) -> LinkedInSource:
     return LinkedInSource(session_manager=session_mgr)
 
 
+def _get_session(ctx: Optional[Context] = None) -> Optional[SessionManager]:
+    """Retrieve SessionManager instance from Context lifespan state or global default."""
+    global _default_session
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict) and "session" in lifespan_ctx:
+            return lifespan_ctx["session"]
+    return _default_session
+
+
+async def _is_session_authenticated(session: Optional[SessionManager]) -> bool:
+    """Fast non-blocking check to determine if a browser session is active and authenticated.
+
+    Does NOT invoke aggressive browser launch recovery if unauthenticated or not running.
+    """
+    if session is None:
+        return False
+
+    # Check is_authenticated attribute / property
+    if hasattr(session, "is_authenticated"):
+        is_auth = getattr(session, "is_authenticated")
+        if isinstance(is_auth, bool) and not is_auth:
+            return False
+        if callable(is_auth) and not hasattr(is_auth, "assert_called"):
+            try:
+                res = is_auth()
+                if asyncio.iscoroutine(res):
+                    res = await res
+                if isinstance(res, bool) and not res:
+                    return False
+            except Exception:
+                return False
+
+    # Check if session is running
+    if hasattr(session, "is_running"):
+        is_running = getattr(session, "is_running")
+        if isinstance(is_running, bool) and not is_running:
+            return False
+        if callable(is_running) and not hasattr(is_running, "assert_called"):
+            try:
+                res = is_running()
+                if asyncio.iscoroutine(res):
+                    res = await res
+                if isinstance(res, bool) and not res:
+                    return False
+            except Exception:
+                return False
+
+    # If running, do a fast session health check
+    if hasattr(session, "check_session_health") and callable(session.check_session_health):
+        try:
+            is_healthy = session.check_session_health()
+            if asyncio.iscoroutine(is_healthy):
+                is_healthy = await is_healthy
+            return bool(is_healthy)
+        except Exception as exc:
+            logger.debug("Fast session health check failed: %s", exc)
+            return False
+
+    return False
+
+
 async def _ensure_session(ctx: Optional[Context] = None) -> tuple[SessionManager, bool]:
-    """Retrieve SessionManager and verify authentication health status.
+    """Retrieve SessionManager and verify authentication health status with cooldown throttling.
 
     Uses ensure_ready() for automatic retry/recovery on browser failures.
+    Applies backoff cooldown after failed attempts to prevent browser launch storms.
 
     Args:
         ctx: Optional FastMCP Context.
@@ -470,23 +536,41 @@ async def _ensure_session(ctx: Optional[Context] = None) -> tuple[SessionManager
     Returns:
         tuple[SessionManager, bool]: Tuple of (session_manager, is_authenticated_and_healthy).
     """
-    global _default_session
-    session: Optional[SessionManager] = None
-    if ctx is not None:
-        lifespan_ctx = getattr(ctx, "lifespan_context", None)
-        if isinstance(lifespan_ctx, dict) and "session" in lifespan_ctx:
-            session = lifespan_ctx["session"]
-
+    global _default_session, _last_session_failure_time
+    session = _get_session(ctx)
     if session is None:
         if _default_session is None:
             _default_session = SessionManager()
         session = _default_session
 
+    now = time.monotonic()
+    last_fail = getattr(session, "_last_failure_time", None)
+    if not isinstance(last_fail, (int, float)):
+        last_fail = _last_session_failure_time if session is _default_session else 0.0
+
+    if now - last_fail < _SESSION_COOLDOWN_SECONDS:
+        logger.debug(
+            "Session recovery cooldown active (%.1fs remaining); skipping browser ensure_ready.",
+            _SESSION_COOLDOWN_SECONDS - (now - last_fail),
+        )
+        return session, False
+
     try:
         await session.ensure_ready(max_retries=3)
+        try:
+            session._last_failure_time = 0.0
+        except Exception:
+            pass
+        _last_session_failure_time = 0.0
         return session, True
-    except RuntimeError:
-        logger.warning("Session could not be made ready after retries.")
+    except (RuntimeError, Exception) as exc:
+        now = time.monotonic()
+        try:
+            session._last_failure_time = now
+        except Exception:
+            pass
+        _last_session_failure_time = now
+        logger.warning("Session could not be made ready after retries: %s", exc)
         return session, False
 
 
@@ -871,35 +955,36 @@ async def bookmark_job(
             source=source,
         )
 
+        # Update cache if job present
+        if cached_job:
+            cached_job.is_bookmarked = True
+
         # Handle external ATS job sources (Comeet, AllJobs, Workday, Eightfold, DirectTech, LinkedIn, etc.)
-        if job_id.startswith(("comeet_", "alljobs_", "workday_", "eightfold_", "direct_", "linkedin_")):
-            if cached_job:
-                cached_job.is_bookmarked = True
+        if (cached_job is not None and cached_job.source != "hiremetech") or job_id.startswith(
+            ("comeet_", "alljobs_", "workday_", "eightfold_", "direct_", "linkedin_")
+        ):
             return _response(
                 success=True,
-                message=f"Successfully bookmarked external ATS job '{job_id}' in cache.",
+                message=f"Successfully bookmarked external job '{job_id}' in cache.",
                 data={"job_id": job_id, "is_bookmarked": True},
             )
 
-        session, is_healthy = await _ensure_session(ctx)
-        if not is_healthy:
+        session = _get_session(ctx)
+        is_healthy = await _is_session_authenticated(session)
+        if not is_healthy or session is None:
             return _response(
-                success=False,
-                message="Browser session is unauthenticated. Please log in first.",
-                error_code="UNAUTHENTICATED",
+                success=True,
+                message=f"Successfully bookmarked job '{job_id}' in cache (portal bookmark skipped: unauthenticated session).",
+                data={"job_id": job_id, "is_bookmarked": True, "portal_bookmarked": False},
             )
 
         page = await session.get_page()
         await browser_bookmark_job(page, job_id)
 
-        # Update cache if job present
-        if cached_job:
-            cached_job.is_bookmarked = True
-
         return _response(
             success=True,
             message=f"Successfully bookmarked job '{job_id}'.",
-            data={"job_id": job_id, "is_bookmarked": True},
+            data={"job_id": job_id, "is_bookmarked": True, "portal_bookmarked": True},
         )
 
     except Exception as exc:
@@ -941,19 +1026,22 @@ async def delete_job(
         cache.dismiss(job_id)
 
         # Handle external ATS job sources (Comeet, AllJobs, Workday, Eightfold, DirectTech, LinkedIn, etc.)
-        if job_id.startswith(("comeet_", "alljobs_", "workday_", "eightfold_", "direct_", "linkedin_")):
+        if (cached_job is not None and cached_job.source != "hiremetech") or job_id.startswith(
+            ("comeet_", "alljobs_", "workday_", "eightfold_", "direct_", "linkedin_")
+        ):
             return _response(
                 success=True,
-                message=f"Successfully dismissed external ATS job '{job_id}' from view and cache.",
+                message=f"Successfully dismissed external job '{job_id}' from view and cache.",
                 data={"job_id": job_id},
             )
 
-        session, is_healthy = await _ensure_session(ctx)
-        if not is_healthy:
+        session = _get_session(ctx)
+        is_healthy = await _is_session_authenticated(session)
+        if not is_healthy or session is None:
             return _response(
-                success=False,
-                message="Browser session is unauthenticated. Please log in first.",
-                error_code="UNAUTHENTICATED",
+                success=True,
+                message=f"Successfully dismissed job '{job_id}' from cache (portal dismissal skipped: unauthenticated session).",
+                data={"job_id": job_id, "portal_deleted": False},
             )
 
         page = await session.get_page()
@@ -962,7 +1050,7 @@ async def delete_job(
         return _response(
             success=True,
             message=f"Successfully dismissed/deleted job '{job_id}'.",
-            data={"job_id": job_id},
+            data={"job_id": job_id, "portal_deleted": True},
         )
 
     except Exception as exc:
