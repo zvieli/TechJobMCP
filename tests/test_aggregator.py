@@ -12,7 +12,7 @@ from fastmcp import Context
 from job_mcp.core.api_client import JobCache
 from job_mcp.core.auth import SessionManager
 from job_mcp.main import get_job_matches, list_job_sources
-from job_mcp.models.schemas import Job, JobPreferences, WorkMode
+from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences, WorkMode
 from job_mcp.sources import (
     BaseJobSource,
     ComeetCompany,
@@ -568,6 +568,158 @@ class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertIn("linkedin", reg_all)
 
 
+class CaptureMockSource(BaseJobSource):
+    """Mock job source that records received preferences for query verification."""
+
+    def __init__(self, source_id: str, jobs: list[Job] | None = None) -> None:
+        self.source_id = source_id
+        self.display_name = source_id.capitalize()
+        self.description = f"Mock {self.display_name}"
+        self._jobs = jobs or []
+        self.last_preferences: JobPreferences | None = None
+        self.last_limit: int = 50
+        self.fetch_count = 0
+
+    async def fetch_jobs(
+        self,
+        preferences: JobPreferences | None = None,
+        limit: int = 50,
+    ) -> list[Job]:
+        self.fetch_count += 1
+        self.last_preferences = preferences
+        self.last_limit = limit
+        return list(self._jobs[:limit])
+
+    async def check_health(self) -> bool:
+        return True
+
+
+class TestDynamicQueryPropagationAggregator(unittest.IsolatedAsyncioTestCase):
+    """Tests for dynamic search query resolution and propagation across aggregator and sources."""
+
+    def setUp(self) -> None:
+        """Create sample junior CV text and job fixtures."""
+        self.junior_cv_text = (
+            "Alex Smith\n"
+            "Computer Science Student at HIT (Holon Institute of Technology)\n"
+            "Email: alex@example.com | Tel Aviv, Israel\n\n"
+            "Summary:\n"
+            "Computer science student passionate about backend software engineering.\n\n"
+            "Technical Skills:\n"
+            "Languages & Frameworks: Python, FastAPI, Django, Docker, PostgreSQL, Redis, Git\n\n"
+            "Projects:\n"
+            "FastAPI REST API with PostgreSQL database and Docker deployment."
+        )
+
+        self.junior_job = Job(
+            job_id="job_junior_1",
+            title="Junior Python Developer",
+            company="StartupCo",
+            location="Tel Aviv",
+            work_mode=WorkMode.HYBRID,
+            tech_stack=["Python", "FastAPI", "PostgreSQL"],
+            description="Looking for a junior Python developer to join our backend team.",
+            source="linkedin",
+            sources=["linkedin"],
+        )
+        self.senior_job = Job(
+            job_id="job_senior_1",
+            title="Senior Principal Software Architect",
+            company="BigCorp",
+            location="Tel Aviv",
+            work_mode=WorkMode.HYBRID,
+            tech_stack=["Python", "Kubernetes", "AWS"],
+            description="10+ years experience required for Senior Software Architect role.",
+            source="workday",
+            sources=["workday"],
+        )
+
+    async def test_fetch_all_jobs_propagates_dynamic_cv_queries_to_sources(self) -> None:
+        """Verify aggregator extracts CV profile, propagates dynamic search queries to child sources, and filters/scores."""
+        src_li = CaptureMockSource("linkedin", jobs=[self.junior_job])
+        src_wd = CaptureMockSource("workday", jobs=[self.senior_job])
+
+        reg = SourceRegistry()
+        reg.register(src_li)
+        reg.register(src_wd)
+
+        agg = JobAggregator(registry=reg)
+        prefs = JobPreferences(cv_path=self.junior_cv_text)
+
+        jobs = await agg.fetch_all_jobs(preferences=prefs, force_refresh=True)
+
+        # 1. Sources should have received dynamic queries from extracted CV
+        self.assertIsNotNone(src_li.last_preferences)
+        self.assertIsNotNone(src_wd.last_preferences)
+        self.assertTrue(
+            len(src_li.last_preferences.keywords) > 0
+            or len(src_li.last_preferences.tech_stack) > 0
+        )
+        # Search queries or tech stack should include Python
+        all_terms = src_li.last_preferences.keywords + src_li.last_preferences.tech_stack
+        self.assertTrue(any("python" in term.lower() for term in all_terms))
+
+        # 2. Senior job should be filtered out by suggested exclusions for Student/Junior profile
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].job_id, "job_junior_1")
+
+        # 3. Returned junior job should receive requirement coverage scoring and explainability fields
+        self.assertIsNotNone(jobs[0].match_score)
+        self.assertGreater(jobs[0].match_score, 60.0)
+        self.assertIn("Python", jobs[0].matched_skills)
+        self.assertGreater(len(jobs[0].match_reasons), 0)
+
+    async def test_fetch_all_jobs_with_explicit_profile(self) -> None:
+        """Verify passing explicit CandidateProfile propagates queries to child sources."""
+        src_direct = CaptureMockSource("direct_tech", jobs=[self.junior_job, self.senior_job])
+        reg = SourceRegistry()
+        reg.register(src_direct)
+
+        agg = JobAggregator(registry=reg)
+        profile = CandidateProfile(
+            skills=["Python", "FastAPI"],
+            top_skills=["Python", "FastAPI"],
+            seniority_level="Junior",
+            target_roles=["Python Developer", "Backend Engineer"],
+            search_queries=["Python Developer", "Python"],
+            suggested_exclusions=["Senior", "Principal", "Architect", "Lead"],
+        )
+
+        jobs = await agg.fetch_all_jobs(profile=profile, force_refresh=True)
+
+        # Child source received search queries in preferences
+        self.assertIsNotNone(src_direct.last_preferences)
+        self.assertIn("Python Developer", src_direct.last_preferences.keywords)
+
+        # Senior job excluded
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].job_id, "job_junior_1")
+
+    async def test_fetch_all_jobs_cache_hit_with_cv_profile_filters_and_scores(self) -> None:
+        """Verify cache hit applies candidate profile filtering and requirement scoring without calling sources."""
+        cache = JobCache(ttl_minutes=60)
+        cache.update([self.junior_job, self.senior_job])
+
+        src = CaptureMockSource("linkedin", jobs=[self.junior_job])
+        reg = SourceRegistry()
+        reg.register(src)
+
+        agg = JobAggregator(registry=reg, cache=cache)
+        prefs = JobPreferences(cv_path=self.junior_cv_text)
+
+        # Cache hit
+        jobs = await agg.fetch_all_jobs(preferences=prefs, force_refresh=False)
+
+        # Sources should NOT be queried on cache hit
+        self.assertEqual(src.fetch_count, 0)
+
+        # Result is filtered and scored
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].job_id, "job_junior_1")
+        self.assertGreater(jobs[0].match_score, 60.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse, Response
 
 from job_mcp.core.api_client import (
     JobCache,
+    extract_candidate_profile,
     fetch_jobs_via_api,
     fetch_user_resume_profile,
     filter_jobs,
@@ -32,6 +33,7 @@ from job_mcp.core.browser import (
 )
 from job_mcp.core.discovery import calibrate_all_selectors
 from job_mcp.models.schemas import (
+    CandidateProfile,
     Job,
     JobPreferences,
     OperationMode,
@@ -575,18 +577,35 @@ async def list_job_sources(
 @mcp.tool()
 async def get_job_matches(
     sources: Optional[list[str]] = None,
+    tech_stack: Optional[list[str]] = None,
+    work_mode: Optional[str] = None,
+    location: Optional[str] = None,
+    min_salary: Optional[int] = None,
+    keywords: Optional[list[str]] = None,
+    exclude_keywords: Optional[list[str]] = None,
+    cv_path: Optional[str] = None,
     force_refresh: bool = False,
+    limit: int = 50,
     ctx: Optional[Context] = None,
 ) -> dict[str, Any]:
-    """Fetch matched job listings from registered sources (HireMeTech, Comeet, AllJobs).
+    """Fetch matched job listings from registered sources (HireMeTech, Comeet, AllJobs, LinkedIn, Workday, Eightfold, DirectTech).
 
     Uses cached job listings unless cache is stale or force_refresh is True.
     Optionally filters by specific source IDs (e.g. ['hiremetech', 'comeet', 'alljobs']).
+    When cv_path is provided, extracts candidate profile and dynamically populates queries, seniority exclusions, and scores.
 
     Args:
-        sources: Optional list of source IDs to query (e.g. ['hiremetech', 'alljobs']).
+        sources: Optional list of source IDs to query (e.g. ['hiremetech', 'linkedin', 'workday']).
                  If None, queries all active registered sources.
+        tech_stack: Preferred technologies (e.g. ['Python', 'FastAPI']).
+        work_mode: Preferred work mode: 'remote', 'hybrid', or 'onsite'.
+        location: Target location (e.g. 'Tel Aviv', 'Remote').
+        min_salary: Minimum desired annual salary.
+        keywords: Additional keywords to require or match.
+        exclude_keywords: Keywords to exclude (e.g. ['Junior', 'PHP']).
+        cv_path: Path to resume/CV file (or raw CV text) for automatic skill extraction and matching.
         force_refresh: Force a live scrape/fetch from sources even if cache is fresh.
+        limit: Maximum number of jobs to return (default: 50).
         ctx: FastMCP Context object.
 
     Returns:
@@ -594,6 +613,53 @@ async def get_job_matches(
     """
     cache = _get_cache(ctx)
 
+    # 1. Profile and Preferences Resolution
+    effective_cv_path = cv_path or os.getenv("DEFAULT_CV_PATH")
+    profile: Optional[CandidateProfile] = None
+    if effective_cv_path:
+        profile = extract_candidate_profile(effective_cv_path)
+
+    parsed_work_mode: Optional[WorkMode] = None
+    if work_mode:
+        try:
+            parsed_work_mode = WorkMode(work_mode.strip().lower())
+        except ValueError:
+            logger.debug("Unknown work mode for get_job_matches: '%s'", work_mode)
+
+    effective_tech_stack = list(tech_stack or [])
+    effective_keywords = list(keywords or [])
+    effective_exclude = list(exclude_keywords or [])
+
+    if profile is not None:
+        if not effective_tech_stack and profile.skills:
+            effective_tech_stack = list(profile.skills)
+        if not effective_keywords and profile.search_queries:
+            effective_keywords = list(profile.search_queries[:3])
+        if not effective_exclude and profile.suggested_exclusions:
+            effective_exclude = list(profile.suggested_exclusions)
+
+    prefs: Optional[JobPreferences] = None
+    if (
+        effective_tech_stack
+        or parsed_work_mode
+        or location
+        or min_salary
+        or effective_keywords
+        or effective_exclude
+        or effective_cv_path
+        or profile is not None
+    ):
+        prefs = JobPreferences(
+            tech_stack=effective_tech_stack,
+            work_mode=parsed_work_mode,
+            location=location,
+            min_salary=min_salary,
+            keywords=effective_keywords,
+            exclude_keywords=effective_exclude,
+            cv_path=effective_cv_path,
+        )
+
+    # 2. Check Cache
     if not force_refresh:
         cached_jobs = cache.get_all()
         if cached_jobs:
@@ -604,6 +670,10 @@ async def get_job_matches(
                     for j in cached_jobs
                     if j.source in source_set or any(s in source_set for s in getattr(j, "sources", []))
                 ]
+            if prefs is not None or profile is not None:
+                cached_jobs = filter_jobs(cached_jobs, prefs or JobPreferences(), profile=profile)
+            if limit and len(cached_jobs) > limit:
+                cached_jobs = cached_jobs[:limit]
             logger.info("Returning %d jobs from cache.", len(cached_jobs))
             return _response(
                 success=True,
@@ -638,9 +708,17 @@ async def get_job_matches(
 
     try:
         jobs = await asyncio.wait_for(
-            aggregator.fetch_all_jobs(sources=sources, force_refresh=force_refresh),
+            aggregator.fetch_all_jobs(
+                sources=sources,
+                preferences=prefs,
+                force_refresh=force_refresh,
+                profile=profile,
+            ),
             timeout=_SCRAPE_TIMEOUT_SECONDS,
         )
+        if limit and len(jobs) > limit:
+            jobs = jobs[:limit]
+
         return _response(
             success=True,
             message=f"Successfully fetched {len(jobs)} live job matches.",
@@ -671,6 +749,7 @@ async def filter_jobs_by_preferences(
     keywords: Optional[list[str]] = None,
     exclude_keywords: Optional[list[str]] = None,
     cv_path: Optional[str] = None,
+    limit: Optional[int] = None,
     ctx: Optional[Context] = None,
 ) -> dict[str, Any]:
     """Filter and rank cached job listings based on tech stack, location, salary, or CV.
@@ -683,6 +762,7 @@ async def filter_jobs_by_preferences(
         keywords: Additional keywords to require or match in job descriptions.
         exclude_keywords: Keywords to exclude (e.g. ['Junior', 'PHP', 'Contract']).
         cv_path: Path to resume/CV file (PDF, DOCX, TXT) for automatic skill extraction and matching.
+        limit: Optional maximum number of jobs to return.
         ctx: FastMCP Context object.
 
     Returns:
@@ -710,15 +790,19 @@ async def filter_jobs_by_preferences(
     effective_tech_stack = list(tech_stack or [])
     effective_keywords = list(keywords or [])
 
+    profile: Optional[CandidateProfile] = None
+    if effective_cv_path:
+        profile = extract_candidate_profile(effective_cv_path)
+
     # If no local CV path is provided, attempt to supplement skills from online user resume profile
     if not effective_cv_path and not effective_tech_stack and not effective_keywords:
         try:
             session, is_healthy = await _ensure_session(ctx)
             if is_healthy:
                 page = await session.get_page()
-                profile = await asyncio.wait_for(fetch_user_resume_profile(page.request), timeout=3.0)
-                if isinstance(profile, dict):
-                    skills = profile.get("technical_skills") or profile.get("skills") or []
+                online_profile = await asyncio.wait_for(fetch_user_resume_profile(page.request), timeout=3.0)
+                if isinstance(online_profile, dict):
+                    skills = online_profile.get("technical_skills") or online_profile.get("skills") or []
                     if isinstance(skills, list) and skills:
                         effective_tech_stack = [s for s in skills if isinstance(s, str) and s.strip()]
         except Exception as exc:
@@ -735,7 +819,9 @@ async def filter_jobs_by_preferences(
     )
 
     try:
-        filtered = filter_jobs(cached_jobs, prefs)
+        filtered = filter_jobs(cached_jobs, prefs, profile=profile)
+        if limit and len(filtered) > limit:
+            filtered = filtered[:limit]
         return _response(
             success=True,
             message=f"Found {len(filtered)} matching jobs (out of {len(cached_jobs)} total).",
@@ -1067,6 +1153,7 @@ async def search_linkedin_jobs(
     f_AL: Optional[bool] = None,
     f_E: Optional[str] = None,
     sort_by: Optional[str] = None,
+    cv_path: Optional[str] = None,
     limit: int = 25,
     ctx: Optional[Context] = None,
 ) -> dict[str, Any]:
@@ -1082,6 +1169,7 @@ async def search_linkedin_jobs(
         f_AL: Filter for Easy Apply jobs.
         f_E: Experience level filter (e.g. '1'=internship, '2'=entry, '3'=associate, '4'=mid-senior).
         sort_by: Sorting parameter ('R'=relevant, 'DD'=date posted).
+        cv_path: Optional path to resume/CV file (or raw CV text) to dynamically derive search keywords if keywords is empty.
         limit: Maximum number of jobs to return (default: 25).
         ctx: FastMCP Context object.
 
@@ -1096,8 +1184,20 @@ async def search_linkedin_jobs(
             except ValueError:
                 logger.debug("Unknown work mode for LinkedIn search: '%s'", work_mode)
 
+        effective_keywords = (keywords or "").strip()
+        effective_cv_path = cv_path or os.getenv("DEFAULT_CV_PATH")
+        if not effective_keywords and effective_cv_path:
+            profile = extract_candidate_profile(effective_cv_path)
+            if profile:
+                if profile.search_queries:
+                    effective_keywords = profile.search_queries[0]
+                elif profile.top_skills:
+                    effective_keywords = " ".join(profile.top_skills[:2])
+                elif profile.skills:
+                    effective_keywords = " ".join(profile.skills[:2])
+
         jobs = await search_linkedin_jobs_api(
-            keywords=keywords,
+            keywords=effective_keywords,
             location=location,
             start=start,
             work_mode=parsed_work_mode,

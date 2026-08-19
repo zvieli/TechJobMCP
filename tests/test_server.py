@@ -18,6 +18,7 @@ from job_mcp.__main__ import main as server_main
 from job_mcp.core.api_client import JobCache
 from job_mcp.core.auth import SessionManager
 from job_mcp.main import GeminiProbeMiddleware, browser_lifespan
+from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences, WorkMode
 from job_mcp.setup import main as setup_main, run_setup
 
 
@@ -740,5 +741,145 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
             mock_uvicorn_run.assert_called_once_with(mock_app, host="0.0.0.0", port=9000)
 
 
+class TestServerDynamicQueryPropagation(unittest.IsolatedAsyncioTestCase):
+    """Tests for dynamic CV query resolution and propagation across FastMCP tools."""
+
+    def setUp(self) -> None:
+        """Set up test fixtures with sample junior CV and test jobs."""
+        self.junior_cv_text = (
+            "Alex Smith\n"
+            "Computer Science Student at HIT (Holon Institute of Technology)\n"
+            "Email: alex@example.com | Tel Aviv, Israel\n\n"
+            "Technical Skills:\n"
+            "Languages & Frameworks: Python, FastAPI, Docker, PostgreSQL, Redis, Git\n\n"
+            "Projects:\n"
+            "FastAPI backend microservice with PostgreSQL database."
+        )
+
+        self.junior_job = Job(
+            job_id="job_junior_10",
+            title="Junior Python Developer",
+            company="CloudTech",
+            location="Tel Aviv",
+            work_mode=WorkMode.HYBRID,
+            tech_stack=["Python", "FastAPI", "PostgreSQL"],
+            description="Seeking a junior Python developer for our backend team.",
+            source="linkedin",
+            sources=["linkedin"],
+        )
+        self.senior_job = Job(
+            job_id="job_senior_20",
+            title="Senior Lead Software Architect",
+            company="EnterpriseCorp",
+            location="Tel Aviv",
+            work_mode=WorkMode.HYBRID,
+            tech_stack=["Python", "Kubernetes", "AWS"],
+            description="Senior Architect with 10+ years experience.",
+            source="workday",
+            sources=["workday"],
+        )
+
+    def _create_mock_context(self, cache: JobCache, aggregator: Any = None) -> MagicMock:
+        """Create mock FastMCP Context with cache and optional aggregator."""
+        from fastmcp import Context
+        ctx = MagicMock(spec=Context)
+        ctx.lifespan_context = {
+            "cache": cache,
+            "aggregator": aggregator,
+            "session": MagicMock(spec=SessionManager),
+        }
+        return ctx
+
+    async def test_get_job_matches_with_cv_path(self) -> None:
+        """Verify get_job_matches extracts CV profile, filters out senior jobs, and scores junior matches."""
+        from job_mcp.main import get_job_matches
+
+        cache = JobCache()
+        cache.update([self.junior_job, self.senior_job])
+        ctx = self._create_mock_context(cache)
+
+        res = await get_job_matches(
+            cv_path=self.junior_cv_text,
+            force_refresh=False,
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        self.assertIn("trace_id", res)
+        # Senior job should be excluded by junior CV suggested exclusions
+        self.assertEqual(len(res["data"]), 1)
+        self.assertEqual(res["data"][0]["job_id"], "job_junior_10")
+        self.assertGreater(res["data"][0]["match_score"], 60.0)
+        self.assertIn("Python", res["data"][0]["matched_skills"])
+
+    async def test_get_job_matches_with_all_preference_params(self) -> None:
+        """Verify get_job_matches handles all search and preference parameters combined."""
+        from job_mcp.main import get_job_matches
+
+        cache = JobCache()
+        cache.update([self.junior_job, self.senior_job])
+        ctx = self._create_mock_context(cache)
+
+        res = await get_job_matches(
+            tech_stack=["Python", "FastAPI"],
+            work_mode="hybrid",
+            location="Tel Aviv",
+            min_salary=50000,
+            keywords=["Python"],
+            exclude_keywords=["PHP"],
+            cv_path=self.junior_cv_text,
+            limit=5,
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        self.assertIn("trace_id", res)
+        self.assertEqual(len(res["data"]), 1)
+        self.assertEqual(res["data"][0]["job_id"], "job_junior_10")
+
+    async def test_filter_jobs_by_preferences_with_cv_path(self) -> None:
+        """Verify filter_jobs_by_preferences parses CV and filters cached listings."""
+        from job_mcp.main import filter_jobs_by_preferences
+
+        cache = JobCache()
+        cache.update([self.junior_job, self.senior_job])
+        ctx = self._create_mock_context(cache)
+
+        res = await filter_jobs_by_preferences(
+            cv_path=self.junior_cv_text,
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        self.assertIn("Found 1 matching jobs", res["message"])
+        self.assertEqual(len(res["data"]), 1)
+        self.assertEqual(res["data"][0]["job_id"], "job_junior_10")
+        self.assertIn("Python", res["data"][0]["matched_skills"])
+        self.assertGreater(res["data"][0]["match_score"], 60.0)
+
+    @patch("job_mcp.main.search_linkedin_jobs_api", new_callable=AsyncMock)
+    async def test_search_linkedin_jobs_dynamic_cv_keyword(self, mock_api) -> None:
+        """Verify search_linkedin_jobs derives dynamic query from CV when keywords is empty."""
+        from job_mcp.main import search_linkedin_jobs
+
+        mock_api.return_value = [self.junior_job]
+        cache = JobCache()
+        ctx = self._create_mock_context(cache)
+
+        res = await search_linkedin_jobs(
+            keywords="",
+            cv_path=self.junior_cv_text,
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        mock_api.assert_called_once()
+        call_kwargs = mock_api.call_args.kwargs
+        called_keywords = call_kwargs.get("keywords") or (mock_api.call_args.args[0] if mock_api.call_args.args else "")
+        self.assertTrue(len(called_keywords) > 0)
+        self.assertTrue("python" in called_keywords.lower())
+
+
 if __name__ == "__main__":
     unittest.main()
+
