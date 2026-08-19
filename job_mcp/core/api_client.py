@@ -837,6 +837,13 @@ def extract_candidate_profile(cv_source: Optional[Union[str, Path]] = None) -> C
     )
 
 
+# Precompile curated tech regexes for sub-millisecond scoring
+_CURATED_TECH_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    (tech, re.compile(r"(?<![a-zA-Z0-9_])" + re.escape(tech.lower()) + r"(?![a-zA-Z0-9_])"))
+    for tech in CURATED_TECH_KEYWORDS
+]
+
+
 def _extract_text_tech_keywords(text: str) -> list[str]:
     """Extract curated tech keywords present in a given string.
 
@@ -850,9 +857,8 @@ def _extract_text_tech_keywords(text: str) -> list[str]:
         return []
     found: list[str] = []
     text_lower = text.lower()
-    for tech in CURATED_TECH_KEYWORDS:
-        pattern = r"(?<![a-zA-Z0-9_])" + re.escape(tech.lower()) + r"(?![a-zA-Z0-9_])"
-        if re.search(pattern, text_lower):
+    for tech, pattern in _CURATED_TECH_PATTERNS:
+        if pattern.search(text_lower):
             found.append(tech)
     return found
 
@@ -978,23 +984,281 @@ def _match_terms_in_job(terms: set[str], text_lower: str, tech_tokens: set[str])
     return matched
 
 
-def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
-    """Filter and score job listings according to user preferences.
+def calculate_match_score(
+    job: Job,
+    prefs: JobPreferences,
+    profile: Optional[CandidateProfile] = None,
+    display_map: Optional[dict[str, str]] = None,
+) -> float:
+    """Calculate dynamic requirement-based fit score (0.0 - 100.0) and populate explainability fields on Job.
+
+    Scoring formula components:
+    1. Job Requirement Coverage (C_req): Ratio of candidate skills matching job required skills.
+    2. Primary Skill Affinity (A_top): Bonus for matching candidate's top primary competencies.
+    3. Target Role Match (B_role): Bonus for matching candidate's target job titles or explicit keywords in job title.
+    4. User Preference Weighting: Explicit prefs.tech_stack is integrated and weighted alongside CV requirements.
+
+    Args:
+        job: Job instance to score and update with explainability fields.
+        prefs: User JobPreferences configuration.
+        profile: Optional pre-extracted CandidateProfile. If None, resolved dynamically.
+        display_map: Optional dictionary mapping lowercase terms to canonical display strings.
+
+    Returns:
+        float: Calculated match score between 0.0 and 100.0 rounded to 1 decimal place.
+    """
+    if profile is None:
+        if prefs.cv_path:
+            profile = extract_candidate_profile(prefs.cv_path)
+        else:
+            profile = CandidateProfile(
+                skills=prefs.tech_stack,
+                top_skills=prefs.tech_stack,
+                search_queries=prefs.tech_stack,
+            )
+
+    if display_map is None:
+        display_map = {k.lower(): k for k in CURATED_TECH_KEYWORDS}
+        for phrase in MULTI_TOKEN_TECH_PHRASES:
+            display_map[phrase.lower()] = phrase
+        for s in profile.skills:
+            display_map[s.lower()] = s
+        for t in prefs.tech_stack:
+            if t.strip():
+                display_map[t.strip().lower()] = t.strip()
+        for k in prefs.keywords:
+            if k.strip():
+                display_map[k.strip().lower()] = k.strip()
+
+    job_full_text = f"{job.title} {job.company} {job.location} {job.description} {' '.join(job.tech_stack)}".lower()
+
+    # Job's identified tech stack/skills
+    job_tech_tokens = {t.strip().lower() for t in job.tech_stack if t.strip()}
+    extracted_job_skills = {s.lower() for s in _extract_text_tech_keywords(f"{job.title} {job.description} {' '.join(job.tech_stack)}")}
+    job_skills = job_tech_tokens | extracted_job_skills
+
+    # Candidate profile skills and explicit preferences
+    profile_skills = {s.strip().lower() for s in profile.skills if s.strip()}
+    top_skills = [s.strip().lower() for s in profile.top_skills if s.strip()]
+    target_roles = [r.strip().lower() for r in profile.target_roles if r.strip()]
+    explicit_tech = {t.strip().lower() for t in prefs.tech_stack if t.strip()}
+    explicit_keywords = {k.strip().lower() for k in prefs.keywords if k.strip()}
+
+    if not top_skills and explicit_tech:
+        top_skills = list(explicit_tech)
+
+    all_candidate_skills = profile_skills | explicit_tech
+    all_desired_tokens = all_candidate_skills | explicit_keywords
+
+    # Matched skills
+    matched_job_skills = all_candidate_skills & job_skills
+    matched_in_text = _match_terms_in_job(all_candidate_skills | explicit_keywords, job_full_text, job_tech_tokens)
+    all_matched_tokens = matched_job_skills | matched_in_text
+
+    # Explainability: matched & missing skills
+    job.matched_skills = sorted([display_map.get(s, s.title()) for s in all_matched_tokens], key=lambda s: s.lower())
+
+    has_cv_profile = bool(prefs.cv_path or (profile and profile.skills and profile.skills != prefs.tech_stack))
+    if has_cv_profile:
+        if job_skills:
+            missing_from_job = job_skills - all_candidate_skills
+            missing_desired = explicit_tech - all_matched_tokens
+            missing_tokens = missing_from_job | missing_desired
+        else:
+            missing_tokens = all_desired_tokens - all_matched_tokens
+    else:
+        missing_tokens = all_desired_tokens - all_matched_tokens
+    job.missing_skills = sorted([display_map.get(s, s.title()) for s in missing_tokens], key=lambda s: s.lower())
+
+    if not job.seniority_level:
+        job.seniority_level = detect_seniority_level(job.title, job.description)
+
+    if not job.description_summary and job.description:
+        job.description_summary = generate_description_summary(job.description)
+
+    # 1. Job Requirement Coverage (C_req)
+    if job_skills:
+        c_req = len(matched_job_skills) / len(job_skills)
+    elif all_matched_tokens:
+        c_req = min(1.0, len(all_matched_tokens) / 3.0)
+    else:
+        c_req = 0.0
+
+    # 2. Candidate Primary Skill Affinity (A_top)
+    top_matches = [
+        s for s in top_skills
+        if s in all_matched_tokens or s in job_skills or re.search(r"(?<![a-zA-Z0-9_])" + re.escape(s) + r"(?![a-zA-Z0-9_])", job_full_text)
+    ]
+    if len(top_matches) >= 3:
+        a_top = 12.0
+    elif len(top_matches) == 2:
+        a_top = 8.0
+    elif len(top_matches) == 1:
+        a_top = 4.0
+    else:
+        a_top = 0.0
+
+    # 3. Role Title Match Bonus (B_role)
+    b_role = 0.0
+    matched_target_role = None
+    title_lower = job.title.lower()
+    for role in target_roles:
+        pattern = r"(?<![a-zA-Z0-9_])" + re.escape(role) + r"(?![a-zA-Z0-9_])"
+        if re.search(pattern, title_lower):
+            b_role = 8.0
+            matched_target_role = role
+            break
+
+    if b_role == 0.0 and explicit_keywords:
+        for kw in explicit_keywords:
+            pattern = r"(?<![a-zA-Z0-9_])" + re.escape(kw) + r"(?![a-zA-Z0-9_])"
+            if re.search(pattern, title_lower):
+                b_role = 5.0
+                break
+
+    # 4. Explicit Tech Stack Alignment
+    if explicit_tech:
+        tech_matched = explicit_tech & all_matched_tokens
+        tech_coverage = len(tech_matched) / len(explicit_tech)
+    else:
+        tech_coverage = 1.0
+
+    # 5. Base Score calculation
+    if not all_desired_tokens:
+        score = 100.0
+    elif not all_matched_tokens and b_role == 0.0:
+        score = 0.0
+    elif not all_matched_tokens and b_role > 0.0:
+        score = min(25.0, b_role)
+    else:
+        if has_cv_profile:
+            kw_matched = _match_terms_in_job(explicit_keywords, job_full_text, job_tech_tokens)
+            kw_cov = len(kw_matched) / len(explicit_keywords) if explicit_keywords else 1.0
+            if explicit_tech and explicit_keywords:
+                base_score = ((c_req * 0.5) + (tech_coverage * 0.3) + (kw_cov * 0.2)) * 65.0
+            elif explicit_tech:
+                base_score = ((c_req * 0.6) + (tech_coverage * 0.4)) * 65.0
+            else:
+                base_score = c_req * 70.0
+            volume_bonus = min(15.0, len(all_matched_tokens) * 5.0)
+            raw_score = base_score + volume_bonus + a_top + b_role
+            if (c_req >= 0.85 or (tech_coverage == 1.0 and len(all_matched_tokens) >= 3 and c_req >= 0.65)) and len(all_matched_tokens) >= 3:
+                raw_score = max(raw_score, 88.0)
+            elif c_req >= 0.65 and len(all_matched_tokens) >= 3:
+                raw_score = max(raw_score, 72.0)
+        else:
+            # Pure explicit search (no CV)
+            kw_matched = _match_terms_in_job(explicit_keywords, job_full_text, job_tech_tokens)
+            kw_coverage = len(kw_matched) / len(explicit_keywords) if explicit_keywords else 1.0
+            tech_matched = explicit_tech & all_matched_tokens
+            if (not explicit_tech or tech_coverage == 1.0) and (not explicit_keywords or kw_coverage == 1.0):
+                raw_score = 100.0
+            else:
+                if explicit_keywords and explicit_tech:
+                    base_score = (tech_coverage * 55.0) + (kw_coverage * 20.0)
+                elif explicit_tech:
+                    base_score = tech_coverage * 70.0
+                else:
+                    base_score = kw_coverage * 70.0
+                volume_bonus = min(10.0, len(tech_matched) * 2.5) if explicit_tech else 0.0
+                raw_score = base_score + volume_bonus + (5.0 if b_role > 0 else 0.0)
+                if tech_coverage >= 0.75 and len(tech_matched) >= 3:
+                    raw_score = max(raw_score, 75.0)
+
+        # Title match bonus for exact title relevance
+        if b_role == 0.0 and (explicit_tech | profile_skills | explicit_keywords):
+            for t in explicit_tech | profile_skills | explicit_keywords:
+                pattern = r"(?<![a-zA-Z0-9_])" + re.escape(t) + r"(?![a-zA-Z0-9_])"
+                if re.search(pattern, title_lower):
+                    raw_score = min(100.0, raw_score + 5.0)
+                    break
+
+        score = round(max(0.0, min(100.0, raw_score)), 1)
+
+    # 6. Generate explainability reasons
+    reasons: list[str] = []
+    if all_matched_tokens:
+        if has_cv_profile and matched_job_skills:
+            cv_names = sorted([display_map.get(s, s.title()) for s in matched_job_skills], key=lambda s: s.lower())
+            cv_fit_pct = round((len(matched_job_skills) / len(job_skills)) * 100.0) if job_skills else 100.0
+            reasons.append(f"CV matched {len(matched_job_skills)} core skills: {', '.join(cv_names)} ({int(cv_fit_pct)}% tech requirements match)")
+        elif has_cv_profile and all_matched_tokens:
+            cv_names = sorted([display_map.get(s, s.title()) for s in all_matched_tokens], key=lambda s: s.lower())
+            reasons.append(f"CV matched {len(all_matched_tokens)} core skills: {', '.join(cv_names)}")
+        else:
+            cv_names = sorted([display_map.get(s, s.title()) for s in all_matched_tokens], key=lambda s: s.lower())
+            reasons.append(f"CV matched skills: {', '.join(cv_names)}")
+
+    if explicit_tech:
+        matched_tech = explicit_tech & all_matched_tokens
+        if matched_tech:
+            tech_names = sorted([display_map.get(s, s.title()) for s in matched_tech], key=lambda s: s.lower())
+            reasons.append(f"Target stack matched: {', '.join(tech_names)}")
+
+    if explicit_keywords:
+        matched_kw = _match_terms_in_job(explicit_keywords, job_full_text, job_tech_tokens)
+        if matched_kw:
+            kw_names = sorted([display_map.get(s, s.title()) for s in matched_kw], key=lambda s: s.lower())
+            reasons.append(f"Keywords matched: {', '.join(kw_names)}")
+
+    if matched_target_role:
+        reasons.append(f"Target role matched: {matched_target_role.title()}")
+
+    if prefs.work_mode:
+        pref_wm = prefs.work_mode.value if isinstance(prefs.work_mode, WorkMode) else str(prefs.work_mode)
+        reasons.append(f"{pref_wm.capitalize()} work mode aligned with preference")
+    elif job.work_mode == WorkMode.REMOTE:
+        reasons.append("Remote work mode aligned with preference")
+
+    if job.seniority_level:
+        reasons.append(f"{job.seniority_level} level position")
+
+    if prefs.location and (prefs.location.lower() in job.location.lower() or prefs.location.lower() in job_full_text):
+        reasons.append(f"Location aligned with preference ({prefs.location})")
+
+    if prefs.min_salary and job.salary_range:
+        reasons.append(f"Salary range meets requirement ({job.salary_range})")
+
+    job.match_reasons = reasons
+    job.match_score = score
+    return score
+
+
+def filter_jobs(
+    jobs: list[Job],
+    prefs: JobPreferences,
+    profile: Optional[CandidateProfile] = None,
+) -> list[Job]:
+    """Filter and score job listings according to user preferences and candidate profile.
 
     Args:
         jobs: List of Job instances.
         prefs: JobPreferences configuration.
+        profile: Optional CandidateProfile instance. If omitted, resolved dynamically from prefs.cv_path or preferences.
 
     Returns:
         list[Job]: Filtered and ranked list of Job instances sorted by match_score descending.
     """
+    has_explicit_profile = profile is not None
+    if profile is None:
+        if prefs.cv_path:
+            profile = extract_candidate_profile(prefs.cv_path)
+            has_explicit_profile = True
+        else:
+            profile = CandidateProfile(
+                skills=prefs.tech_stack,
+                top_skills=prefs.tech_stack,
+                search_queries=prefs.tech_stack,
+            )
+
     filtered: list[Job] = []
 
-    # Prepare normalized exclusion keywords
-    raw_exclude = [k.strip() for k in prefs.exclude_keywords if k.strip()]
-
-    # Prepare desired skills and display mapping to preserve original casing
+    # Prepare display mapping
     display_map: dict[str, str] = {k.lower(): k for k in CURATED_TECH_KEYWORDS}
+    for phrase in MULTI_TOKEN_TECH_PHRASES:
+        display_map[phrase.lower()] = phrase
+    for s in profile.skills:
+        display_map[s.lower()] = s
     for t in prefs.tech_stack:
         if t.strip():
             display_map[t.strip().lower()] = t.strip()
@@ -1002,32 +1266,37 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
         if k.strip():
             display_map[k.strip().lower()] = k.strip()
 
-    extracted_cv: list[str] = []
-    if prefs.cv_path:
-        extracted_cv = extract_cv_keywords(prefs.cv_path)
-        for c in extracted_cv:
-            if c.strip():
-                display_map[c.strip().lower()] = c.strip()
-
-    desired_tech = {t.strip().lower() for t in prefs.tech_stack if t.strip()}
-    desired_keywords = {k.strip().lower() for k in prefs.keywords if k.strip()}
-    cv_keywords = {c.strip().lower() for c in extracted_cv if c.strip()}
-    total_desired = desired_tech | desired_keywords | cv_keywords
+    # Collect exclusion keywords
+    exclusions = [k.strip() for k in prefs.exclude_keywords if k.strip()]
+    if has_explicit_profile and profile and profile.suggested_exclusions:
+        for exc in profile.suggested_exclusions:
+            if exc not in exclusions:
+                exclusions.append(exc)
 
     for job in jobs:
         job_full_text = f"{job.title} {job.company} {job.location} {job.description} {' '.join(job.tech_stack)}".lower()
 
         # 1. Exclude keywords check
         is_excluded = False
-        for exc in raw_exclude:
+        for exc in exclusions:
             exc_lower = exc.lower()
-            if exc_lower in SENIORITY_EXCLUDE_TERMS or re.search(r"^(senior|sr\.?|principal|lead|staff|architect|director|vp|head)$", exc_lower):
+            if exc_lower in SENIORITY_EXCLUDE_TERMS or re.search(
+                r"^(senior|sr\.?|principal|lead|staff|architect|director|vp|head|student|intern|junior|entry[\s-]level|graduate)$",
+                exc_lower,
+            ):
                 # Seniority exclusion: check job title with word boundaries
                 if exc_lower in ("senior", "sr", "sr."):
                     term_pattern = r"\b(senior|sr)\b|\bsr\."
                 else:
                     term_pattern = r"\b" + re.escape(exc_lower) + r"\b"
                 if re.search(term_pattern, job.title, re.IGNORECASE):
+                    is_excluded = True
+                    break
+            elif re.search(r"(\d+)\+?\s*years", exc_lower):
+                m_req = re.search(r"(\d+)\+?\s*years", exc_lower)
+                exc_years = int(m_req.group(1)) if m_req else 7
+                m_job_years = re.search(r"\b(\d+)\+?\s*years(?:\s+of)?\s*(?:experience|working)?\b", job_full_text, re.IGNORECASE)
+                if m_job_years and int(m_job_years.group(1)) >= exc_years:
                     is_excluded = True
                     break
             else:
@@ -1057,7 +1326,6 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
         if prefs.location:
             loc_pref = prefs.location.strip().lower()
             job_loc = job.location.lower()
-            # If job is fully remote and preference didn't forbid remote, allow; otherwise check location string
             is_remote_job = job.work_mode == WorkMode.REMOTE or "remote" in job_loc
             if loc_pref not in job_loc and loc_pref not in job_full_text:
                 if not (is_remote_job and "remote" in loc_pref):
@@ -1069,116 +1337,8 @@ def filter_jobs(jobs: list[Job], prefs: JobPreferences) -> list[Job]:
             if parsed_salary is not None and parsed_salary < prefs.min_salary:
                 continue
 
-        # 5. Compute match score (0 to 100) & explainability fields
-        job_tech_tokens = {t.strip().lower() for t in job.tech_stack if t.strip()}
-        matched_tech = _match_terms_in_job(desired_tech, job_full_text, job_tech_tokens)
-        matched_kw = _match_terms_in_job(desired_keywords, job_full_text, job_tech_tokens)
-        matched_cv = _match_terms_in_job(cv_keywords, job_full_text, job_tech_tokens)
-
-        matched_tokens = matched_tech | matched_kw | matched_cv
-        missing_tokens = total_desired - matched_tokens
-
-        job.matched_skills = sorted([display_map.get(s, s.title()) for s in matched_tokens], key=lambda s: s.lower())
-        job.missing_skills = sorted([display_map.get(s, s.title()) for s in missing_tokens], key=lambda s: s.lower())
-
-        if not job.seniority_level:
-            job.seniority_level = detect_seniority_level(job.title, job.description)
-
-        if not job.description_summary and job.description:
-            job.description_summary = generate_description_summary(job.description)
-
-        # Job's identified tech stack/skills
-        extracted_job_skills = {s.lower() for s in _extract_text_tech_keywords(f"{job.title} {job.description} {' '.join(job.tech_stack)}")}
-        job_skills = job_tech_tokens | extracted_job_skills
-
-        # Structured match reasons
-        reasons: list[str] = []
-        if cv_keywords:
-            if matched_cv:
-                cv_names = sorted([display_map.get(s, s.title()) for s in matched_cv], key=lambda s: s.lower())
-                cv_fit_pct = round((len(matched_cv & job_skills) / len(job_skills)) * 100.0) if job_skills else 100.0
-                reasons.append(f"CV matched {len(matched_cv)} core skills: {', '.join(cv_names)} ({int(cv_fit_pct)}% tech requirements match)")
-
-        if desired_tech:
-            if matched_tech:
-                tech_names = sorted([display_map.get(s, s.title()) for s in matched_tech], key=lambda s: s.lower())
-                reasons.append(f"Target stack matched: {', '.join(tech_names)}")
-
-        if desired_keywords:
-            if matched_kw:
-                kw_names = sorted([display_map.get(s, s.title()) for s in matched_kw], key=lambda s: s.lower())
-                reasons.append(f"Keywords matched: {', '.join(kw_names)}")
-
-        if prefs.work_mode:
-            pref_wm = prefs.work_mode.value if isinstance(prefs.work_mode, WorkMode) else str(prefs.work_mode)
-            reasons.append(f"{pref_wm.capitalize()} work mode aligned with preference")
-        elif job.work_mode == WorkMode.REMOTE:
-            reasons.append("Remote work mode aligned with preference")
-
-        if job.seniority_level:
-            reasons.append(f"{job.seniority_level} level position")
-
-        if prefs.location and (prefs.location.lower() in job.location.lower() or prefs.location.lower() in job_full_text):
-            reasons.append(f"Location aligned with preference ({prefs.location})")
-
-        if prefs.min_salary and job.salary_range:
-            reasons.append(f"Salary range meets requirement ({job.salary_range})")
-
-        job.match_reasons = reasons
-
-        if not total_desired:
-            # If no skills or keywords specified in preferences, score is 100.0
-            score = 100.0
-        else:
-            tech_score = (len(matched_tech) / len(desired_tech)) * 100.0 if desired_tech else 0.0
-            kw_score = (len(matched_kw) / len(desired_keywords)) * 100.0 if desired_keywords else 0.0
-
-            cv_score = 0.0
-            if cv_keywords:
-                if matched_cv:
-                    if job_skills:
-                        matched_job_skills = matched_cv & job_skills
-                        job_coverage = len(matched_job_skills) / len(job_skills)
-                        coverage_points = job_coverage * 55.0
-                        count_points = min(45.0, len(matched_cv) * 8.0)
-                        cv_score = min(100.0, coverage_points + count_points)
-                    else:
-                        cv_score = min(50.0, len(matched_cv) * 8.0)
-                else:
-                    cv_score = 0.0
-
-            if cv_keywords:
-                w_tech = 45.0 if desired_tech else 0.0
-                w_kw = 25.0 if desired_keywords else 0.0
-                w_cv = 30.0 if (desired_tech or desired_keywords) else 100.0
-            else:
-                w_tech = 60.0 if desired_tech else 0.0
-                w_kw = 40.0 if desired_keywords else 0.0
-                w_cv = 0.0
-
-            active_weights = w_tech + w_kw + w_cv
-            if active_weights > 0:
-                weighted_sum = (tech_score * w_tech) + (kw_score * w_kw) + (cv_score * w_cv)
-                score = weighted_sum / active_weights
-            else:
-                score = 100.0
-
-            # Bonus for high coverage / skill affinity on CV
-            if cv_keywords and cv_score >= 75.0 and len(matched_cv) >= 4 and score > 0:
-                score = min(100.0, score + 8.0)
-
-            # Bonus for exact title match (only if base score > 0)
-            if score > 0:
-                title_lower = job.title.lower()
-                for t in desired_tech | desired_keywords | cv_keywords:
-                    pattern = r"(?<![a-zA-Z0-9_])" + re.escape(t) + r"(?![a-zA-Z0-9_])"
-                    if re.search(pattern, title_lower):
-                        score = min(100.0, score + 5.0)
-                        break
-
-            score = round(max(0.0, min(100.0, score)), 1)
-
-        job.match_score = score
+        # 5. Calculate match score and enrich job fields
+        calculate_match_score(job, prefs, profile=profile, display_map=display_map)
         filtered.append(job)
 
     # Sort descending by match_score

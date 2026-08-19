@@ -9,6 +9,7 @@ import zipfile
 
 from job_mcp.core.api_client import (
     JobCache,
+    calculate_match_score,
     extract_candidate_profile,
     extract_cv_keywords,
     extract_dynamic_cv_skills,
@@ -1130,5 +1131,249 @@ class TestCandidateProfile(unittest.TestCase):
             os.unlink(docx_path)
 
 
+
+class TestDynamicFitScoring(unittest.TestCase):
+    """Unit tests for requirement-based coverage, primary affinity, and dynamic seniority scoring."""
+
+    def setUp(self):
+        self.junior_profile = CandidateProfile(
+            skills=["Python", "FastAPI", "Docker", "PostgreSQL", "Pandas", "NumPy", "Git", "Linux", "REST"],
+            top_skills=["Python", "FastAPI", "Docker", "PostgreSQL", "Pandas"],
+            seniority_level="Junior",
+            target_roles=["Python Developer", "Backend Engineer", "AI Engineer"],
+            search_queries=["Python Developer", "Backend Engineer", "FastAPI"],
+            suggested_exclusions=["Senior", "Lead", "Principal", "Staff", "Director", "VP", "Head", "7+ years", "10+ years"],
+        )
+
+        self.senior_devops_profile = CandidateProfile(
+            skills=["AWS", "Kubernetes", "Docker", "Terraform", "CI/CD", "Python", "Prometheus", "Grafana", "Linux", "Helm"],
+            top_skills=["AWS", "Kubernetes", "Docker", "Terraform", "CI/CD"],
+            seniority_level="Senior",
+            target_roles=["DevOps Engineer", "Cloud Engineer", "Infrastructure Engineer"],
+            search_queries=["DevOps Engineer", "Cloud Engineer", "AWS", "Kubernetes"],
+            suggested_exclusions=["Student", "Intern", "Junior", "Entry Level", "Graduate"],
+        )
+
+        self.mid_frontend_profile = CandidateProfile(
+            skills=["React", "Next.js", "TypeScript", "TailwindCSS", "Redux", "Vite", "HTML", "CSS", "JavaScript", "REST"],
+            top_skills=["React", "Next.js", "TypeScript", "TailwindCSS"],
+            seniority_level="Mid",
+            target_roles=["Frontend Engineer", "Full Stack Engineer"],
+            search_queries=["Frontend Engineer", "React", "TypeScript"],
+            suggested_exclusions=["Principal", "Staff", "Director", "VP", "Head", "10+ years"],
+        )
+
+    def test_junior_python_developer_dynamic_scoring(self):
+        """Test Junior Python candidate gets 85-100 score on full match job and 0 on irrelevant job."""
+        job_full_match = Job(
+            job_id="py-1",
+            title="Junior Python Developer",
+            company="StartupAI",
+            tech_stack=["Python", "FastAPI", "PostgreSQL", "Docker"],
+            description="Build modern microservices with Python, FastAPI, and Docker connected to PostgreSQL.",
+        )
+        job_irrelevant = Job(
+            job_id="irr-1",
+            title="Recruitment Specialist",
+            company="HR Corp",
+            tech_stack=[],
+            description="Manage candidate interviews, talent sourcing, and onboarding.",
+        )
+
+        prefs = JobPreferences(cv_path="dummy_cv.pdf")
+
+        # Direct score calculation
+        score_match = calculate_match_score(job_full_match, prefs, profile=self.junior_profile)
+        score_irr = calculate_match_score(job_irrelevant, prefs, profile=self.junior_profile)
+
+        self.assertGreaterEqual(score_match, 85.0)
+        self.assertLessEqual(score_match, 100.0)
+        self.assertIn("Python", job_full_match.matched_skills)
+        self.assertIn("FastAPI", job_full_match.matched_skills)
+        self.assertIn("Docker", job_full_match.matched_skills)
+        self.assertIn("PostgreSQL", job_full_match.matched_skills)
+        self.assertEqual(job_full_match.missing_skills, [])
+
+        self.assertEqual(score_irr, 0.0)
+        self.assertEqual(job_irrelevant.matched_skills, [])
+
+    def test_senior_devops_architect_dynamic_scoring(self):
+        """Test Senior DevOps candidate scores high on cloud infra role and 0 on legacy developer role."""
+        job_devops = Job(
+            job_id="devops-1",
+            title="Senior Cloud & DevOps Engineer",
+            company="CloudScale",
+            tech_stack=["AWS", "Kubernetes", "Docker", "Terraform"],
+            description="Design and operate enterprise AWS Kubernetes clusters with Terraform and CI/CD pipelines.",
+        )
+        job_java = Job(
+            job_id="java-1",
+            title="Java Enterprise Developer",
+            company="LegacyCo",
+            tech_stack=["Java", "Spring Boot", "Oracle"],
+            description="Maintain legacy banking applications in Java Spring Boot.",
+        )
+
+        prefs = JobPreferences()
+
+        score_devops = calculate_match_score(job_devops, prefs, profile=self.senior_devops_profile)
+        score_java = calculate_match_score(job_java, prefs, profile=self.senior_devops_profile)
+
+        self.assertGreaterEqual(score_devops, 85.0)
+        self.assertEqual(score_java, 0.0)
+        self.assertIn("AWS", job_devops.matched_skills)
+        self.assertIn("Kubernetes", job_devops.matched_skills)
+
+    def test_mid_frontend_engineer_dynamic_scoring(self):
+        """Test Mid Frontend candidate scores high on React/TypeScript role."""
+        job_frontend = Job(
+            job_id="fe-1",
+            title="Frontend Engineer",
+            company="WebTech",
+            tech_stack=["React", "TypeScript", "Next.js", "TailwindCSS"],
+            description="Develop user-facing responsive applications using React and Next.js.",
+        )
+        job_backend_go = Job(
+            job_id="go-1",
+            title="Backend Go Engineer",
+            company="GoScale",
+            tech_stack=["Go", "gRPC", "PostgreSQL"],
+            description="Build high-throughput gRPC microservices in Go.",
+        )
+
+        prefs = JobPreferences()
+
+        score_fe = calculate_match_score(job_frontend, prefs, profile=self.mid_frontend_profile)
+        score_go = calculate_match_score(job_backend_go, prefs, profile=self.mid_frontend_profile)
+
+        self.assertGreaterEqual(score_fe, 85.0)
+        self.assertEqual(score_go, 0.0)
+        self.assertIn("React", job_frontend.matched_skills)
+        self.assertIn("TypeScript", job_frontend.matched_skills)
+
+    def test_requirement_coverage_proportionality(self):
+        """Test requirement coverage scales proportionally: 4/4 >= 85, 2/4 is ~50-70, 0/4 is 0."""
+        job_4_skills = Job(
+            job_id="req-4",
+            title="Software Developer",
+            company="TechCo",
+            tech_stack=["Python", "FastAPI", "Docker", "PostgreSQL"],
+            description="Work with Python, FastAPI, Docker, and PostgreSQL.",
+        )
+
+        profile_all_4 = CandidateProfile(
+            skills=["Python", "FastAPI", "Docker", "PostgreSQL"],
+            top_skills=["Python", "FastAPI"],
+        )
+        profile_2_of_4 = CandidateProfile(
+            skills=["Python", "FastAPI", "Ruby", "PHP"],
+            top_skills=["Ruby", "PHP"],
+        )
+        profile_0_of_4 = CandidateProfile(
+            skills=["Ruby", "Rails", "PHP", "Laravel"],
+            top_skills=["Ruby", "Rails"],
+        )
+
+        prefs = JobPreferences()
+
+        score_4 = calculate_match_score(Job(job_id="1", title="Dev", tech_stack=["Python", "FastAPI", "Docker", "PostgreSQL"], company="C"), prefs, profile=profile_all_4)
+        score_2 = calculate_match_score(Job(job_id="2", title="Dev", tech_stack=["Python", "FastAPI", "Docker", "PostgreSQL"], company="C"), prefs, profile=profile_2_of_4)
+        score_0 = calculate_match_score(Job(job_id="3", title="Dev", tech_stack=["Python", "FastAPI", "Docker", "PostgreSQL"], company="C"), prefs, profile=profile_0_of_4)
+
+        self.assertGreaterEqual(score_4, 85.0)
+        self.assertGreaterEqual(score_2, 45.0)
+        self.assertLessEqual(score_2, 75.0)
+        self.assertEqual(score_0, 0.0)
+
+    def test_filter_jobs_dynamic_seniority_alignment(self):
+        """Test Junior profile excludes Senior/Lead titles, but Senior profile retains Senior titles."""
+        junior_job = Job(
+            job_id="j-1",
+            title="Junior Python Developer",
+            company="StartupCo",
+            tech_stack=["Python", "FastAPI"],
+            description="Join our team as a junior developer.",
+        )
+        senior_job = Job(
+            job_id="s-1",
+            title="Senior Python Architect",
+            company="BigCorp",
+            tech_stack=["Python", "FastAPI"],
+            description="Lead architecture and design systems.",
+        )
+        lead_job = Job(
+            job_id="l-1",
+            title="Engineering Team Lead (Python)",
+            company="ScaleUp",
+            tech_stack=["Python", "FastAPI"],
+            description="Lead engineering squad.",
+        )
+
+        all_jobs = [junior_job, senior_job, lead_job]
+
+        # 1. Filter with Junior profile (no explicit exclude keywords passed)
+        filtered_junior = filter_jobs(all_jobs, JobPreferences(), profile=self.junior_profile)
+        junior_ids = [j.job_id for j in filtered_junior]
+        self.assertIn("j-1", junior_ids)
+        self.assertNotIn("s-1", junior_ids)
+        self.assertNotIn("l-1", junior_ids)
+
+        # 2. Filter with Senior profile
+        filtered_senior = filter_jobs(all_jobs, JobPreferences(), profile=self.senior_devops_profile)
+        senior_ids = [j.job_id for j in filtered_senior]
+        self.assertIn("s-1", senior_ids)
+        self.assertIn("l-1", senior_ids)
+
+    def test_filter_jobs_explicit_tech_stack_and_cv_combined(self):
+        """Test user explicit tech stack is combined and weighted with candidate CV profile."""
+        job = Job(
+            job_id="comb-1",
+            title="Python Cloud Developer",
+            company="SaaSCo",
+            tech_stack=["Python", "FastAPI", "Kubernetes", "AWS"],
+            description="Python FastAPI backend on AWS Kubernetes.",
+        )
+
+        prefs = JobPreferences(
+            tech_stack=["Kubernetes", "AWS"],
+            keywords=["Cloud"],
+        )
+
+        filtered = filter_jobs([job], prefs, profile=self.junior_profile)
+        self.assertEqual(len(filtered), 1)
+        res_job = filtered[0]
+
+        self.assertGreaterEqual(res_job.match_score, 85.0)
+        self.assertIn("Python", res_job.matched_skills)
+        self.assertIn("FastAPI", res_job.matched_skills)
+        self.assertIn("Kubernetes", res_job.matched_skills)
+        self.assertIn("AWS", res_job.matched_skills)
+        self.assertTrue(any("CV matched" in r for r in res_job.match_reasons))
+        self.assertTrue(any("Target stack matched" in r for r in res_job.match_reasons))
+
+    def test_submillisecond_scoring_performance(self):
+        """Benchmark scoring 200 jobs completes in < 100ms (< 0.5ms per job)."""
+        import time
+
+        sample_jobs = [
+            Job(
+                job_id=f"bench-{i}",
+                title="Python Backend Developer" if i % 2 == 0 else "Frontend React Developer",
+                company=f"Company {i}",
+                tech_stack=["Python", "FastAPI", "Docker"] if i % 2 == 0 else ["React", "TypeScript", "Next.js"],
+                description="High throughput scalable platform services with Python and FastAPI." if i % 2 == 0 else "UI web application.",
+            )
+            for i in range(200)
+        ]
+
+        t0 = time.perf_counter()
+        results = filter_jobs(sample_jobs, JobPreferences(), profile=self.junior_profile)
+        duration_ms = (time.perf_counter() - t0) * 1000.0
+
+        self.assertEqual(len(results), 200)
+        self.assertLess(duration_ms, 100.0, f"Scoring 200 jobs took {duration_ms:.2f}ms (> 100ms threshold)")
+
+
 if __name__ == "__main__":
     unittest.main()
+

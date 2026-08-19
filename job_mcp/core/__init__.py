@@ -2,7 +2,9 @@
 
 from job_mcp.core.api_client import (
     JobCache,
+    calculate_match_score,
     detect_seniority_level,
+    extract_candidate_profile,
     extract_cv_keywords,
     extract_dynamic_cv_skills,
     fetch_jobs_via_api,
@@ -13,6 +15,7 @@ from job_mcp.core.api_client import (
     parse_api_job_dict,
     resolve_cv_path,
 )
+from job_mcp.models.schemas import CandidateProfile
 from job_mcp.core.auth import (
     BASE_URL,
     DASHBOARD_PATH,
@@ -56,11 +59,14 @@ __all__ = [
     "preview_application",
     "execute_application",
     "JobCache",
+    "CandidateProfile",
     "resolve_cv_path",
+    "extract_candidate_profile",
     "extract_cv_keywords",
     "extract_dynamic_cv_skills",
     "detect_seniority_level",
     "generate_description_summary",
+    "calculate_match_score",
     "filter_jobs",
     "parse_api_job_dict",
     "fetch_jobs_via_api",
