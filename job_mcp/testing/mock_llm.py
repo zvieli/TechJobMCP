@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional
 from fastmcp import Context
 from pydantic import BaseModel, Field
 
-from job_mcp.core.api_client import extract_candidate_profile
+from job_mcp.core.api_client import extract_candidate_profile, resolve_cv_path
 from job_mcp.main import (
     auto_apply_job,
     bookmark_job,
@@ -268,6 +268,9 @@ class MockLLMAgent:
         effective_cv = cv_path or self.cv_path or os.getenv("DEFAULT_CV_PATH")
         profile: Optional[CandidateProfile] = None
         if effective_cv:
+            resolved_cv = resolve_cv_path(effective_cv)
+            if resolved_cv:
+                effective_cv = str(resolved_cv)
             profile = extract_candidate_profile(effective_cv)
 
         # Dynamic population from CandidateProfile if not explicitly passed

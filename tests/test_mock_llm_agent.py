@@ -564,3 +564,38 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
             ]
             result = await self.agent.run_pipeline()
             self.assertFalse(result.success)
+
+    @patch("job_mcp.main.browser_delete_job", new_callable=AsyncMock)
+    @patch("job_mcp.main.browser_bookmark_job", new_callable=AsyncMock)
+    async def test_run_pipeline_propagates_all_dynamic_criteria_to_all_steps(self, mock_bookmark, mock_delete):
+        """Verify dynamic tech_stack, exclude_keywords, keywords, and cv_path propagate to steps 2 and 3."""
+        prof = CandidateProfile(
+            primary_stack=["Python", "FastAPI", "AI"],
+            top_skills=["Python", "FastAPI", "AI", "Docker"],
+            skills=["Python", "FastAPI", "AI", "Docker", "Git"],
+            suggested_exclusions=["Senior", "Lead", "10+ years"],
+            search_queries=["Python", "FastAPI"],
+            target_roles=["AI Engineer", "Backend Engineer"],
+        )
+        with patch("job_mcp.testing.mock_llm.extract_candidate_profile", return_value=prof):
+            with patch("job_mcp.testing.mock_llm.resolve_cv_path", return_value=None):
+                res = await self.agent.run_pipeline(cv_path="nonexistent_cv.pdf", auto_apply=False)
+
+        self.assertTrue(res.success)
+        get_matches_step = next(s for s in res.steps if s.tool_name == "get_job_matches")
+        filter_step = next(s for s in res.steps if s.tool_name == "filter_jobs_by_preferences")
+
+        # Step 2 verification
+        self.assertEqual(get_matches_step.arguments.get("cv_path"), "nonexistent_cv.pdf")
+        self.assertEqual(get_matches_step.arguments.get("tech_stack"), ["Python", "FastAPI", "AI"])
+        self.assertEqual(get_matches_step.arguments.get("exclude_keywords"), ["Senior", "Lead", "10+ years"])
+        self.assertIn("Python", get_matches_step.arguments.get("keywords", []))
+        self.assertIn("AI Engineer", get_matches_step.arguments.get("keywords", []))
+
+        # Step 3 verification
+        self.assertEqual(filter_step.arguments.get("cv_path"), "nonexistent_cv.pdf")
+        self.assertEqual(filter_step.arguments.get("tech_stack"), ["Python", "FastAPI", "AI"])
+        self.assertEqual(filter_step.arguments.get("exclude_keywords"), ["Senior", "Lead", "10+ years"])
+        self.assertIn("Python", filter_step.arguments.get("keywords", []))
+        self.assertIn("Backend Engineer", filter_step.arguments.get("keywords", []))
+
