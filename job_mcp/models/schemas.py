@@ -56,6 +56,7 @@ class CandidateProfile(BaseModel):
     """Rich candidate profile extracted from CV/resume."""
     skills: list[str] = Field(default_factory=list)
     top_skills: list[str] = Field(default_factory=list)
+    primary_stack: list[str] = Field(default_factory=list)
     seniority_level: Optional[str] = None
     target_roles: list[str] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list)

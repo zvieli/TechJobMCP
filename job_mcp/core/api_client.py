@@ -87,6 +87,26 @@ MONTHS_AND_NOISE: set[str] = {
     "PLATFORM",
 }
 
+CORE_LANGUAGES_FRAMEWORKS: set[str] = {
+    "python", "typescript", "javascript", "go", "golang", "rust", "java", "kotlin",
+    "scala", "c++", "c#", "c", ".net", "ruby", "php", "swift", "sql",
+    "react", "next.js", "vue", "vue.js", "angular", "svelte", "node.js", "node",
+    "fastapi", "django", "flask", "spring", "spring boot", "express", "graphql", "rest", "grpc",
+    "html", "css", "tailwindcss", "redux", "vite",
+}
+
+SPECIALIZED_COMPETENCIES: set[str] = {
+    "ai", "langgraph", "graphrag", "rag", "langchain", "llamaindex", "pytorch",
+    "tensorflow", "scikit-learn", "pandas", "numpy", "ollama", "vllm", "vector db",
+    "chromadb", "chroma", "pinecone", "qdrant", "weaviate", "crewai", "autogen",
+    "langsmith", "semantic kernel", "transformers", "fine-tuning", "embeddings", "llm", "nlp",
+    "docker", "kubernetes", "k8s", "aws", "amazon web services", "gcp", "google cloud",
+    "azure", "azure ai search", "azure container apps", "container apps", "terraform",
+    "ci/cd", "postgresql", "postgres", "redis", "mongodb", "solidity", "noir", "web3",
+    "smart contracts", "smart contract development", "foundry", "hardhat", "ethers.js", "viem",
+    "zk", "evm", "ansible", "prometheus", "grafana", "helm", "linux", "git",
+}
+
 
 class JobCache:
     """In-memory cache for job listings with TTL expiration."""
@@ -603,10 +623,10 @@ def _detect_cv_seniority(text: str) -> Optional[str]:
 
 
 def _compute_top_skills(skills: list[str], text: str) -> list[str]:
-    """Compute top 5-8 primary skills by frequency and section prominence."""
+    """Compute top 8-12 primary skills ensuring strong representation of core languages/frameworks and specialized competencies."""
     if not skills:
         return []
-    if len(skills) <= 5:
+    if len(skills) <= 8:
         return list(skills)
 
     text_lower = text.lower()
@@ -632,13 +652,87 @@ def _compute_top_skills(skills: list[str], text: str) -> list[str]:
         if skills_section and pattern and re.search(pattern, skills_section):
             score += 5.0
 
+        low = skill.lower()
+        if low in CORE_LANGUAGES_FRAMEWORKS:
+            score += 3.0
+        if low in SPECIALIZED_COMPETENCIES:
+            score += 3.0
+
         scored.append((score, skill))
 
     # Sort descending by score, then ascending by name
     scored.sort(key=lambda item: (-item[0], item[1].lower()))
 
-    target_count = min(len(skills), max(5, min(8, len(skills))))
-    return [skill for _, skill in scored[:target_count]]
+    target_count = min(len(skills), max(8, min(12, len(skills))))
+
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    # Pass 1: Ensure representation of top core languages & frameworks (up to 3)
+    for _, skill in scored:
+        if len(selected) >= 3:
+            break
+        if skill.lower() in CORE_LANGUAGES_FRAMEWORKS and skill not in seen:
+            selected.append(skill)
+            seen.add(skill)
+
+    # Pass 2: Ensure representation of top specialized competencies (up to 3)
+    for _, skill in scored:
+        if len(selected) >= 6:
+            break
+        if skill.lower() in SPECIALIZED_COMPETENCIES and skill not in seen:
+            selected.append(skill)
+            seen.add(skill)
+
+    # Pass 3: Fill remaining slots with highest scoring skills up to target_count
+    for _, skill in scored:
+        if len(selected) >= target_count:
+            break
+        if skill not in seen:
+            selected.append(skill)
+            seen.add(skill)
+
+    return selected
+
+
+def _compute_primary_stack(skills: list[str], top_skills: list[str], text: str = "") -> list[str]:
+    """Compute candidate's primary tech stack (6-10 core skills) balancing core languages/frameworks and domain abilities."""
+    if not top_skills and not skills:
+        return []
+    source = top_skills if top_skills else skills
+    if len(source) <= 6:
+        return list(source)
+
+    target_count = min(len(source), max(6, min(10, len(source))))
+
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    # 1. Take top core languages/frameworks
+    for skill in source:
+        if len(selected) >= 3:
+            break
+        if skill.lower() in CORE_LANGUAGES_FRAMEWORKS and skill not in seen:
+            selected.append(skill)
+            seen.add(skill)
+
+    # 2. Take top specialized competencies
+    for skill in source:
+        if len(selected) >= 6:
+            break
+        if skill.lower() in SPECIALIZED_COMPETENCIES and skill not in seen:
+            selected.append(skill)
+            seen.add(skill)
+
+    # 3. Fill up to target_count (6-10) preserving order from source
+    for skill in source:
+        if len(selected) >= target_count:
+            break
+        if skill not in seen:
+            selected.append(skill)
+            seen.add(skill)
+
+    return selected
 
 
 def _derive_target_roles(skills: list[str], text: str, seniority: Optional[str] = None) -> list[str]:
@@ -817,14 +911,16 @@ def extract_candidate_profile(cv_source: Optional[Union[str, Path]] = None) -> C
     skills = extract_dynamic_cv_skills(text_content)
     seniority_level = _detect_cv_seniority(text_content)
     top_skills = _compute_top_skills(skills, text_content)
+    primary_stack = _compute_primary_stack(skills, top_skills, text_content)
     target_roles = _derive_target_roles(skills, text_content, seniority_level)
     search_queries = _derive_search_queries(top_skills, target_roles)
     suggested_exclusions = _derive_suggested_exclusions(seniority_level)
 
     logger.info(
-        "Candidate profile extracted: %d skills, %d top skills, seniority: %s, %d target roles",
+        "Candidate profile extracted: %d skills, %d top skills, %d primary stack, seniority: %s, %d target roles",
         len(skills),
         len(top_skills),
+        len(primary_stack),
         seniority_level,
         len(target_roles),
     )
@@ -832,6 +928,7 @@ def extract_candidate_profile(cv_source: Optional[Union[str, Path]] = None) -> C
     return CandidateProfile(
         skills=skills,
         top_skills=top_skills,
+        primary_stack=primary_stack,
         seniority_level=seniority_level,
         target_roles=target_roles,
         search_queries=search_queries,
@@ -1016,6 +1113,7 @@ def calculate_match_score(
             profile = CandidateProfile(
                 skills=prefs.tech_stack,
                 top_skills=prefs.tech_stack,
+                primary_stack=prefs.tech_stack,
                 search_queries=prefs.tech_stack,
             )
 
@@ -1024,6 +1122,10 @@ def calculate_match_score(
         for phrase in MULTI_TOKEN_TECH_PHRASES:
             display_map[phrase.lower()] = phrase
         for s in profile.skills:
+            display_map[s.lower()] = s
+        for s in profile.primary_stack:
+            display_map[s.lower()] = s
+        for s in profile.top_skills:
             display_map[s.lower()] = s
         for t in prefs.tech_stack:
             if t.strip():
@@ -1041,15 +1143,18 @@ def calculate_match_score(
 
     # Candidate profile skills and explicit preferences
     profile_skills = {s.strip().lower() for s in profile.skills if s.strip()}
-    top_skills = [s.strip().lower() for s in profile.top_skills if s.strip()]
+    primary_skills = [s.strip().lower() for s in (profile.primary_stack or profile.top_skills or profile.skills) if s.strip()]
+    top_skills = [s.strip().lower() for s in (profile.top_skills or profile.primary_stack or profile.skills) if s.strip()]
     target_roles = [r.strip().lower() for r in profile.target_roles if r.strip()]
     explicit_tech = {t.strip().lower() for t in prefs.tech_stack if t.strip()}
     explicit_keywords = {k.strip().lower() for k in prefs.keywords if k.strip()}
 
     if not top_skills and explicit_tech:
         top_skills = list(explicit_tech)
+    if not primary_skills and explicit_tech:
+        primary_skills = list(explicit_tech)
 
-    all_candidate_skills = profile_skills | explicit_tech
+    all_candidate_skills = profile_skills | set(primary_skills) | set(top_skills) | explicit_tech
     all_desired_tokens = all_candidate_skills | explicit_keywords
 
     # Matched skills
@@ -1087,8 +1192,9 @@ def calculate_match_score(
         c_req = 0.0
 
     # 2. Candidate Primary Skill Affinity (A_top)
+    affinity_targets = primary_skills if primary_skills else top_skills
     top_matches = [
-        s for s in top_skills
+        s for s in affinity_targets
         if s in all_matched_tokens or s in job_skills or re.search(r"(?<![a-zA-Z0-9_])" + re.escape(s) + r"(?![a-zA-Z0-9_])", job_full_text)
     ]
     if len(top_matches) >= 3:
@@ -1250,6 +1356,7 @@ def filter_jobs(
             profile = CandidateProfile(
                 skills=prefs.tech_stack,
                 top_skills=prefs.tech_stack,
+                primary_stack=prefs.tech_stack,
                 search_queries=prefs.tech_stack,
             )
 
@@ -1260,6 +1367,10 @@ def filter_jobs(
     for phrase in MULTI_TOKEN_TECH_PHRASES:
         display_map[phrase.lower()] = phrase
     for s in profile.skills:
+        display_map[s.lower()] = s
+    for s in profile.primary_stack:
+        display_map[s.lower()] = s
+    for s in profile.top_skills:
         display_map[s.lower()] = s
     for t in prefs.tech_stack:
         if t.strip():

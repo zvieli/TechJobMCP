@@ -883,6 +883,7 @@ class TestCandidateProfile(unittest.TestCase):
         profile = CandidateProfile()
         self.assertEqual(profile.skills, [])
         self.assertEqual(profile.top_skills, [])
+        self.assertEqual(profile.primary_stack, [])
         self.assertIsNone(profile.seniority_level)
         self.assertEqual(profile.target_roles, [])
         self.assertEqual(profile.search_queries, [])
@@ -890,7 +891,8 @@ class TestCandidateProfile(unittest.TestCase):
 
         custom = CandidateProfile(
             skills=["Python", "FastAPI", "Docker"],
-            top_skills=["Python", "FastAPI"],
+            top_skills=["Python", "FastAPI", "Docker"],
+            primary_stack=["Python", "FastAPI"],
             seniority_level="Junior",
             target_roles=["Python Developer", "Backend Engineer"],
             search_queries=["Python", "FastAPI"],
@@ -898,7 +900,8 @@ class TestCandidateProfile(unittest.TestCase):
         )
         dumped = custom.model_dump()
         self.assertEqual(dumped["seniority_level"], "Junior")
-        self.assertEqual(dumped["top_skills"], ["Python", "FastAPI"])
+        self.assertEqual(dumped["top_skills"], ["Python", "FastAPI", "Docker"])
+        self.assertEqual(dumped["primary_stack"], ["Python", "FastAPI"])
         self.assertEqual(dumped["target_roles"], ["Python Developer", "Backend Engineer"])
         self.assertEqual(dumped["suggested_exclusions"], ["Senior", "Lead", "Principal", "10+ years"])
 
@@ -950,10 +953,16 @@ class TestCandidateProfile(unittest.TestCase):
         for expected in ["Python", "FastAPI", "PyTorch", "LangChain", "Docker", "PostgreSQL", "Pandas"]:
             self.assertIn(expected, profile.skills)
 
-        # Top skills verification (top 5-8 primary skills)
-        self.assertGreaterEqual(len(profile.top_skills), 5)
-        self.assertLessEqual(len(profile.top_skills), 8)
+        # Top skills verification (top 8-12 primary skills)
+        self.assertGreaterEqual(len(profile.top_skills), 8)
+        self.assertLessEqual(len(profile.top_skills), 12)
         self.assertIn("Python", profile.top_skills)
+
+        # Primary stack verification (inferred 6-10 core skills)
+        self.assertGreaterEqual(len(profile.primary_stack), 6)
+        self.assertLessEqual(len(profile.primary_stack), 10)
+        self.assertIn("Python", profile.primary_stack)
+        self.assertIn("FastAPI", profile.primary_stack)
 
         # Target roles
         self.assertTrue(any("AI" in r or "Machine Learning" in r for r in profile.target_roles), f"Target roles: {profile.target_roles}")
@@ -996,6 +1005,13 @@ class TestCandidateProfile(unittest.TestCase):
 
         self.assertIn("Kubernetes", profile.top_skills)
         self.assertIn("AWS", profile.top_skills)
+        self.assertGreaterEqual(len(profile.top_skills), 8)
+        self.assertLessEqual(len(profile.top_skills), 12)
+
+        self.assertGreaterEqual(len(profile.primary_stack), 6)
+        self.assertLessEqual(len(profile.primary_stack), 10)
+        self.assertIn("Kubernetes", profile.primary_stack)
+        self.assertIn("AWS", profile.primary_stack)
 
         self.assertTrue(any("DevOps" in r or "Cloud" in r for r in profile.target_roles), f"Target roles: {profile.target_roles}")
 
@@ -1005,6 +1021,46 @@ class TestCandidateProfile(unittest.TestCase):
         self.assertIn("Junior", profile.suggested_exclusions)
         self.assertNotIn("Senior", profile.suggested_exclusions)
         self.assertNotIn("Lead", profile.suggested_exclusions)
+
+    def test_candidate_profile_dynamic_primary_stack_and_skill_prioritization(self):
+        """Test dynamic candidate profiling extracts balanced primary_stack representing core languages/frameworks and specialized competencies."""
+        cv_text = """
+        Fullstack & AI Solutions Architect
+        Tel Aviv, Israel
+        
+        Professional Summary:
+        Experienced engineer building AI systems, distributed microservices, and modern web applications.
+        
+        Technical Skills:
+        • Programming Languages: Python, TypeScript, SQL
+        • Backend & Web Frameworks: FastAPI, React, Next.js, Node.js
+        • AI & Agentic Systems: LangGraph, GraphRAG, RAG, PyTorch, Ollama
+        • Cloud, DevOps & Databases: Docker, Azure, Azure AI Search, PostgreSQL, Redis, Linux
+        
+        Experience:
+        AI Architect | TechVentures (2023 - Present)
+        • Developed multi-agent workflows using LangGraph and GraphRAG on Azure.
+        • Deployed FastAPI backend services containerized with Docker and Azure Container Apps.
+        • Built interactive dashboard in React and TypeScript.
+        """
+        profile = extract_candidate_profile(cv_text)
+        self.assertIsInstance(profile, CandidateProfile)
+
+        # 8-12 top skills
+        self.assertGreaterEqual(len(profile.top_skills), 8)
+        self.assertLessEqual(len(profile.top_skills), 12)
+
+        # 6-10 primary stack skills
+        self.assertGreaterEqual(len(profile.primary_stack), 6)
+        self.assertLessEqual(len(profile.primary_stack), 10)
+
+        # Ensure representation of core languages/frameworks
+        has_core_langs_or_frameworks = any(s in profile.primary_stack for s in ["Python", "TypeScript", "FastAPI", "React"])
+        self.assertTrue(has_core_langs_or_frameworks, f"Primary stack lacks core languages/frameworks: {profile.primary_stack}")
+
+        # Ensure representation of specialized competencies
+        has_specialized = any(s in profile.primary_stack for s in ["LangGraph", "GraphRAG", "RAG", "Docker", "Azure"])
+        self.assertTrue(has_specialized, f"Primary stack lacks specialized competencies: {profile.primary_stack}")
 
     def test_extract_candidate_profile_student_intern(self):
         """Test profile extraction for a Student seeking Internship."""
@@ -1133,7 +1189,8 @@ class TestDynamicFitScoring(unittest.TestCase):
     def setUp(self):
         self.junior_profile = CandidateProfile(
             skills=["Python", "FastAPI", "Docker", "PostgreSQL", "Pandas", "NumPy", "Git", "Linux", "REST"],
-            top_skills=["Python", "FastAPI", "Docker", "PostgreSQL", "Pandas"],
+            top_skills=["Python", "FastAPI", "Docker", "PostgreSQL", "Pandas", "NumPy", "Git", "Linux"],
+            primary_stack=["Python", "FastAPI", "Docker", "PostgreSQL", "Pandas", "NumPy"],
             seniority_level="Junior",
             target_roles=["Python Developer", "Backend Engineer", "AI Engineer"],
             search_queries=["Python Developer", "Backend Engineer", "FastAPI"],
@@ -1142,7 +1199,8 @@ class TestDynamicFitScoring(unittest.TestCase):
 
         self.senior_devops_profile = CandidateProfile(
             skills=["AWS", "Kubernetes", "Docker", "Terraform", "CI/CD", "Python", "Prometheus", "Grafana", "Linux", "Helm"],
-            top_skills=["AWS", "Kubernetes", "Docker", "Terraform", "CI/CD"],
+            top_skills=["AWS", "Kubernetes", "Docker", "Terraform", "CI/CD", "Python", "Prometheus", "Grafana"],
+            primary_stack=["AWS", "Kubernetes", "Docker", "Terraform", "CI/CD", "Python"],
             seniority_level="Senior",
             target_roles=["DevOps Engineer", "Cloud Engineer", "Infrastructure Engineer"],
             search_queries=["DevOps Engineer", "Cloud Engineer", "AWS", "Kubernetes"],
@@ -1151,7 +1209,8 @@ class TestDynamicFitScoring(unittest.TestCase):
 
         self.mid_frontend_profile = CandidateProfile(
             skills=["React", "Next.js", "TypeScript", "TailwindCSS", "Redux", "Vite", "HTML", "CSS", "JavaScript", "REST"],
-            top_skills=["React", "Next.js", "TypeScript", "TailwindCSS"],
+            top_skills=["React", "Next.js", "TypeScript", "TailwindCSS", "Redux", "Vite", "JavaScript", "REST"],
+            primary_stack=["React", "Next.js", "TypeScript", "TailwindCSS", "Redux", "Vite"],
             seniority_level="Mid",
             target_roles=["Frontend Engineer", "Full Stack Engineer"],
             search_queries=["Frontend Engineer", "React", "TypeScript"],
@@ -1345,6 +1404,24 @@ class TestDynamicFitScoring(unittest.TestCase):
         self.assertIn("AWS", res_job.matched_skills)
         self.assertTrue(any("CV matched" in r for r in res_job.match_reasons))
         self.assertTrue(any("Target stack matched" in r for r in res_job.match_reasons))
+
+    def test_calculate_match_score_with_empty_tech_stack_uses_profile_primary_stack(self):
+        """Test calculate_match_score automatically uses profile.primary_stack for affinity and requirement matching when preferences.tech_stack is empty."""
+        job = Job(
+            job_id="dyn-stack-1",
+            title="Backend Python Developer",
+            company="CloudTech",
+            tech_stack=["Python", "FastAPI", "Docker"],
+            description="Developing high-performance microservices with Python, FastAPI, and Docker.",
+        )
+        empty_prefs = JobPreferences(tech_stack=[], keywords=[])
+        score = calculate_match_score(job, empty_prefs, profile=self.junior_profile)
+
+        self.assertGreaterEqual(score, 85.0)
+        self.assertIn("Python", job.matched_skills)
+        self.assertIn("FastAPI", job.matched_skills)
+        self.assertIn("Docker", job.matched_skills)
+        self.assertTrue(any("CV matched" in r or "core skills" in r for r in job.match_reasons))
 
     def test_submillisecond_scoring_performance(self):
         """Benchmark scoring 200 jobs completes in < 100ms (< 0.5ms per job)."""
