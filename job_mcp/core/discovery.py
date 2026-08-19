@@ -1,4 +1,4 @@
-"""Adaptive Heuristic DOM Discovery and Dynamic Selector Mapping for HireMeTech MCP."""
+"""Adaptive Heuristic DOM Discovery and Dynamic Selector Mapping for Tech Job  MCP."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Authentication and browser session management for HireMeTech MCP server."""
+"""Authentication and browser session management for Tech Job  MCP server."""
 
 from __future__ import annotations
 

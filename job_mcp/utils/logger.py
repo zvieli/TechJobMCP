@@ -1,4 +1,4 @@
-"""Structured JSON logging with secret sanitization for HireMeTech MCP server."""
+"""Structured JSON logging with secret sanitization for Tech Job  MCP server."""
 
 import logging
 import os

@@ -1,4 +1,4 @@
-"""Core package for HireMeTech MCP server."""
+"""Core package for Tech Job MCP server."""
 
 from job_mcp.core.api_client import (
     JobCache,

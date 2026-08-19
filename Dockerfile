@@ -1,5 +1,5 @@
 # ==========================================
-# HireMeTech FastMCP Server Dockerfile
+# Tech Job MCP Server Dockerfile
 # Multi-stage Python 3.12 with Playwright
 # ==========================================
 

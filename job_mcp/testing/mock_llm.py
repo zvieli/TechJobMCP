@@ -1,4 +1,4 @@
-"""Mock LLM Agent and execution engine for HireMeTech MCP testing."""
+"""Mock LLM Agent and execution engine for Tech Job  MCP testing."""
 
 from __future__ import annotations
 

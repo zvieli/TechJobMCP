@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HireMeTech Visual CLI Runner Script.
+"""Tech Job  Visual CLI Runner Script.
 
 Autonomous job hunting LLM agent pipeline simulator with Rich terminal output,
 step-by-step reasoning traces, and interactive summary dashboard.

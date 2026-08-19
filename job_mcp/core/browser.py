@@ -1,4 +1,4 @@
-"""Playwright browser automation and DOM interaction layer for HireMeTech MCP server."""
+"""Playwright browser automation and DOM interaction layer for Tech Job  MCP server."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Data models and schemas for HireMeTech MCP server."""
+"""Data models and schemas for Tech Job MCP server."""
 
 from enum import Enum
 from typing import Any, Optional

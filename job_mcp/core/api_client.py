@@ -1,4 +1,4 @@
-"""Caching, CV keyword extraction, and direct API client logic for HireMeTech MCP server."""
+"""Caching, CV keyword extraction, and direct API client logic for Tech Job  MCP server."""
 
 from __future__ import annotations
 

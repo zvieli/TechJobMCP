@@ -1,4 +1,4 @@
-"""HireMeTech FastMCP Server package."""
+"""Tech Job MCP FastMCP Server package."""
 
 from job_mcp.main import mcp
 

@@ -37,7 +37,7 @@ async def run_setup(profile_dir: Optional[str | Path] = None) -> bool:
     profile_path.mkdir(parents=True, exist_ok=True)
 
     print("=" * 65)
-    print("       HireMeTech MCP Server - First-Time Authentication")
+    print("       Tech Job MCP MCP Server - First-Time Authentication")
     print("=" * 65)
     print(f"Browser Profile Directory: {profile_path}")
     print("\nA Chromium browser window will now open.")

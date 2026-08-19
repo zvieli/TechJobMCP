@@ -1,4 +1,4 @@
-"""FastMCP Server for HireMeTech job search, matching, and application automation."""
+"""FastMCP Server for Tech Job search, matching, and application automation."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def _response(
 
 # Server system instructions
 SERVER_INSTRUCTIONS = """
-HireMeTech MCP Server enables intelligent job matching, filtering, bookmarking, notification alerts, and automated job applications across multiple sources (HireMeTech, Comeet, AllJobs, Workday, Eightfold, DirectTech, LinkedIn).
+Tech Job MCP Server enables intelligent job matching, filtering, bookmarking, notification alerts, and automated job applications across multiple sources (HireMeTech, Comeet, AllJobs, Workday, Eightfold, DirectTech, LinkedIn).
 
 ## Operation Modes
 
@@ -172,7 +172,7 @@ async def _warm_cache(
 async def browser_lifespan(server: FastMCP):
     """Lifespan context manager to manage browser session and job cache across server lifecycle."""
     global _default_session, _default_cache, _default_registry, _default_aggregator, _default_tracker, _default_notifier
-    logger.info("Starting HireMeTech FastMCP lifespan...")
+    logger.info("Starting Tech Job MCP FastMCP lifespan...")
 
     session_mgr = SessionManager()
     job_cache = JobCache()
@@ -200,7 +200,7 @@ async def browser_lifespan(server: FastMCP):
             "notifier": telegram_notifier,
         }
     finally:
-        logger.info("Shutting down HireMeTech FastMCP lifespan...")
+        logger.info("Shutting down Tech Job MCP FastMCP lifespan...")
         if warmup_task and not warmup_task.done():
             warmup_task.cancel()
             try:
@@ -217,7 +217,7 @@ async def browser_lifespan(server: FastMCP):
 
 # Initialize FastMCP Server
 mcp = FastMCP(
-    name="HireMeTech",
+    name="TechJobMCP",
     instructions=SERVER_INSTRUCTIONS.strip(),
     lifespan=browser_lifespan,
 )
@@ -344,7 +344,7 @@ class GeminiProbeMiddleware(BaseHTTPMiddleware):
 @mcp.custom_route("/health", methods=["GET", "HEAD"])
 async def health_check(request):
     """Health check endpoint for containers and reverse proxies."""
-    return JSONResponse({"status": "ok", "server": "HireMeTech MCP"})
+    return JSONResponse({"status": "ok", "server": "Tech Job MCP FastMCP Server"}, status_code=200)
 
 
 @mcp.custom_route("/", methods=["GET", "HEAD", "OPTIONS"])
@@ -352,7 +352,7 @@ async def root_endpoint(request):
     """Root status endpoint directing to /mcp."""
     return JSONResponse({
         "status": "ok",
-        "server": "HireMeTech FastMCP Server",
+        "server": "Tech Job MCP FastMCP Server",
         "mcp_endpoint": "/mcp",
         "sse_endpoint": "/sse",
     })
@@ -1548,7 +1548,7 @@ async def test_notifier(
 
         sent = await notifier.send_alert(
             [test_job],
-            title="🧪 HireMeTech MCP Notifier Test",
+            title="🧪 Tech Job MCP MCP Notifier Test",
         )
 
         if not sent:
