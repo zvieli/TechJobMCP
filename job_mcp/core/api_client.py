@@ -265,7 +265,15 @@ def _extract_text_from_source(cv_source: Optional[Union[str, Path]]) -> str:
         return ""
 
     if isinstance(cv_source, Path):
-        return _extract_text_from_file(cv_source)
+        try:
+            if cv_source.is_file():
+                return _extract_text_from_file(cv_source.resolve())
+            resolved = resolve_cv_path(str(cv_source))
+            if resolved and resolved.is_file():
+                return _extract_text_from_file(resolved)
+        except Exception:
+            pass
+        return ""
 
     if isinstance(cv_source, str):
         cleaned = cv_source.strip()
@@ -276,14 +284,7 @@ def _extract_text_from_source(cv_source: Optional[Union[str, Path]]) -> str:
         if "\n" in cleaned:
             return cleaned
 
-        # Check if it points to an existing file
-        try:
-            resolved = resolve_cv_path(cleaned)
-            if resolved and resolved.is_file():
-                return _extract_text_from_file(resolved)
-        except Exception:
-            pass
-
+        # Check if it points directly to an existing file
         try:
             p = Path(cleaned).expanduser()
             if p.is_file():
@@ -291,10 +292,19 @@ def _extract_text_from_source(cv_source: Optional[Union[str, Path]]) -> str:
         except Exception:
             pass
 
-        # If it looks like a file path and doesn't exist on disk, return empty
-        if cleaned.lower().endswith((".pdf", ".docx", ".txt", ".rtf", ".md", ".doc")):
-            return ""
-        if len(cleaned.split()) <= 4 and ("/" in cleaned or "\\" in cleaned or "." in cleaned):
+        # Determine if string looks like a file path
+        looks_like_file_path = (
+            cleaned.lower().endswith((".pdf", ".docx", ".txt", ".rtf", ".md", ".doc"))
+            or (len(cleaned.split()) <= 4 and ("/" in cleaned or "\\" in cleaned or "." in cleaned))
+        )
+
+        if looks_like_file_path:
+            try:
+                resolved = resolve_cv_path(cleaned)
+                if resolved and resolved.is_file():
+                    return _extract_text_from_file(resolved)
+            except Exception:
+                pass
             return ""
 
         # Otherwise, treat as raw text content
@@ -307,69 +317,99 @@ def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
     """Resolve the CV file path based on explicit parameter, environment variable, or fallback discovery.
 
     Resolution candidate order:
-    1. Path(cv_path).expanduser() if cv_path is provided and non-empty.
-    2. Path(os.getenv("DEFAULT_CV_PATH")).expanduser() if DEFAULT_CV_PATH is set.
-    3. Container paths: Path("/app/cv.pdf"), Path("/app/resume.pdf").
-    4. Local workspace paths: Path("cv.pdf").resolve(), Path("resume.pdf").resolve().
-    5. Any .pdf in working directory matching *cv*.pdf or *.pdf.
-    6. Any .pdf in /app if /app directory exists.
+    1. If cv_path is provided and exists directly on disk, return Path(cv_path).expanduser().resolve().
+    2. If cv_path is provided but does not exist directly, search fallback candidate order:
+       a. DEFAULT_CV_PATH environment variable if set.
+       b. Candidate files matching basename or standard filenames:
+          - /app/<basename>, /app/cv.pdf, /app/resume.pdf, /app/lior_zvieli_cv.pdf
+          - cwd / <basename>, cwd / "cv.pdf", cwd / "resume.pdf", cwd / "lior_zvieli_cv.pdf"
+       c. Glob matches in cwd (*cv*.pdf, *.pdf) and /app (*.pdf).
+       If a candidate exists, log an info message and return candidate.resolve().
+    3. If cv_path is None or empty:
+       Search fallback candidates (DEFAULT_CV_PATH, standard container/workspace paths, glob matches)
+       and return the first existing resolved candidate.
 
     Returns:
         Optional[Path]: The first candidate that is an existing file, resolved. None if none exist.
     """
-    # 1. Explicit cv_path if provided and non-empty
-    if cv_path and str(cv_path).strip():
-        p = Path(str(cv_path).strip()).expanduser()
+    raw_path = str(cv_path).strip() if cv_path is not None else ""
+
+    # 1. Explicit cv_path if provided and exists directly
+    if raw_path:
+        p = Path(raw_path).expanduser()
         try:
             if p.is_file():
                 return p.resolve()
         except (OSError, PermissionError):
             pass
-        return None
+
+    # Extract basename if path provided (handling both / and \ path separators)
+    clean_name = re.split(r"[/\\]+", raw_path)[-1] if raw_path else None
+    base_name = clean_name if clean_name and clean_name not in (".", "..") else None
 
     candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    def add_candidate(cand: Path) -> None:
+        try:
+            resolved_cand = cand.resolve()
+            if resolved_cand not in seen:
+                seen.add(resolved_cand)
+                candidates.append(cand)
+        except Exception:
+            if cand not in seen:
+                seen.add(cand)
+                candidates.append(cand)
 
     # 2. DEFAULT_CV_PATH environment variable if set
     env_cv = os.getenv("DEFAULT_CV_PATH")
     if env_cv and env_cv.strip():
-        candidates.append(Path(env_cv.strip()).expanduser())
+        add_candidate(Path(env_cv.strip()).expanduser())
 
-    # 3. Container paths
-    candidates.append(Path("/app/cv.pdf"))
-    candidates.append(Path("/app/resume.pdf"))
-    candidates.append(Path("/app/lior_zvieli_cv.pdf"))
+    # 3. Container paths (/app)
+    app_dir = Path("/app")
+    if base_name:
+        add_candidate(app_dir / base_name)
+    add_candidate(app_dir / "cv.pdf")
+    add_candidate(app_dir / "resume.pdf")
+    add_candidate(app_dir / "lior_zvieli_cv.pdf")
 
-    # 4. Local workspace paths
+    # 4. Local workspace paths (cwd)
     cwd = Path.cwd()
-    candidates.append(cwd / "cv.pdf")
-    candidates.append(cwd / "resume.pdf")
-    candidates.append(cwd / "lior_zvieli_cv.pdf")
+    if base_name:
+        add_candidate(cwd / base_name)
+    add_candidate(cwd / "cv.pdf")
+    add_candidate(cwd / "resume.pdf")
+    add_candidate(cwd / "lior_zvieli_cv.pdf")
 
     # 5. Any .pdf in working directory matching *cv*.pdf or *.pdf
     try:
         cv_glob = sorted(cwd.glob("*cv*.pdf"))
         all_glob = sorted(cwd.glob("*.pdf"))
-        seen: set[Path] = set()
         for p in cv_glob + all_glob:
-            if p not in seen:
-                seen.add(p)
-                candidates.append(p)
+            add_candidate(p)
     except Exception:
         pass
 
     # 6. Any .pdf in /app if /app directory exists
-    app_dir = Path("/app")
     if app_dir.is_dir():
         try:
             for p in sorted(app_dir.glob("*.pdf")):
-                candidates.append(p)
+                add_candidate(p)
         except Exception:
             pass
 
     for candidate in candidates:
         try:
             if candidate.is_file():
-                return candidate.resolve()
+                resolved = candidate.resolve()
+                if raw_path:
+                    logger.info(
+                        "CV path '%s' not found directly; falling back to '%s'",
+                        raw_path,
+                        resolved,
+                    )
+                return resolved
         except (OSError, PermissionError):
             continue
 

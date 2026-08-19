@@ -613,6 +613,52 @@ class TestApiClient(unittest.TestCase):
             finally:
                 os.chdir(orig_cwd)
 
+    def test_resolve_cv_path_nonexistent_explicit_path_falls_back_to_env_var(self):
+        """Test resolve_cv_path with non-existent explicit path falls back to DEFAULT_CV_PATH."""
+        with tempfile.NamedTemporaryFile("w", suffix=".pdf", delete=False) as f:
+            f.write("mock pdf content")
+            temp_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"DEFAULT_CV_PATH": temp_path}):
+                resolved = resolve_cv_path("client_remote_cv.pdf")
+                self.assertIsNotNone(resolved)
+                self.assertEqual(resolved, Path(temp_path).resolve())
+        finally:
+            os.unlink(temp_path)
+
+    def test_resolve_cv_path_nonexistent_explicit_path_falls_back_to_workspace_basename(self):
+        """Test resolve_cv_path with non-existent client path finds file with matching basename in workspace."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                workspace_cv = Path(tmpdir) / "my_custom_resume.pdf"
+                workspace_cv.write_text("dummy resume content")
+
+                with patch.dict(os.environ, {}, clear=True):
+                    resolved = resolve_cv_path("C:\\Users\\user\\Documents\\my_custom_resume.pdf")
+                    self.assertIsNotNone(resolved)
+                    self.assertEqual(resolved, workspace_cv.resolve())
+            finally:
+                os.chdir(orig_cwd)
+
+    def test_resolve_cv_path_nonexistent_explicit_path_falls_back_to_workspace_cv_pdf(self):
+        """Test resolve_cv_path with non-existent client path falls back to workspace cv.pdf."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                workspace_cv = Path(tmpdir) / "cv.pdf"
+                workspace_cv.write_text("dummy cv content")
+
+                with patch.dict(os.environ, {}, clear=True):
+                    resolved = resolve_cv_path("nonexistent_client_file.pdf")
+                    self.assertIsNotNone(resolved)
+                    self.assertEqual(resolved, workspace_cv.resolve())
+            finally:
+                os.chdir(orig_cwd)
+
     def test_extract_cv_keywords_modern_ai_web3_backend(self):
         """Test extract_cv_keywords correctly detects new AI, Web3, and Modern Framework keywords."""
         sample_text = (
@@ -923,6 +969,41 @@ class TestCandidateProfile(unittest.TestCase):
                     prof_nonexistent = extract_candidate_profile("nonexistent_file_path_12345.pdf")
                     self.assertIsInstance(prof_nonexistent, CandidateProfile)
                     self.assertEqual(prof_nonexistent.skills, [])
+            finally:
+                os.chdir(orig_cwd)
+
+    def test_extract_candidate_profile_nonexistent_path_falls_back_to_env_var(self):
+        """Test extract_candidate_profile falls back to DEFAULT_CV_PATH when passed non-existent path."""
+        sample_cv_text = "Senior Python Engineer skilled in FastAPI, Docker, and PostgreSQL."
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(sample_cv_text)
+            temp_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"DEFAULT_CV_PATH": temp_path}):
+                profile = extract_candidate_profile("client_machine_nonexistent_cv.pdf")
+                self.assertIsInstance(profile, CandidateProfile)
+                self.assertIn("Python", profile.skills)
+                self.assertIn("FastAPI", profile.skills)
+                self.assertEqual(profile.seniority_level, "Senior")
+        finally:
+            os.unlink(temp_path)
+
+    def test_extract_candidate_profile_nonexistent_path_falls_back_to_workspace_cv(self):
+        """Test extract_candidate_profile falls back to workspace CV file when passed non-existent path."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            orig_cwd = os.getcwd()
+            try:
+                os.chdir(tmpdir)
+                workspace_cv = Path(tmpdir) / "cv.pdf"
+                workspace_cv.write_text("Senior DevOps Engineer skilled in AWS, Kubernetes, Terraform.")
+
+                with patch.dict(os.environ, {}, clear=True):
+                    profile = extract_candidate_profile("remote_client_path/resume.pdf")
+                    self.assertIsInstance(profile, CandidateProfile)
+                    self.assertIn("Kubernetes", profile.skills)
+                    self.assertIn("AWS", profile.skills)
+                    self.assertEqual(profile.seniority_level, "Senior")
             finally:
                 os.chdir(orig_cwd)
 
