@@ -271,12 +271,11 @@ class MockLLMAgent:
             profile = extract_candidate_profile(effective_cv)
 
         # Dynamic population from CandidateProfile if not explicitly passed
-        effective_tech_stack = list(tech_stack) if tech_stack is not None else None
+        effective_tech_stack = list(tech_stack) if tech_stack else None
         if effective_tech_stack is None and profile is not None:
-            if profile.top_skills:
-                effective_tech_stack = list(profile.top_skills)
-            elif profile.skills:
-                effective_tech_stack = list(profile.skills)
+            stack_source = profile.primary_stack or profile.top_skills or profile.skills
+            if stack_source:
+                effective_tech_stack = list(stack_source)
 
         effective_exclude = list(exclude_keywords) if exclude_keywords is not None else None
         if effective_exclude is None and profile is not None and profile.suggested_exclusions:

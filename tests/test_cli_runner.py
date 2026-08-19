@@ -255,6 +255,51 @@ class TestRichRendering:
         assert "Target Roles" in output
         assert "AI Engineer" in output
         assert "Senior, Lead" in output
+        assert "Tech Stack Target" in output
+        assert "(Dynamic from CV)" in output
+
+    def test_render_header_dynamic_primary_stack(self, string_console):
+        console, file = string_console
+        parser = build_parser()
+        args = parser.parse_args(["--cv", "cv.pdf"])
+        profile = CandidateProfile(
+            skills=["Python", "FastAPI", "Docker", "PostgreSQL", "React"],
+            top_skills=["Python", "FastAPI", "Docker", "PostgreSQL"],
+            primary_stack=["Python", "FastAPI", "Docker"],
+            seniority_level="Mid-Level",
+        )
+        render_header(
+            console,
+            args,
+            tech_stack=[],
+            exclude_keywords=[],
+            profile=profile,
+        )
+        output = file.getvalue()
+        assert "Primary Tech Stack" in output
+        assert "Python, FastAPI, Docker" in output
+        assert "Tech Stack Target" in output
+        assert "Python, FastAPI, Docker (Dynamic from CV)" in output
+
+    def test_render_header_explicit_stack_overrides_dynamic(self, string_console):
+        console, file = string_console
+        parser = build_parser()
+        args = parser.parse_args(["--cv", "cv.pdf", "--stack", "Go,Rust"])
+        profile = CandidateProfile(
+            skills=["Python", "FastAPI"],
+            primary_stack=["Python", "FastAPI"],
+        )
+        render_header(
+            console,
+            args,
+            tech_stack=["Go", "Rust"],
+            exclude_keywords=[],
+            profile=profile,
+        )
+        output = file.getvalue()
+        assert "Primary Tech Stack" in output
+        assert "Go, Rust" in output
+        assert "(Dynamic from CV)" not in output
 
     def test_render_step_trace(self, string_console):
         console, file = string_console
@@ -546,8 +591,8 @@ class TestExecuteCliPipeline:
             mock_run.assert_called_once()
             call_kwargs = mock_run.call_args.kwargs
             assert call_kwargs["cv_path"] == str(cv_file)
-            # Verify tech_stack and exclude_keywords are passed as None or dynamic list derived from CV
-            assert call_kwargs.get("tech_stack") is None or "Python" in call_kwargs.get("tech_stack", [])
+            # Verify tech_stack is passed as None, allowing dynamic resolution in MockLLMAgent/FastMCP
+            assert call_kwargs.get("tech_stack") is None
 
     @pytest.mark.asyncio
     async def test_execute_cli_pipeline_json_mode(self, capsys):

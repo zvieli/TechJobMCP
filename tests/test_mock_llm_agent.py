@@ -494,6 +494,8 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertIsNotNone(result.profile)
         self.assertEqual(result.profile.seniority_level, "Senior")
+        self.assertTrue(len(result.profile.primary_stack) > 0)
+        self.assertTrue(any("python" in s.lower() for s in result.profile.primary_stack))
         self.assertTrue(any("python" in s.lower() for s in result.profile.top_skills or result.profile.skills))
         self.assertIn("job-top", result.bookmarked_job_ids)
         self.assertIn("job-top", result.confirmed_apply_ids)
@@ -501,8 +503,56 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
         # Verify get_job_matches step argument propagation in step trace
         get_matches_step = next(s for s in result.steps if s.tool_name == "get_job_matches")
         self.assertEqual(get_matches_step.arguments.get("cv_path"), cv_path)
-        self.assertTrue(get_matches_step.arguments.get("tech_stack"))
+        self.assertEqual(
+            get_matches_step.arguments.get("tech_stack"),
+            list(result.profile.primary_stack or result.profile.top_skills or result.profile.skills),
+        )
         self.assertTrue(get_matches_step.arguments.get("exclude_keywords"))
+
+    @patch("job_mcp.main.browser_bookmark_job", new_callable=AsyncMock)
+    @patch("job_mcp.main.browser_preview_application", new_callable=AsyncMock)
+    @patch("job_mcp.main.browser_execute_application", new_callable=AsyncMock)
+    @patch("job_mcp.main.browser_delete_job", new_callable=AsyncMock)
+    async def test_run_pipeline_dynamic_tech_stack_resolution_order(
+        self,
+        mock_delete,
+        mock_execute,
+        mock_preview,
+        mock_bookmark,
+    ):
+        """Test fallback resolution order: primary_stack -> top_skills -> skills."""
+        # 1. Profile with primary_stack
+        prof_primary = CandidateProfile(
+            primary_stack=["Python", "FastAPI"],
+            top_skills=["Python", "FastAPI", "Docker", "AWS"],
+            skills=["Python", "FastAPI", "Docker", "AWS", "Git", "Linux"],
+        )
+        with patch("job_mcp.testing.mock_llm.extract_candidate_profile", return_value=prof_primary):
+            res1 = await self.agent.run_pipeline(cv_path="mock_cv.txt", auto_apply=False)
+            step1 = next(s for s in res1.steps if s.tool_name == "get_job_matches")
+            self.assertEqual(step1.arguments.get("tech_stack"), ["Python", "FastAPI"])
+
+        # 2. Profile without primary_stack, but with top_skills
+        prof_top = CandidateProfile(
+            primary_stack=[],
+            top_skills=["Docker", "Kubernetes"],
+            skills=["Docker", "Kubernetes", "Linux"],
+        )
+        with patch("job_mcp.testing.mock_llm.extract_candidate_profile", return_value=prof_top):
+            res2 = await self.agent.run_pipeline(cv_path="mock_cv.txt", auto_apply=False)
+            step2 = next(s for s in res2.steps if s.tool_name == "get_job_matches")
+            self.assertEqual(step2.arguments.get("tech_stack"), ["Docker", "Kubernetes"])
+
+        # 3. Profile without primary_stack and top_skills, but with skills
+        prof_skills = CandidateProfile(
+            primary_stack=[],
+            top_skills=[],
+            skills=["PostgreSQL", "Redis"],
+        )
+        with patch("job_mcp.testing.mock_llm.extract_candidate_profile", return_value=prof_skills):
+            res3 = await self.agent.run_pipeline(cv_path="mock_cv.txt", auto_apply=False)
+            step3 = next(s for s in res3.steps if s.tool_name == "get_job_matches")
+            self.assertEqual(step3.arguments.get("tech_stack"), ["PostgreSQL", "Redis"])
 
     async def test_run_pipeline_step_failure(self):
         """Test pipeline handling when a step returns success=False."""

@@ -756,8 +756,16 @@ async def test_e2e_dynamic_cv_driven_mock_pipeline(test_lifespan_context):
         assert result.success is True
         assert result.profile is not None
         assert result.profile.seniority_level == "Junior"
+        assert len(result.profile.primary_stack) > 0
+        assert any("python" in s.lower() for s in result.profile.primary_stack)
         assert "Senior" in result.profile.suggested_exclusions
         assert "dyn-top-1" in result.bookmarked_job_ids
         assert "dyn-top-1" in result.confirmed_apply_ids
+
+        # Verify dynamic effective tech stack was propagated to get_job_matches and filter_jobs_by_preferences
+        matches_step = next(s for s in result.steps if s.tool_name == "get_job_matches")
+        assert matches_step.arguments.get("tech_stack") == list(result.profile.primary_stack or result.profile.top_skills or result.profile.skills)
+        filter_step = next(s for s in result.steps if s.tool_name == "filter_jobs_by_preferences")
+        assert filter_step.arguments.get("tech_stack") == list(result.profile.primary_stack or result.profile.top_skills or result.profile.skills)
 
 

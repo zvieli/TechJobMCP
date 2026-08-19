@@ -300,14 +300,22 @@ def render_header(
     if profile:
         if profile.seniority_level:
             config_table.add_row("Seniority Level", f"[bold yellow]{profile.seniority_level}[/bold yellow]")
-        top_skills_display = profile.top_skills or profile.skills
-        if top_skills_display:
-            config_table.add_row("Top Skills", ", ".join(top_skills_display[:6]))
+        if profile.primary_stack:
+            config_table.add_row("Primary Tech Stack", ", ".join(profile.primary_stack[:6]))
+        elif profile.top_skills:
+            config_table.add_row("Top Skills", ", ".join(profile.top_skills[:6]))
+        elif profile.skills:
+            config_table.add_row("Top Skills", ", ".join(profile.skills[:6]))
         if profile.target_roles:
             config_table.add_row("Target Roles", ", ".join(profile.target_roles[:4]))
 
-    display_stack = tech_stack if tech_stack else (profile.top_skills or profile.skills if profile else [])
-    config_table.add_row("Tech Stack Target", ", ".join(display_stack) if display_stack else "[dim]Dynamic (Extracted from CV)[/dim]")
+    if tech_stack:
+        config_table.add_row("Tech Stack Target", ", ".join(tech_stack))
+    elif profile and (profile.primary_stack or profile.top_skills or profile.skills):
+        dynamic_stack = profile.primary_stack or profile.top_skills or profile.skills
+        config_table.add_row("Tech Stack Target", f"{', '.join(dynamic_stack)} [dim](Dynamic from CV)[/dim]")
+    else:
+        config_table.add_row("Tech Stack Target", "[dim]Dynamic (Extracted from CV)[/dim]")
 
     display_exclude = exclude_keywords if exclude_keywords else (profile.suggested_exclusions if profile else [])
     config_table.add_row("Seniority Exclusions", ", ".join(display_exclude) if display_exclude else "[dim]None[/dim]")
