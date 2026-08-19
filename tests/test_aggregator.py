@@ -718,8 +718,47 @@ class TestDynamicQueryPropagationAggregator(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(jobs[0].job_id, "job_junior_1")
         self.assertGreater(jobs[0].match_score, 60.0)
 
+    async def test_fetch_all_jobs_propagates_primary_stack_to_child_sources(self) -> None:
+        """Verify aggregator propagates profile.primary_stack to child sources when preferences.tech_stack is omitted."""
+        src = CaptureMockSource("linkedin", jobs=[self.junior_job])
+        reg = SourceRegistry()
+        reg.register(src)
+
+        agg = JobAggregator(registry=reg)
+        profile = CandidateProfile(
+            skills=["Python", "FastAPI", "Docker", "PostgreSQL", "Redis", "Git"],
+            top_skills=["Python", "FastAPI", "Docker"],
+            primary_stack=["Python", "FastAPI"],
+            target_roles=["Python Developer"],
+            search_queries=["Python Developer"],
+            suggested_exclusions=["Senior"],
+        )
+
+        jobs = await agg.fetch_all_jobs(profile=profile, force_refresh=True)
+
+        self.assertIsNotNone(src.last_preferences)
+        self.assertEqual(src.last_preferences.tech_stack, ["Python", "FastAPI"])
+
+    async def test_fetch_all_jobs_cv_path_resolves_and_propagates_primary_stack(self) -> None:
+        """Verify aggregator resolving profile from cv_path sets preferences.tech_stack to primary_stack."""
+        src = CaptureMockSource("linkedin", jobs=[self.junior_job])
+        reg = SourceRegistry()
+        reg.register(src)
+
+        agg = JobAggregator(registry=reg)
+        prefs = JobPreferences(cv_path=self.junior_cv_text, location="Tel Aviv")
+
+        jobs = await agg.fetch_all_jobs(preferences=prefs, force_refresh=True)
+
+        self.assertIsNotNone(src.last_preferences)
+        self.assertTrue(len(src.last_preferences.tech_stack) > 0)
+        self.assertIn("Python", src.last_preferences.tech_stack)
+        # Verify tech_stack is populated with primary stack skills
+        self.assertTrue("FastAPI" in src.last_preferences.tech_stack or "PostgreSQL" in src.last_preferences.tech_stack)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

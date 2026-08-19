@@ -76,9 +76,10 @@ class JobAggregator:
         # Propagate dynamic queries / keywords / exclusions to child sources
         child_preferences = preferences
         if profile is not None:
+            primary_stack = profile.primary_stack or profile.top_skills or profile.skills
             if preferences is None:
                 preferences = JobPreferences(
-                    tech_stack=list(profile.skills),
+                    tech_stack=list(primary_stack),
                     keywords=list(profile.search_queries[:3] or profile.top_skills[:3]),
                     exclude_keywords=list(profile.suggested_exclusions),
                 )
@@ -92,7 +93,7 @@ class JobAggregator:
                 effective_tech = (
                     list(preferences.tech_stack)
                     if preferences.tech_stack
-                    else list(profile.skills)
+                    else list(primary_stack)
                 )
                 effective_exclude = (
                     list(preferences.exclude_keywords)
@@ -106,6 +107,7 @@ class JobAggregator:
                         "exclude_keywords": effective_exclude,
                     }
                 )
+                preferences = child_preferences
 
         # 1. Check cache if fresh and not forcing refresh
         if not force_refresh and self.cache is not None and not self.cache.is_stale:

@@ -879,7 +879,54 @@ class TestServerDynamicQueryPropagation(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(called_keywords) > 0)
         self.assertTrue("python" in called_keywords.lower())
 
+    async def test_get_job_matches_live_fetch_derives_and_passes_primary_stack(self) -> None:
+        """Verify get_job_matches dynamically derives primary_stack from CV and passes it to aggregator."""
+        from job_mcp.main import get_job_matches
+
+        mock_aggregator = MagicMock()
+        mock_aggregator.fetch_all_jobs = AsyncMock(return_value=[self.junior_job])
+        cache = JobCache()
+        ctx = self._create_mock_context(cache, aggregator=mock_aggregator)
+
+        res = await get_job_matches(
+            cv_path=self.junior_cv_text,
+            tech_stack=None,
+            force_refresh=True,
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["data"]), 1)
+        mock_aggregator.fetch_all_jobs.assert_called_once()
+        call_kwargs = mock_aggregator.fetch_all_jobs.call_args.kwargs
+        passed_prefs = call_kwargs.get("preferences")
+        self.assertIsNotNone(passed_prefs)
+        self.assertTrue(len(passed_prefs.tech_stack) > 0)
+        self.assertIn("Python", passed_prefs.tech_stack)
+        self.assertIsNotNone(call_kwargs.get("profile"))
+        self.assertIn("Python", call_kwargs.get("profile").primary_stack)
+
+    async def test_filter_jobs_by_preferences_dynamic_primary_stack(self) -> None:
+        """Verify filter_jobs_by_preferences derives primary_stack when tech_stack is omitted."""
+        from job_mcp.main import filter_jobs_by_preferences
+
+        cache = JobCache()
+        cache.update([self.junior_job, self.senior_job])
+        ctx = self._create_mock_context(cache)
+
+        res = await filter_jobs_by_preferences(
+            cv_path=self.junior_cv_text,
+            tech_stack=None,
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["data"]), 1)
+        self.assertEqual(res["data"][0]["job_id"], "job_junior_10")
+        self.assertIn("Python", res["data"][0]["matched_skills"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -631,8 +631,8 @@ async def get_job_matches(
     effective_exclude = list(exclude_keywords or [])
 
     if profile is not None:
-        if not effective_tech_stack and profile.skills:
-            effective_tech_stack = list(profile.skills)
+        if not effective_tech_stack:
+            effective_tech_stack = list(profile.primary_stack or profile.top_skills or profile.skills)
         if not effective_keywords and profile.search_queries:
             effective_keywords = list(profile.search_queries[:3])
         if not effective_exclude and profile.suggested_exclusions:
@@ -789,10 +789,17 @@ async def filter_jobs_by_preferences(
     effective_cv_path = cv_path or os.getenv("DEFAULT_CV_PATH")
     effective_tech_stack = list(tech_stack or [])
     effective_keywords = list(keywords or [])
+    effective_exclude = list(exclude_keywords or [])
 
     profile: Optional[CandidateProfile] = None
     if effective_cv_path:
         profile = extract_candidate_profile(effective_cv_path)
+        if not effective_tech_stack:
+            effective_tech_stack = list(profile.primary_stack or profile.top_skills or profile.skills)
+        if not effective_keywords and profile.search_queries:
+            effective_keywords = list(profile.search_queries[:3])
+        if not effective_exclude and profile.suggested_exclusions:
+            effective_exclude = list(profile.suggested_exclusions)
 
     # If no local CV path is provided, attempt to supplement skills from online user resume profile
     if not effective_cv_path and not effective_tech_stack and not effective_keywords:
@@ -814,7 +821,7 @@ async def filter_jobs_by_preferences(
         location=location,
         min_salary=min_salary,
         keywords=effective_keywords,
-        exclude_keywords=exclude_keywords or [],
+        exclude_keywords=effective_exclude,
         cv_path=effective_cv_path,
     )
 
