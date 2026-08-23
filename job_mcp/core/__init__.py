@@ -39,6 +39,14 @@ from job_mcp.core.discovery import (
     discover_card_selector,
     discover_child_selector,
 )
+from job_mcp.core.llm import (
+    LLMCache,
+    LLMError,
+    LLMProviderError,
+    RateLimitOrUnavailableError,
+    ResilientLLMGateway,
+    TokenBucketRateLimiter,
+)
 
 __all__ = [
     "BASE_URL",
@@ -72,4 +80,11 @@ __all__ = [
     "fetch_jobs_via_api",
     "fetch_saved_jobs_batch",
     "fetch_user_resume_profile",
+    "LLMCache",
+    "TokenBucketRateLimiter",
+    "ResilientLLMGateway",
+    "LLMError",
+    "RateLimitOrUnavailableError",
+    "LLMProviderError",
 ]
+
