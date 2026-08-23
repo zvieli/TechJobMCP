@@ -1,14 +1,17 @@
 services:
-  hireme-mcp:
+  techjob-mcp:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: hireme-mcp
+    container_name: techjob-mcp
     restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     volumes:
       - ./browser_profile:/app/browser_profile
+      - ./data:/app/data
       - ./job_mcp:/app/job_mcp
       - ./cv.pdf:/app/cv.pdf:ro
     environment:
@@ -18,8 +21,11 @@ services:
       - BROWSER_HEADLESS=true
       - BROWSER_PROFILE_DIR=/app/browser_profile
       - DEFAULT_CV_PATH=/app/cv.pdf
-      - CANDIDATE_EMAIL=candidate@example.com
-      - CACHE_TTL_MINUTES=60
-      - LOG_LEVEL=INFO
+      - APPLICATION_LEDGER_PATH=/app/data/application_ledger.db
+      - LLM_CACHE_PATH=/app/data/llm_cache.db
+      - JOB_TRACKER_PATH=/app/data/job_tracker.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 
 

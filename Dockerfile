@@ -79,6 +79,11 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     BROWSER_HEADLESS=true \
     BROWSER_PROFILE_DIR=/app/browser_profile \
+    APPLICATION_LEDGER_PATH=/app/data/application_ledger.db \
+    LLM_CACHE_PATH=/app/data/llm_cache.db \
+    JOB_TRACKER_PATH=/app/data/job_tracker.json \
+    DEFAULT_CV_PATH=/app/cv.pdf \
+    AUTO_APPLY_ENABLED=false \
     MCP_TRANSPORT=http \
     MCP_HOST=0.0.0.0 \
     MCP_PORT=8000
@@ -86,16 +91,17 @@ ENV PATH="/app/.venv/bin:$PATH" \
 # Install Playwright browser binary
 RUN playwright install chromium
 
-# Create volume mount point for persistent browser profile
-RUN mkdir -p /app/browser_profile
-VOLUME ["/app/browser_profile"]
+# Create volume mount points for persistent state
+RUN mkdir -p /app/browser_profile /app/data
+VOLUME ["/app/browser_profile", "/app/data"]
 
 # Expose HTTP / SSE port
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/ || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Start MCP Server
 CMD ["python", "-m", "job_mcp"]
+
