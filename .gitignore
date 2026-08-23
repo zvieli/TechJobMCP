@@ -5,6 +5,7 @@ __pycache__/
 *.so
 *.db
 application_ledger.db
+data/
 
 
 # Environments
