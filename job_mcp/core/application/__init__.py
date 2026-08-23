@@ -4,6 +4,12 @@ from job_mcp.core.application.dispatcher import (
     ISRAEL_LOCATION_PATTERN,
     HybridApplicationDispatcher,
 )
+from job_mcp.core.application.dom_inspector import (
+    FormFieldSchema,
+    SubmitButtonInfo,
+    extract_form_schema,
+    identify_submit_button,
+)
 from job_mcp.core.application.ledger_service import ApplicationLedger
 from job_mcp.core.application.mapper import SemanticFormMapper
 from job_mcp.core.application.strategies import (
@@ -28,4 +34,9 @@ __all__ = [
     "ApiPostStrategy",
     "EasyApplyStrategy",
     "BrowserPlaywrightStrategy",
+    "FormFieldSchema",
+    "SubmitButtonInfo",
+    "extract_form_schema",
+    "identify_submit_button",
 ]
+
