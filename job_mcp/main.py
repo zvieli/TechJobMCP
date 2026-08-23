@@ -133,8 +133,16 @@ _default_dispatcher: Optional[HybridApplicationDispatcher] = None
 # Staged pending applications store: job_id -> application preview dict
 _pending_applications: dict[str, dict[str, Any]] = {}
 
+def _get_initial_operation_mode() -> OperationMode:
+    env_mode = os.getenv("OPERATION_MODE", "").strip().lower()
+    if env_mode in ("autonomous", "supervised"):
+        return OperationMode(env_mode)
+    if os.getenv("AUTO_APPLY_ENABLED", "false").lower() == "true":
+        return OperationMode.AUTONOMOUS
+    return OperationMode.SUPERVISED
+
 # Current operation mode
-_operation_mode: OperationMode = OperationMode.SUPERVISED
+_operation_mode: OperationMode = _get_initial_operation_mode()
 
 # Timeout constant for live scraping operations to avoid proxy / tunnel timeouts (e.g. DevTunnel 10s limit)
 _SCRAPE_TIMEOUT_SECONDS: float = float(os.getenv("SCRAPE_TIMEOUT_SECONDS", "10.0"))
