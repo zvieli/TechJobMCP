@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
+
 
 import httpx
 
@@ -194,6 +196,26 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(LLMProviderError):
             await gateway.ask_question("Any question?")
 
+    def test_env_model_configuration(self) -> None:
+        """Verify environment variables correctly override model and base URL settings."""
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_MODEL": "gemini-flash-lite-latest",
+                "OPENROUTER_BASE_URL": "https://openrouter.ai/api/v1",
+                "OPENROUTER_MODEL": "z-ai/glm-5.2:free",
+                "OPENROUTER_REASONING_MODEL": "z-ai/glm-5.2:free",
+                "OPENROUTER_EXTRACTION_MODEL": "google/gemma-4-26b-a4b-it:free",
+            },
+        ):
+            gw = ResilientLLMGateway(cache=LLMCache(db_path=":memory:"))
+            self.assertEqual(gw.gemini_model, "gemini-flash-lite-latest")
+            self.assertEqual(gw.openrouter_base_url, "https://openrouter.ai/api/v1")
+            self.assertEqual(gw.openrouter_model, "z-ai/glm-5.2:free")
+            self.assertEqual(gw.openrouter_reasoning_model, "z-ai/glm-5.2:free")
+            self.assertEqual(gw.openrouter_extraction_model, "google/gemma-4-26b-a4b-it:free")
+
 
 if __name__ == "__main__":
     unittest.main()
+

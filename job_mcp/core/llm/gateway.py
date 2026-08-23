@@ -44,9 +44,12 @@ class ResilientLLMGateway:
         rate_limiter: Optional[TokenBucketRateLimiter] = None,
         gemini_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
-        gemini_model: str = "gemini-1.5-flash",
-        openrouter_model: str = "google/gemini-2.0-flash-001",
-        ollama_url: str = "http://localhost:11434/api/generate",
+        gemini_model: Optional[str] = None,
+        openrouter_model: Optional[str] = None,
+        openrouter_reasoning_model: Optional[str] = None,
+        openrouter_extraction_model: Optional[str] = None,
+        openrouter_base_url: Optional[str] = None,
+        ollama_url: Optional[str] = None,
         ollama_model: str = "llama3.2",
         max_retries: int = 3,
         initial_backoff: float = 2.0,
@@ -60,8 +63,11 @@ class ResilientLLMGateway:
             rate_limiter: TokenBucketRateLimiter instance or default 15 RPM.
             gemini_api_key: Gemini API key (defaults to GEMINI_API_KEY or GOOGLE_API_KEY env).
             openrouter_api_key: OpenRouter API key (defaults to OPENROUTER_API_KEY env).
-            gemini_model: Gemini model identifier.
-            openrouter_model: OpenRouter model identifier.
+            gemini_model: Gemini model identifier (defaults to GEMINI_MODEL env or gemini-flash-lite-latest).
+            openrouter_model: OpenRouter fallback model identifier.
+            openrouter_reasoning_model: OpenRouter reasoning model identifier (defaults to OPENROUTER_REASONING_MODEL or z-ai/glm-5.2:free).
+            openrouter_extraction_model: OpenRouter extraction model identifier (defaults to OPENROUTER_EXTRACTION_MODEL or google/gemma-4-26b-a4b-it:free).
+            openrouter_base_url: OpenRouter base API URL (defaults to OPENROUTER_BASE_URL or https://openrouter.ai/api/v1).
             ollama_url: Ollama API generate endpoint URL.
             ollama_model: Ollama model identifier.
             max_retries: Maximum retry attempts for 429 / 503 rate limits.
@@ -79,9 +85,38 @@ class ResilientLLMGateway:
         self.openrouter_api_key = (
             openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")
         )
-        self.gemini_model = gemini_model
-        self.openrouter_model = openrouter_model
-        self.ollama_url = os.environ.get("OLLAMA_URL", ollama_url)
+        self.gemini_model = (
+            gemini_model
+            or os.environ.get("GEMINI_MODEL")
+            or "gemini-flash-lite-latest"
+        )
+        self.openrouter_base_url = (
+            openrouter_base_url
+            or os.environ.get("OPENROUTER_BASE_URL")
+            or "https://openrouter.ai/api/v1"
+        ).rstrip("/")
+        self.openrouter_reasoning_model = (
+            openrouter_reasoning_model
+            or os.environ.get("OPENROUTER_REASONING_MODEL")
+            or os.environ.get("OPENROUTER_MODEL")
+            or openrouter_model
+            or "z-ai/glm-5.2:free"
+        )
+        self.openrouter_extraction_model = (
+            openrouter_extraction_model
+            or os.environ.get("OPENROUTER_EXTRACTION_MODEL")
+            or "google/gemma-4-26b-a4b-it:free"
+        )
+        self.openrouter_model = (
+            openrouter_model
+            or os.environ.get("OPENROUTER_MODEL")
+            or self.openrouter_reasoning_model
+        )
+        self.ollama_url = (
+            ollama_url
+            or os.environ.get("OLLAMA_URL")
+            or "http://localhost:11434/api/generate"
+        )
         self.ollama_model = ollama_model
         self.max_retries = max_retries
         self.initial_backoff = initial_backoff
@@ -93,6 +128,7 @@ class ResilientLLMGateway:
         if self._http_client is not None:
             return self._http_client
         return httpx.AsyncClient(timeout=30.0)
+
 
     async def _call_gemini(self, prompt: str, system_prompt: str) -> str:
         """Invoke Google Gemini REST API."""
@@ -139,12 +175,17 @@ class ResilientLLMGateway:
             if should_close:
                 await client.aclose()
 
-    async def _call_openrouter(self, prompt: str, system_prompt: str) -> str:
+    async def _call_openrouter(
+        self,
+        prompt: str,
+        system_prompt: str,
+        model: Optional[str] = None,
+    ) -> str:
         """Invoke OpenRouter Chat Completions API."""
         if not self.openrouter_api_key:
             raise LLMProviderError("OpenRouter API key is not configured.")
 
-        url = "https://openrouter.ai/api/v1/chat/completions"
+        url = f"{self.openrouter_base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.openrouter_api_key}",
             "Content-Type": "application/json",
@@ -152,12 +193,13 @@ class ResilientLLMGateway:
             "X-Title": "TechJobMCP Application Engine",
         }
         payload = {
-            "model": self.openrouter_model,
+            "model": model or self.openrouter_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
         }
+
 
         client = await self._get_client()
         should_close = self._http_client is None
