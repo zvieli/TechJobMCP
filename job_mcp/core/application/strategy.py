@@ -82,12 +82,13 @@ def get_application_strategy(
     """Resolve and instantiate the appropriate ApplicationStrategy for a job source.
 
     Strategy routing:
-    1. Direct API POST (`ApiPostStrategy`):
-       - Comeet, HireMeTech, Greenhouse, Lever, Direct Tech API, or explicit 'api'/'api_direct'.
+    1. Dynamic Strategy Registry (custom user/plugin registrations).
     2. Easy Apply (`EasyApplyStrategy`):
-       - LinkedIn, Easy Apply quick submissions, or explicit 'easy_apply'/'easyapply'.
-    3. Browser Playwright (`BrowserPlaywrightStrategy`):
-       - Workday, AllJobs, Eightfold, generic browser automation, or fallback.
+       - LinkedIn, Easy Apply quick submissions, or explicit 'easy_apply'/'easyapply'/'quick_apply'.
+    3. Direct API POST (`ApiPostStrategy`):
+       - HireMeTech, Direct Tech API, or explicit 'api'/'api_direct'/'api_post'/'direct_tech'.
+    4. Dynamic ATS Browser Strategy (`BrowserPlaywrightStrategy`):
+       - Comeet, Workday, Eightfold, Greenhouse, Lever, AllJobs, generic browser automation, or fallback.
 
     Args:
         source: Source name or identifier from Job.source or Job.job_id.
@@ -116,18 +117,27 @@ def get_application_strategy(
             return reg_cls()
 
     # Built-in source routing rules
-    # 1. API POST Sources
-    api_sources = ("comeet", "hiremetech", "greenhouse", "lever", "api", "api_direct", "direct_tech")
-    if any(s in src for s in api_sources):
-        return ApiPostStrategy()
-
-    # 2. Easy Apply Sources
+    # 1. Easy Apply Sources
     easy_apply_sources = ("linkedin", "easy_apply", "easyapply", "quick_apply")
     if any(s in src for s in easy_apply_sources):
         return EasyApplyStrategy(session_manager=session_manager)
 
-    # 3. Browser / DOM Fallback Sources
-    browser_sources = ("workday", "alljobs", "eightfold", "browser", "playwright")
+    # 2. Direct API POST Sources
+    api_sources = ("hiremetech", "api_direct", "direct_tech", "api_post")
+    if any(s in src for s in api_sources) or src == "api":
+        return ApiPostStrategy()
+
+    # 3. Dynamic ATS Browser Strategy (Comeet, Workday, Eightfold, Greenhouse, Lever, AllJobs, Browser)
+    browser_sources = (
+        "comeet",
+        "workday",
+        "eightfold",
+        "greenhouse",
+        "lever",
+        "alljobs",
+        "browser",
+        "playwright",
+    )
     if any(s in src for s in browser_sources):
         return BrowserPlaywrightStrategy(session_manager=session_manager)
 

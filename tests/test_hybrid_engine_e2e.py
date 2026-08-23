@@ -130,10 +130,10 @@ async def test_fastmcp_two_step_apply_and_history_e2e(
     cv_file.write_text("Gal Cohen\nSkills: Python, FastAPI, Docker, PostgreSQL\nEmail: gal.cohen@example.com\n")
 
     job = Job(
-        job_id="comeet_senior_101",
+        job_id="direct_senior_101",
         title="Senior Python Backend Engineer",
         company="InnoTech IL",
-        source="comeet",
+        source="direct_tech",
         location="Tel Aviv, Israel",
         work_mode=WorkMode.HYBRID,
         tech_stack=["Python", "FastAPI", "Docker"],
@@ -151,32 +151,32 @@ async def test_fastmcp_two_step_apply_and_history_e2e(
 
         # Step 1: Preview Application
         preview_resp = await auto_apply_job(
-            job_id="comeet_senior_101",
+            job_id="direct_senior_101",
             cv_path=str(cv_file),
             ctx=ctx,
         )
 
         assert preview_resp["success"] is True
         assert "Application preview generated" in preview_resp["message"]
-        assert "comeet_senior_101" in _pending_applications
+        assert "direct_senior_101" in _pending_applications
         preview_data = preview_resp["data"]
-        assert preview_data["job_id"] == "comeet_senior_101"
+        assert preview_data["job_id"] == "direct_senior_101"
         assert preview_data["company"] == "InnoTech IL"
         assert preview_data["application_method"] == ApplicationMethod.API.value
         assert "applicant_name" in preview_data["fields_to_submit"]
 
         # Step 2: Confirm Application
         confirm_resp = await confirm_auto_apply(
-            job_id="comeet_senior_101",
+            job_id="direct_senior_101",
             ctx=ctx,
         )
 
         assert confirm_resp["success"] is True
         assert "Successfully submitted application" in confirm_resp["message"]
         assert confirm_resp["data"]["submitted"] is True
-        assert confirm_resp["data"]["job_id"] == "comeet_senior_101"
+        assert confirm_resp["data"]["job_id"] == "direct_senior_101"
         assert confirm_resp["data"]["method"] == ApplicationMethod.API.value
-        assert "comeet_senior_101" not in _pending_applications
+        assert "direct_senior_101" not in _pending_applications
 
         # Step 3: Inspect History via get_application_history
         history_resp = await get_application_history(limit=10, ctx=ctx)
@@ -186,7 +186,7 @@ async def test_fastmcp_two_step_apply_and_history_e2e(
         assert len(history_data["applications"]) == 1
 
         app_record = history_data["applications"][0]
-        assert app_record["job_id"] == "comeet_senior_101"
+        assert app_record["job_id"] == "direct_senior_101"
         assert app_record["company"] == "InnoTech IL"
         assert app_record["status"] == ApplicationStatus.SUCCESS.value
         assert app_record["method"] == ApplicationMethod.API.value
@@ -362,15 +362,15 @@ async def test_guardrail_duplicate_prevention_strict(isolated_engine_context):
 
 @pytest.mark.asyncio
 async def test_multi_source_strategy_routing_e2e(isolated_engine_context):
-    """Verify end-to-end strategy routing across API (Comeet), Easy Apply (LinkedIn), and Browser (Workday)."""
+    """Verify end-to-end strategy routing across API (Direct Tech), Easy Apply (LinkedIn), and Browser (Workday)."""
     ctx, cache, ledger, dispatcher, session_mgr = isolated_engine_context
 
     jobs = [
         Job(
-            job_id="comeet_eng_1",
+            job_id="direct_eng_1",
             title="Backend Engineer",
-            company="ComeetCorp",
-            source="comeet",
+            company="DirectCorp",
+            source="direct_tech",
             location="Tel Aviv",
             match_score=90.0,
         ),
@@ -410,9 +410,9 @@ async def test_multi_source_strategy_routing_e2e(isolated_engine_context):
 
         mock_post.return_value = httpx.Response(200, json={"status": "ok"})
 
-        # 1. API Strategy (Comeet)
-        await auto_apply_job(job_id="comeet_eng_1", ctx=ctx)
-        res_api = await confirm_auto_apply(job_id="comeet_eng_1", ctx=ctx)
+        # 1. API Strategy (Direct Tech)
+        await auto_apply_job(job_id="direct_eng_1", ctx=ctx)
+        res_api = await confirm_auto_apply(job_id="direct_eng_1", ctx=ctx)
         assert res_api["success"] is True
         assert res_api["data"]["method"] == ApplicationMethod.API.value
 
@@ -432,7 +432,7 @@ async def test_multi_source_strategy_routing_e2e(isolated_engine_context):
     entries = ledger.list_applications(limit=10, status=ApplicationStatus.SUCCESS)
     assert len(entries) == 3
     method_by_id = {e.job_id: e.method for e in entries}
-    assert method_by_id["comeet_eng_1"] == ApplicationMethod.API.value
+    assert method_by_id["direct_eng_1"] == ApplicationMethod.API.value
     assert method_by_id["linkedin_eng_2"] == ApplicationMethod.EASY_APPLY.value
     assert method_by_id["workday_eng_3"] == ApplicationMethod.BROWSER.value
 

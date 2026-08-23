@@ -316,7 +316,7 @@ async def test_dispatcher_preview_application(
         preview = await dispatcher.preview_application(sample_valid_job, sample_profile)
 
         assert preview.job_id == sample_valid_job.job_id
-        assert preview.application_method == ApplicationMethod.API.value
+        assert preview.application_method == ApplicationMethod.BROWSER.value
         # Warnings should contain auto apply disabled, daily cap, and score threshold
         assert any("AUTO_APPLY_ENABLED=false" in w for w in preview.warnings)
         assert any("Daily application cap reached" in w for w in preview.warnings)
@@ -332,23 +332,23 @@ async def test_dispatcher_executes_strategies_and_records_ledger(
     memory_ledger: ApplicationLedger,
     sample_profile: CandidateProfile,
 ):
-    """Test dispatching across Comeet (API), LinkedIn (EasyApply), and Workday (Browser)."""
+    """Test dispatching across Direct Tech (API), LinkedIn (EasyApply), and Workday (Browser)."""
     with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
         dispatcher = HybridApplicationDispatcher(ledger=memory_ledger)
 
-        # 1. Comeet -> API Strategy
-        comeet_job = Job(
-            job_id="comeet_dispatch_1",
+        # 1. Direct Tech -> API Strategy
+        api_job = Job(
+            job_id="api_dispatch_1",
             title="Backend Engineer",
-            company="ComeetCompany",
+            company="DirectTechCompany",
             location="Tel Aviv, Israel",
             match_score=90.0,
-            source="comeet",
+            source="direct_tech",
         )
-        res_api = await dispatcher.execute_application(comeet_job, sample_profile)
+        res_api = await dispatcher.execute_application(api_job, sample_profile)
         assert res_api["success"] is True
         assert res_api["method"] == ApplicationMethod.API.value
-        entry_api = memory_ledger.get_application(comeet_job.job_id)
+        entry_api = memory_ledger.get_application(api_job.job_id)
         assert entry_api is not None
         assert entry_api.method == ApplicationMethod.API.value
         assert entry_api.status == ApplicationStatus.SUCCESS.value
@@ -403,7 +403,7 @@ async def test_dispatcher_strategy_exception_handling(
             company="BuggyCorp",
             location="Tel Aviv, Israel",
             match_score=90.0,
-            source="comeet",
+            source="direct_tech",
         )
 
         with patch("job_mcp.core.application.strategies.api.ApiPostStrategy.apply", side_effect=RuntimeError("Fatal strategy crash")):

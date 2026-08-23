@@ -62,21 +62,23 @@ def dummy_cv_file(tmp_path: Path) -> Path:
 
 def test_get_application_strategy_routing():
     """Verify strategy routing maps ATS sources to appropriate Strategy instances."""
-    # API Post sources
-    assert isinstance(get_application_strategy("comeet"), ApiPostStrategy)
-    assert isinstance(get_application_strategy("comeet_12345"), ApiPostStrategy)
+    # Direct API Post sources
     assert isinstance(get_application_strategy("hiremetech"), ApiPostStrategy)
-    assert isinstance(get_application_strategy("greenhouse"), ApiPostStrategy)
-    assert isinstance(get_application_strategy("lever"), ApiPostStrategy)
     assert isinstance(get_application_strategy("api_direct"), ApiPostStrategy)
     assert isinstance(get_application_strategy("direct_tech"), ApiPostStrategy)
+    assert isinstance(get_application_strategy("api_post"), ApiPostStrategy)
+    assert isinstance(get_application_strategy("api"), ApiPostStrategy)
 
     # Easy Apply sources
     assert isinstance(get_application_strategy("linkedin"), EasyApplyStrategy)
     assert isinstance(get_application_strategy("easy_apply"), EasyApplyStrategy)
     assert isinstance(get_application_strategy("quick_apply"), EasyApplyStrategy)
 
-    # Browser Playwright sources & fallback
+    # Dynamic ATS Browser Playwright sources & fallback
+    assert isinstance(get_application_strategy("comeet"), BrowserPlaywrightStrategy)
+    assert isinstance(get_application_strategy("comeet_12345"), BrowserPlaywrightStrategy)
+    assert isinstance(get_application_strategy("greenhouse"), BrowserPlaywrightStrategy)
+    assert isinstance(get_application_strategy("lever"), BrowserPlaywrightStrategy)
     assert isinstance(get_application_strategy("workday"), BrowserPlaywrightStrategy)
     assert isinstance(get_application_strategy("alljobs"), BrowserPlaywrightStrategy)
     assert isinstance(get_application_strategy("eightfold"), BrowserPlaywrightStrategy)
