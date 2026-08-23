@@ -36,7 +36,9 @@ from job_mcp.main import (
     auto_apply_job,
     confirm_auto_apply,
     get_application_history,
+    run_job_scout,
 )
+
 from job_mcp.models.ledger import ApplicationMethod, ApplicationStatus
 from job_mcp.models.schemas import (
     ApplicationPreview,
@@ -480,3 +482,55 @@ async def test_llm_gateway_caching_and_mapper_integration(tmp_path: Path):
         mock_exec.assert_not_called()
 
         assert llm_cache.get_cached_answer(question) == res1
+
+
+@pytest.mark.asyncio
+async def test_run_job_scout_hybrid_dispatch(isolated_engine_context):
+    """Verify run_job_scout routes autonomous applications through HybridApplicationDispatcher."""
+    ctx, cache, ledger, dispatcher, session_mgr = isolated_engine_context
+
+    top_job = Job(
+
+        job_id="comeet_top_ai_1",
+        title="Senior AI Engineer",
+        company="AI Labs",
+        location="Tel Aviv, Israel",
+        tech_stack=["Python", "FastAPI", "PyTorch"],
+        source="comeet",
+        description="Build LLM and RAG agents.",
+        match_score=92.0,
+    )
+    cache.update([top_job])
+
+    # 1. With AUTO_APPLY_ENABLED=false, run_job_scout stages and defers application
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "false"}):
+        res = await run_job_scout(
+            sources=["comeet"],
+            auto_apply=True,
+            top_tier_threshold=85,
+            ctx=ctx,
+        )
+        assert res["success"] is True
+        data = res["data"]
+        assert "comeet_top_ai_1" in data["deferred"]
+        assert len(data["submitted"]) == 0
+
+    # 2. With AUTO_APPLY_ENABLED=true, run_job_scout executes submission through strategy
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+        with patch("job_mcp.core.application.strategies.api.httpx.AsyncClient.post") as mock_post:
+            mock_post.return_value = httpx.Response(
+                200,
+                json={"status": "ok", "application_id": "app_top_123"},
+                request=httpx.Request("POST", "https://api.comeet.me/v1/apply"),
+            )
+            res2 = await run_job_scout(
+                sources=["comeet"],
+                auto_apply=True,
+                top_tier_threshold=85,
+                ctx=ctx,
+            )
+            assert res2["success"] is True
+            data2 = res2["data"]
+            assert "comeet_top_ai_1" in data2["submitted"]
+            assert ledger.is_applied("comeet_top_ai_1") is True
+

@@ -1749,20 +1749,45 @@ async def run_job_scout(
     strong_match_threshold: int = 70,
     disqualify_threshold: int = 50,
     auto_apply: bool = False,
+    action_mode: Optional[str] = None,
+    max_applications: int = 3,
     auto_bookmark: bool = True,
     force_refresh: bool = False,
     notify_channel: Optional[str] = None,
     sources: Optional[list[str]] = None,
     limit: int = 50,
+    detail_level: Optional[str] = None,
     ctx: Optional[Context] = None,
 ) -> dict[str, Any]:
     """Execute autonomous end-to-end multi-source job scouting pipeline.
 
     Discovers available sources, aggregates job listings, evaluates CV match scores against
     the candidate profile, automatically bookmarks high-affinity positions, stages/submits applications
-    if enabled, and returns structured tracking metrics for agent coordination.
+    via HybridApplicationDispatcher if enabled, and returns structured tracking metrics.
 
     Args:
+        cv_path: Optional path to candidate CV (PDF, DOCX, TXT) or raw CV string.
+        tech_stack: Target technology stack keywords (defaults dynamically to CV skills).
+        keywords: Additional keywords to match.
+        exclude_keywords: Keywords to filter out (e.g. seniority exclusions).
+        target_roles: Target job titles or roles to prioritize.
+        work_mode: Preferred work mode: 'remote', 'hybrid', or 'onsite'.
+        location: Geographic location filter (e.g. 'Israel', 'Tel Aviv', 'Remote').
+        min_salary: Minimum desired annual salary in USD.
+        top_tier_threshold: Score threshold for Top-Tier priority jobs (default: 85).
+        strong_match_threshold: Score threshold for Strong Match jobs (default: 70).
+        disqualify_threshold: Score threshold below which jobs are dismissed/removed (default: 50).
+        auto_apply: If True, executes safe application preview and submission for top-tier jobs.
+        action_mode: Action mode ('autonomous' or 'supervised'). In autonomous mode, auto_apply is enabled.
+        max_applications: Maximum number of applications to submit per run (default: 3).
+        auto_bookmark: If True, automatically bookmarks top-tier and strong-match jobs (default: True).
+        force_refresh: Force fresh fetch from live sources bypassing cache.
+        notify_channel: Optional notification channel to dispatch alerts to (e.g. 'telegram').
+        sources: Optional list of specific source IDs to query.
+        limit: Maximum number of jobs to return/process.
+        detail_level: Response detail level ('summary' or 'full').
+        ctx: FastMCP Context object.
+
         cv_path: Optional path to candidate CV (PDF, DOCX, TXT) or raw CV string.
         tech_stack: Target technology stack keywords (defaults dynamically to CV skills).
         keywords: Additional keywords to match.
@@ -1906,26 +1931,39 @@ async def run_job_scout(
             if job.job_id not in bookmarked_ids:
                 bookmarked_ids.append(job.job_id)
 
-    # Auto Apply
-    if auto_apply:
-        session = _get_session(ctx)
-        for job in top_tier_jobs:
-            if not job.job_id:
-                continue
+    # Auto Apply via HybridApplicationDispatcher
+    should_apply = auto_apply or (action_mode is not None and action_mode.strip().lower() == "autonomous")
+    if should_apply:
+        dispatcher = _get_dispatcher(ctx)
+        target_jobs = [j for j in top_tier_jobs if j.job_id][:max_applications]
+        for job in target_jobs:
             try:
-                if session is not None and getattr(session, "is_authenticated", False):
-                    page = await session.get_page()
-                    preview = await browser_preview_application(page, job.job_id)
-                    _pending_applications[job.job_id] = preview.model_dump()
-                    await browser_execute_application(page, job.job_id)
-                    _pending_applications.pop(job.job_id, None)
+                # Stage preview
+                preview = await dispatcher.preview_application(
+                    job=job,
+                    profile=profile or CandidateProfile(),
+                    cv_path=effective_cv_path,
+                )
+                _pending_applications[job.job_id] = preview.model_dump()
+
+                # Dispatch application through hybrid strategy
+                exec_result = await dispatcher.execute_application(
+                    job=job,
+                    profile=profile or CandidateProfile(),
+                    cv_path=effective_cv_path,
+                    force=False,
+                )
+                if exec_result.get("success"):
                     submitted_ids.append(job.job_id)
-                else:
-                    # In simulated or external mode, stage for submission
+                    _pending_applications.pop(job.job_id, None)
+                elif exec_result.get("status") == "blocked":
                     deferred_ids.append(job.job_id)
+                else:
+                    failed_ops.append(f"{job.job_id}: {exec_result.get('message', 'Submission failed')}")
             except Exception as exc:
-                logger.warning("Auto apply failed for '%s': %s", job.job_id, exc)
+                logger.warning("Hybrid auto apply failed for '%s': %s", job.job_id, exc)
                 failed_ops.append(f"{job.job_id}: {exc}")
+
 
     # Remove disqualified jobs from cache
     for job in disqualified_jobs:

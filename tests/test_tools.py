@@ -371,17 +371,26 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         )
         mock_execute.return_value = True
 
-        res = await run_job_scout(
-            tech_stack=["Python", "FastAPI"],
-            top_tier_threshold=80,
-            auto_apply=True,
-            auto_bookmark=True,
-            ctx=ctx,
-        )
+        with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+            with patch("job_mcp.core.application.dispatcher.HybridApplicationDispatcher.execute_application", new_callable=AsyncMock) as mock_dispatch_exec:
+                mock_dispatch_exec.return_value = {
+                    "success": True,
+                    "job_id": "job-1",
+                    "status": "success",
+                    "message": "Submitted successfully",
+                }
+                res = await run_job_scout(
+                    tech_stack=["Python", "FastAPI"],
+                    top_tier_threshold=80,
+                    auto_apply=True,
+                    auto_bookmark=True,
+                    ctx=ctx,
+                )
 
-        self.assertTrue(res["success"])
-        data = res["data"]
-        self.assertIn("job-1", data["submitted"])
+                self.assertTrue(res["success"])
+                data = res["data"]
+                self.assertIn("job-1", data["submitted"])
+
 
 
 if __name__ == "__main__":
