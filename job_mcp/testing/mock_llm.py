@@ -434,17 +434,23 @@ class MockLLMAgent:
                 bookmarked_job_ids.append(jid)
 
             if auto_apply:
+                apply_args: dict[str, Any] = {"job_id": jid}
+                if effective_cv:
+                    apply_args["cv_path"] = effective_cv
                 a_res = await self.call_tool(
                     "auto_apply_job",
-                    arguments={"job_id": jid},
+                    arguments=apply_args,
                     thought=f"Generating application preview for Top-Tier job '{jid}'...",
                     step_callback=step_callback,
                 )
                 if a_res.get("success"):
                     staged_apply_ids.append(jid)
+                    confirm_args: dict[str, Any] = {"job_id": jid, "force": True}
+                    if effective_cv:
+                        confirm_args["cv_path"] = effective_cv
                     c_res = await self.call_tool(
                         "confirm_auto_apply",
-                        arguments={"job_id": jid},
+                        arguments=confirm_args,
                         thought=f"Confirming auto-apply for Top-Tier job '{jid}'...",
                         step_callback=step_callback,
                     )

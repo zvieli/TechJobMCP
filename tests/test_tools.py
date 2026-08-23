@@ -9,7 +9,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastmcp import Context
 
-from job_mcp.core.api_client import JobCache
+from job_mcp.core.api_client import (
+    JobCache,
+    extract_candidate_profile,
+    fetch_jobs_via_api,
+    filter_jobs,
+)
+from job_mcp.core.application import (
+    ApplicationLedger,
+    HybridApplicationDispatcher,
+)
 from job_mcp.core.auth import SessionManager
 from job_mcp.main import (
     _ensure_session,
@@ -79,12 +88,16 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         registry = SourceRegistry()
         registry.register(HireMeTechSource(session_manager=session_mgr))
         aggregator = JobAggregator(registry=registry, cache=cache)
+        ledger = ApplicationLedger(db_path=":memory:")
+        dispatcher = HybridApplicationDispatcher(ledger=ledger, session_manager=session_mgr)
         ctx = MagicMock(spec=Context)
         ctx.lifespan_context = {
             "session": session_mgr,
             "cache": cache,
             "registry": registry,
             "aggregator": aggregator,
+            "ledger": ledger,
+            "dispatcher": dispatcher,
         }
         return ctx
 
@@ -278,44 +291,30 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(cache.get_all()), 2)
         mock_browser_delete.assert_called_once_with(mock_page, "job-3")
 
-    @patch("job_mcp.main.browser_preview_application")
-    @patch("job_mcp.main.browser_execute_application")
-    async def test_two_step_auto_apply_flow(self, mock_execute, mock_preview):
+    async def test_two_step_auto_apply_flow(self):
         """Test complete 2-step apply workflow: auto_apply_job then confirm_auto_apply."""
+        self.mock_jobs[0].match_score = 95.0
         cache = JobCache(ttl_minutes=10)
         cache.update(self.mock_jobs)
         mock_session = AsyncMock(spec=SessionManager)
         mock_session._initialized = True
         mock_session.check_session_health.return_value = True
-        mock_page = AsyncMock()
-        mock_session.get_page.return_value = mock_page
         ctx = self._create_mock_context(mock_session, cache)
 
-        mock_preview.return_value = ApplicationPreview(
-            job_id="job-1",
-            job_title="Senior Backend Python Developer",
-            company="TechCorp",
-            application_method="direct_submission",
-            fields_to_submit={"full_name": "Alex Rivera", "email": "candidate@example.com"},
-            warnings=["Resume file auto-attached"],
-        )
-        mock_execute.return_value = True
+        with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+            # Step 1: Preview application
+            res1 = await auto_apply_job("job-1", ctx=ctx)
+            self.assertTrue(res1["success"])
+            self.assertIn("Application preview generated", res1["message"])
+            self.assertIn("job-1", _pending_applications)
+            self.assertEqual(res1["data"]["job_title"], "Senior Backend Python Developer")
 
-        # Step 1: Preview application
-        res1 = await auto_apply_job("job-1", ctx=ctx)
-        self.assertTrue(res1["success"])
-        self.assertIn("Application preview generated", res1["message"])
-        self.assertIn("job-1", _pending_applications)
-        self.assertEqual(res1["data"]["job_title"], "Senior Backend Python Developer")
-        mock_preview.assert_called_once_with(mock_page, "job-1")
-
-        # Step 2: Confirm application
-        res2 = await confirm_auto_apply("job-1", ctx=ctx)
-        self.assertTrue(res2["success"])
-        self.assertIn("Successfully submitted application", res2["message"])
-        self.assertTrue(res2["data"]["submitted"])
-        self.assertNotIn("job-1", _pending_applications)
-        mock_execute.assert_called_once_with(mock_page, "job-1")
+            # Step 2: Confirm application
+            res2 = await confirm_auto_apply("job-1", ctx=ctx)
+            self.assertTrue(res2["success"])
+            self.assertIn("Successfully submitted application", res2["message"])
+            self.assertTrue(res2["data"]["submitted"])
+            self.assertNotIn("job-1", _pending_applications)
 
     async def test_run_job_scout_basic(self):
         """Test run_job_scout discovers, filters, bookmarks, and returns structured tracking metrics."""

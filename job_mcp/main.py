@@ -19,6 +19,10 @@ from job_mcp.core.api_client import (
     fetch_user_resume_profile,
     filter_jobs,
 )
+from job_mcp.core.application import (
+    ApplicationLedger,
+    HybridApplicationDispatcher,
+)
 from job_mcp.core.auth import (
     BASE_URL,
     DASHBOARD_PATH,
@@ -108,6 +112,7 @@ The server supports two operation modes, controlled via `set_operation_mode`:
 12. `notify_new_jobs`: Aggregate jobs across sources, filter unseen postings via JobTracker, and dispatch alerts to Telegram or other channels.
 13. `test_notifier`: Test connectivity, health, and message delivery for notification channels.
 14. `run_job_scout`: Comprehensive autonomous end-to-end multi-source job scouting, scoring, bookmarking, and application pipeline.
+15. `get_application_history`: Retrieve historical job application submissions and outcomes from the persistent audit ledger.
 
 ## Safety Rules
 - Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2). This rule applies in ALL modes.
@@ -122,6 +127,8 @@ _default_registry: Optional[SourceRegistry] = None
 _default_aggregator: Optional[JobAggregator] = None
 _default_tracker: Optional[JobTracker] = None
 _default_notifier: Optional[BaseNotifier] = None
+_default_ledger: Optional[ApplicationLedger] = None
+_default_dispatcher: Optional[HybridApplicationDispatcher] = None
 
 # Staged pending applications store: job_id -> application preview dict
 _pending_applications: dict[str, dict[str, Any]] = {}
@@ -171,8 +178,8 @@ async def _warm_cache(
 
 @asynccontextmanager
 async def browser_lifespan(server: FastMCP):
-    """Lifespan context manager to manage browser session and job cache across server lifecycle."""
-    global _default_session, _default_cache, _default_registry, _default_aggregator, _default_tracker, _default_notifier
+    """Lifespan context manager to manage browser session, job cache, ledger, and dispatcher across server lifecycle."""
+    global _default_session, _default_cache, _default_registry, _default_aggregator, _default_tracker, _default_notifier, _default_ledger, _default_dispatcher
     logger.info("Starting Tech Job MCP FastMCP lifespan...")
 
     session_mgr = SessionManager()
@@ -181,6 +188,8 @@ async def browser_lifespan(server: FastMCP):
     aggregator = JobAggregator(registry=registry, cache=job_cache)
     tracker = JobTracker(storage_path=os.getenv("JOB_TRACKER_PATH"))
     telegram_notifier = TelegramNotifier()
+    ledger = ApplicationLedger()
+    dispatcher = HybridApplicationDispatcher(ledger=ledger, session_manager=session_mgr)
 
     _default_session = session_mgr
     _default_cache = job_cache
@@ -188,6 +197,8 @@ async def browser_lifespan(server: FastMCP):
     _default_aggregator = aggregator
     _default_tracker = tracker
     _default_notifier = telegram_notifier
+    _default_ledger = ledger
+    _default_dispatcher = dispatcher
 
     warmup_task = asyncio.create_task(_warm_cache(session_mgr, job_cache, aggregator=aggregator))
 
@@ -199,6 +210,8 @@ async def browser_lifespan(server: FastMCP):
             "aggregator": aggregator,
             "tracker": tracker,
             "notifier": telegram_notifier,
+            "ledger": ledger,
+            "dispatcher": dispatcher,
         }
     finally:
         logger.info("Shutting down Tech Job MCP FastMCP lifespan...")
@@ -471,6 +484,41 @@ def _get_session(ctx: Optional[Context] = None) -> Optional[SessionManager]:
         if isinstance(lifespan_ctx, dict) and "session" in lifespan_ctx:
             return lifespan_ctx["session"]
     return _default_session
+
+
+def _get_ledger(ctx: Optional[Context] = None) -> ApplicationLedger:
+    """Retrieve ApplicationLedger instance from Context lifespan state or global default."""
+    global _default_ledger
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict) and "ledger" in lifespan_ctx:
+            return lifespan_ctx["ledger"]
+    if _default_ledger is None:
+        _default_ledger = ApplicationLedger()
+    return _default_ledger
+
+
+def _get_dispatcher(ctx: Optional[Context] = None) -> HybridApplicationDispatcher:
+    """Retrieve HybridApplicationDispatcher instance from Context lifespan state or global default."""
+    global _default_dispatcher
+    ledger = _get_ledger(ctx)
+    session = _get_session(ctx)
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict) and "dispatcher" in lifespan_ctx:
+            dispatcher = lifespan_ctx["dispatcher"]
+            if session is not None and getattr(dispatcher, "session_manager", None) is None:
+                dispatcher.session_manager = session
+            if ledger is not None and getattr(dispatcher, "ledger", None) is None:
+                dispatcher.ledger = ledger
+            return dispatcher
+    if _default_dispatcher is None:
+        _default_dispatcher = HybridApplicationDispatcher(ledger=ledger, session_manager=session)
+    else:
+        _default_dispatcher.ledger = ledger
+        if session is not None:
+            _default_dispatcher.session_manager = session
+    return _default_dispatcher
 
 
 async def _is_session_authenticated(session: Optional[SessionManager]) -> bool:
@@ -1066,33 +1114,56 @@ async def delete_job(
 @mcp.tool()
 async def auto_apply_job(
     job_id: str,
+    cv_path: Optional[str] = None,
     ctx: Optional[Context] = None,
 ) -> dict[str, Any]:
     """Step 1: Inspect job application form and generate preview without submitting.
 
-    Stores the preview in pending applications for subsequent confirmation via `confirm_auto_apply`.
+    Uses HybridApplicationDispatcher to map form fields, evaluate safety guardrails,
+    and stage the application for subsequent confirmation via `confirm_auto_apply`.
 
     Args:
         job_id: Unique ID of the job listing.
+        cv_path: Optional path to resume/CV document (defaults to DEFAULT_CV_PATH or user profile).
         ctx: FastMCP Context object.
 
     Returns:
-        dict: ToolResponse containing application preview, fields, and confirmation instructions.
+        dict: ToolResponse containing application preview, mapped fields, guardrail warnings, and confirmation instructions.
     """
     try:
-        session, is_healthy = await _ensure_session(ctx)
-        if not is_healthy:
-            return _response(
-                success=False,
-                message="Browser session is unauthenticated. Please log in first.",
-                error_code="UNAUTHENTICATED",
+        cache = _get_cache(ctx)
+        cached_job = cache.get_by_id(job_id)
+        if cached_job is not None:
+            job = cached_job
+        else:
+            inferred_source = "hiremetech"
+            for prefix in ("comeet", "alljobs", "workday", "eightfold", "direct", "linkedin"):
+                if job_id.lower().startswith(f"{prefix}_"):
+                    inferred_source = prefix
+                    break
+            job = Job(
+                job_id=job_id,
+                title=f"Job {job_id}",
+                company="Unknown Company",
+                source=inferred_source,
+                location="Israel",
+                match_score=90.0,
             )
 
-        page = await session.get_page()
-        preview = await browser_preview_application(page, job_id)
+        effective_cv_path = cv_path or os.getenv("DEFAULT_CV_PATH")
+        profile = extract_candidate_profile(effective_cv_path)
 
+        dispatcher = _get_dispatcher(ctx)
+        preview = await dispatcher.preview_application(
+            job=job,
+            profile=profile,
+            cv_path=effective_cv_path,
+        )
+
+        preview_dict = preview.model_dump()
+        preview_dict["cv_path"] = effective_cv_path
         # Store preview in pending applications store
-        _pending_applications[job_id] = preview.model_dump()
+        _pending_applications[job_id] = preview_dict
 
         return _response(
             success=True,
@@ -1101,7 +1172,7 @@ async def auto_apply_job(
                 f"Please review the application fields and warnings carefully. "
                 f"To submit the application, call 'confirm_auto_apply(job_id=\"{job_id}\")'."
             ),
-            data=preview.model_dump(),
+            data=preview_dict,
         )
 
     except Exception as exc:
@@ -1116,18 +1187,25 @@ async def auto_apply_job(
 @mcp.tool()
 async def confirm_auto_apply(
     job_id: str,
+    cv_path: Optional[str] = None,
+    force: bool = False,
     ctx: Optional[Context] = None,
 ) -> dict[str, Any]:
     """Step 2: Confirm and execute job application submission.
+
+    Executes application submission through HybridApplicationDispatcher and records
+    an immutable audit record in the ApplicationLedger.
 
     Requires `auto_apply_job` to have been called first for this job_id.
 
     Args:
         job_id: Unique ID of the job listing previously previewed.
+        cv_path: Optional path to CV document overriding the previewed CV.
+        force: If True, bypasses non-duplicate guardrails (e.g. AUTO_APPLY_ENABLED, score, cap).
         ctx: FastMCP Context object.
 
     Returns:
-        dict: ToolResponse with submission status and details.
+        dict: ToolResponse with submission status, ledger entry ID, and details.
     """
     if job_id not in _pending_applications:
         return _response(
@@ -1140,29 +1218,70 @@ async def confirm_auto_apply(
         )
 
     try:
-        session, is_healthy = await _ensure_session(ctx)
-        if not is_healthy:
-            return _response(
-                success=False,
-                message="Browser session is unauthenticated. Please log in first.",
-                error_code="UNAUTHENTICATED",
+        preview_details = _pending_applications.pop(job_id)
+
+        cache = _get_cache(ctx)
+        cached_job = cache.get_by_id(job_id)
+        if cached_job is not None:
+            job = cached_job
+        else:
+            job_title = preview_details.get("job_title", f"Job {job_id}")
+            company = preview_details.get("company", "Unknown Company")
+            source = preview_details.get("source") or "hiremetech"
+            for prefix in ("comeet", "alljobs", "workday", "eightfold", "direct", "linkedin"):
+                if job_id.lower().startswith(f"{prefix}_"):
+                    source = prefix
+                    break
+            job = Job(
+                job_id=job_id,
+                title=job_title,
+                company=company,
+                source=source,
+                location=preview_details.get("location", "Israel"),
+                match_score=preview_details.get("match_score", 90.0),
             )
 
-        page = await session.get_page()
-        await browser_execute_application(page, job_id)
+        effective_cv_path = cv_path or preview_details.get("cv_path") or os.getenv("DEFAULT_CV_PATH")
+        profile = extract_candidate_profile(effective_cv_path)
 
-        preview_details = _pending_applications.pop(job_id)
+        dispatcher = _get_dispatcher(ctx)
+        result = await dispatcher.execute_application(
+            job=job,
+            profile=profile,
+            cv_path=effective_cv_path,
+            force=force,
+        )
+
+        is_success = bool(result.get("success", False))
+        if not is_success:
+            return _response(
+                success=False,
+                message=result.get("message") or f"Application execution failed for job '{job_id}'.",
+                error_code=result.get("error_code") or "APPLY_EXECUTION_ERROR",
+                data=result,
+            )
+
+        confirmation_id = (
+            result.get("confirmation_id")
+            or result.get("submission_id")
+            or result.get("application_id")
+            or f"SUB-{job_id}"
+        )
 
         return _response(
             success=True,
             message=(
                 f"Successfully submitted application for job '{job_id}' "
-                f"({preview_details.get('job_title', 'Position')} at {preview_details.get('company', 'Employer')})."
+                f"({job.title} at {job.company})."
             ),
             data={
                 "job_id": job_id,
                 "submitted": True,
+                "confirmation_id": confirmation_id,
+                "method": result.get("method"),
+                "status": result.get("status", "success"),
                 "application_details": preview_details,
+                "result": result,
             },
         )
 
@@ -1172,6 +1291,44 @@ async def confirm_auto_apply(
             success=False,
             message=f"Failed to submit application for job '{job_id}': {exc}",
             error_code="APPLY_EXECUTION_ERROR",
+        )
+
+
+@mcp.tool()
+async def get_application_history(
+    limit: int = 50,
+    status: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Retrieve historical job application submissions and outcomes from the persistent audit ledger.
+
+    Args:
+        limit: Maximum number of records to return (default 50).
+        status: Optional status filter ('success', 'failed', 'blocked', 'pending').
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse containing list of application audit entries.
+    """
+    try:
+        ledger = _get_ledger(ctx)
+        entries = ledger.list_applications(limit=limit, status=status)
+        entries_data = [entry.model_dump() for entry in entries]
+
+        return _response(
+            success=True,
+            message=f"Retrieved {len(entries_data)} application audit records from ledger.",
+            data={
+                "total": len(entries_data),
+                "applications": entries_data,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Error retrieving application history: %s", exc)
+        return _response(
+            success=False,
+            message=f"Failed to retrieve application history: {exc}",
+            error_code="LEDGER_ERROR",
         )
 
 

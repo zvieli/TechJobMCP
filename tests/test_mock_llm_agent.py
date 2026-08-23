@@ -1,7 +1,4 @@
-"""Unit and integration tests for MockLLMAgent, StepTrace, and PipelineResult."""
-
-from __future__ import annotations
-
+import os
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,6 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastmcp import Context
 
 from job_mcp.core.api_client import JobCache
+from job_mcp.core.application import (
+    ApplicationLedger,
+    HybridApplicationDispatcher,
+)
 from job_mcp.core.auth import SessionManager
 from job_mcp.main import _pending_applications
 from job_mcp.models.schemas import (
@@ -94,6 +95,8 @@ class TestMockLLMAgentCallTool(unittest.IsolatedAsyncioTestCase):
         self.registry = SourceRegistry()
         self.registry.register(HireMeTechSource(session_manager=self.session_mgr))
         self.aggregator = JobAggregator(registry=self.registry, cache=self.cache)
+        self.ledger = ApplicationLedger(db_path=":memory:")
+        self.dispatcher = HybridApplicationDispatcher(ledger=self.ledger, session_manager=self.session_mgr)
 
         self.ctx = MagicMock(spec=Context)
         self.ctx.lifespan_context = {
@@ -101,6 +104,8 @@ class TestMockLLMAgentCallTool(unittest.IsolatedAsyncioTestCase):
             "cache": self.cache,
             "registry": self.registry,
             "aggregator": self.aggregator,
+            "ledger": self.ledger,
+            "dispatcher": self.dispatcher,
         }
 
         self.sample_jobs = [
@@ -113,6 +118,7 @@ class TestMockLLMAgentCallTool(unittest.IsolatedAsyncioTestCase):
                 tech_stack=["Python", "FastAPI", "PostgreSQL"],
                 description="Expert in Python microservices and cloud scalability.",
                 salary_range="$140,000 - $160,000",
+                match_score=95.0,
             ),
             Job(
                 job_id="job-2",
@@ -184,28 +190,17 @@ class TestMockLLMAgentCallTool(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.cache.get_by_id("job-2"))
         self.assertEqual(len(self.agent.history), 1)
 
-    @patch("job_mcp.main.browser_preview_application", new_callable=AsyncMock)
-    @patch("job_mcp.main.browser_execute_application", new_callable=AsyncMock)
-    async def test_call_tool_auto_apply_flow(self, mock_exec, mock_preview):
+    async def test_call_tool_auto_apply_flow(self):
         """Test two-step auto apply calling preview and confirm."""
-        mock_preview.return_value = ApplicationPreview(
-            job_id="job-1",
-            job_title="Senior Python Backend Engineer",
-            company="PyTech",
-            application_method="1-Click Apply",
-            fields_to_submit={"name": "Candidate"},
-            warnings=[],
-        )
-        mock_exec.return_value = None
+        with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+            preview_resp = await self.agent.call_tool("auto_apply_job", arguments={"job_id": "job-1"})
+            self.assertTrue(preview_resp.get("success"))
 
-        preview_resp = await self.agent.call_tool("auto_apply_job", arguments={"job_id": "job-1"})
-        self.assertTrue(preview_resp.get("success"))
-
-        confirm_resp = await self.agent.call_tool("confirm_auto_apply", arguments={"job_id": "job-1"})
-        self.assertTrue(confirm_resp.get("success"))
-        self.assertEqual(len(self.agent.history), 2)
-        self.assertEqual(self.agent.history[0].tool_name, "auto_apply_job")
-        self.assertEqual(self.agent.history[1].tool_name, "confirm_auto_apply")
+            confirm_resp = await self.agent.call_tool("confirm_auto_apply", arguments={"job_id": "job-1"})
+            self.assertTrue(confirm_resp.get("success"))
+            self.assertEqual(len(self.agent.history), 2)
+            self.assertEqual(self.agent.history[0].tool_name, "auto_apply_job")
+            self.assertEqual(self.agent.history[1].tool_name, "confirm_auto_apply")
 
     async def test_call_tool_set_operation_mode(self):
         """Test calling set_operation_mode tool."""
@@ -267,6 +262,8 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
         self.registry = SourceRegistry()
         self.registry.register(HireMeTechSource(session_manager=self.session_mgr))
         self.aggregator = JobAggregator(registry=self.registry, cache=self.cache)
+        self.ledger = ApplicationLedger(db_path=":memory:")
+        self.dispatcher = HybridApplicationDispatcher(ledger=self.ledger, session_manager=self.session_mgr)
 
         self.ctx = MagicMock(spec=Context)
         self.ctx.lifespan_context = {
@@ -274,6 +271,8 @@ class TestMockLLMAgentRunPipeline(unittest.IsolatedAsyncioTestCase):
             "cache": self.cache,
             "registry": self.registry,
             "aggregator": self.aggregator,
+            "ledger": self.ledger,
+            "dispatcher": self.dispatcher,
         }
 
         # Setup 4 diverse jobs:

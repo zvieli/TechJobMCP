@@ -151,6 +151,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
             "delete_job",
             "auto_apply_job",
             "confirm_auto_apply",
+            "get_application_history",
             "calibrate_selectors",
             "set_operation_mode",
             "search_linkedin_jobs",
@@ -181,6 +182,8 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
             self.assertIn("aggregator", state)
             self.assertIn("tracker", state)
             self.assertIn("notifier", state)
+            self.assertIn("ledger", state)
+            self.assertIn("dispatcher", state)
             self.assertIsInstance(state["session"], SessionManager)
             self.assertIsInstance(state["cache"], JobCache)
             mock_init.assert_not_called()

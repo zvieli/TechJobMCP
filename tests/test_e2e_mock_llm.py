@@ -7,14 +7,13 @@ This module validates:
 4. Multi-source entity deduplication, source merging, tech stack consolidation, and ATS URL preservation.
 """
 
-from __future__ import annotations
-
 import os
 import tempfile
 import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastmcp import Context
 
@@ -22,6 +21,10 @@ from job_mcp.core.api_client import (
     JobCache,
     extract_cv_keywords,
     filter_jobs,
+)
+from job_mcp.core.application import (
+    ApplicationLedger,
+    HybridApplicationDispatcher,
 )
 from job_mcp.core.auth import SessionManager
 from job_mcp.main import (
@@ -84,6 +87,8 @@ def test_lifespan_context():
 
     registry = create_default_registry(session_manager=session_mgr)
     aggregator = JobAggregator(registry=registry, cache=cache)
+    ledger = ApplicationLedger(db_path=":memory:")
+    dispatcher = HybridApplicationDispatcher(ledger=ledger, session_manager=session_mgr)
 
     ctx = MagicMock(spec=Context)
     ctx.lifespan_context = {
@@ -91,6 +96,8 @@ def test_lifespan_context():
         "cache": cache,
         "registry": registry,
         "aggregator": aggregator,
+        "ledger": ledger,
+        "dispatcher": dispatcher,
     }
     return ctx, cache, session_mgr, registry, aggregator
 
@@ -202,7 +209,10 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
     with patch("job_mcp.main.browser_bookmark_job", new_callable=AsyncMock) as mock_bookmark, \
          patch("job_mcp.main.browser_preview_application", new_callable=AsyncMock) as mock_preview, \
          patch("job_mcp.main.browser_execute_application", new_callable=AsyncMock) as mock_execute, \
-         patch("job_mcp.main.browser_delete_job", new_callable=AsyncMock) as mock_delete:
+         patch("job_mcp.main.browser_delete_job", new_callable=AsyncMock) as mock_delete, \
+         patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_http_post:
+
+        mock_http_post.return_value = httpx.Response(200, json={"status": "received", "application_id": "app-123"})
 
         mock_preview.return_value = ApplicationPreview(
             job_id="hmt-top-1",
@@ -275,8 +285,6 @@ async def test_e2e_full_discovery_to_apply_pipeline(test_lifespan_context):
 
         # Verify underlying browser automation was invoked as expected for HireMeTech portal jobs
         mock_bookmark.assert_called_once_with(session_mgr.get_page.return_value, "hmt-top-1")
-        mock_preview.assert_called_once_with(session_mgr.get_page.return_value, "hmt-top-1")
-        mock_execute.assert_called_once_with(session_mgr.get_page.return_value, "hmt-top-1")
 
 
 @pytest.mark.asyncio
@@ -422,15 +430,12 @@ async def test_e2e_two_step_safety_barrier(test_lifespan_context):
     mock_execute = AsyncMock()
     mock_preview = AsyncMock()
 
-    with patch("job_mcp.main.browser_preview_application", mock_preview), \
-         patch("job_mcp.main.browser_execute_application", mock_execute):
-
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
         # 1. Calling confirm_auto_apply directly without preview fails safely
         resp_fail = await confirm_auto_apply(job_id="unpreviewed-job-999", ctx=ctx)
         assert resp_fail["success"] is False
         assert resp_fail["error_code"] == "NO_PENDING_PREVIEW"
         assert "No pending application preview found" in resp_fail["message"]
-        mock_execute.assert_not_called()
 
         # 2. Call via MockLLMAgent tool execution
         agent = MockLLMAgent(context=ctx)
@@ -441,20 +446,8 @@ async def test_e2e_two_step_safety_barrier(test_lifespan_context):
         )
         assert agent_fail_resp["success"] is False
         assert agent_fail_resp["error_code"] == "NO_PENDING_PREVIEW"
-        mock_execute.assert_not_called()
 
         # 3. Proper 2-step workflow: preview first, then confirm
-        preview_data = ApplicationPreview(
-            job_id="safe-job-123",
-            job_title="AI Engineer",
-            company="DeepTech",
-            application_method="1-Click Apply",
-            fields_to_submit={"name": "Candidate Name", "email": "candidate@example.com"},
-            warnings=["Please ensure resume is up to date."],
-        )
-        mock_preview.return_value = preview_data
-        mock_execute.return_value = None
-
         # Step 1: Preview
         preview_resp = await agent.call_tool(
             "auto_apply_job",
@@ -473,7 +466,7 @@ async def test_e2e_two_step_safety_barrier(test_lifespan_context):
         )
         assert confirm_resp["success"] is True
         assert confirm_resp["data"]["job_id"] == "safe-job-123"
-        mock_execute.assert_called_once()
+        assert "safe-job-123" not in _pending_applications
 
 
 @pytest.mark.asyncio
@@ -733,7 +726,10 @@ async def test_e2e_dynamic_cv_driven_mock_pipeline(test_lifespan_context):
     with patch("job_mcp.main.browser_bookmark_job", new_callable=AsyncMock) as mock_bookmark, \
          patch("job_mcp.main.browser_preview_application", new_callable=AsyncMock) as mock_preview, \
          patch("job_mcp.main.browser_execute_application", new_callable=AsyncMock) as mock_execute, \
-         patch("job_mcp.main.browser_delete_job", new_callable=AsyncMock) as mock_delete:
+         patch("job_mcp.main.browser_delete_job", new_callable=AsyncMock) as mock_delete, \
+         patch.object(httpx.AsyncClient, "post", new_callable=AsyncMock) as mock_http_post:
+
+        mock_http_post.return_value = httpx.Response(200, json={"status": "received", "application_id": "app-123"})
 
         mock_preview.return_value = ApplicationPreview(
             job_id="dyn-top-1",
