@@ -836,6 +836,52 @@ class TestApiClient(unittest.TestCase):
         finally:
             os.unlink(cv_path)
 
+    def test_filter_jobs_match_quality_requirements(self):
+        """Test match quality overhaul requirements."""
+        cv_text = "Software Engineer skilled in Python, LLM, RAG, Azure, SQL, Docker."
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(cv_text)
+            cv_path = f.name
+
+        try:
+            # 1. Multi-skill AI/Python developer job scores >= 90
+            job_ai = Job(
+                job_id="ai-python",
+                title="AI Engineer",
+                company="OpenAI",
+                location="Remote",
+                work_mode=WorkMode.REMOTE,
+                tech_stack=["Python", "LLM", "RAG", "Azure"],
+                description="Build AI agents using Python, LLMs, RAG on Azure.",
+            )
+            
+            # 2. Single-keyword administrative job in peripheral area scores <= 65
+            job_admin = Job(
+                job_id="admin-1",
+                title="מנתח מערכות ומנהל פרויקטים",
+                company="Gov",
+                location="Eilat",
+                work_mode=WorkMode.ONSITE,
+                tech_stack=["SQL"],
+                description="Manage IT projects and write simple SQL queries.",
+            )
+
+            prefs = JobPreferences(
+                tech_stack=["Python", "AI"],
+                cv_path=cv_path,
+            )
+
+            results = filter_jobs([job_ai, job_admin], prefs)
+            
+            res_ai = next(j for j in results if j.job_id == "ai-python")
+            res_admin = next(j for j in results if j.job_id == "admin-1")
+
+            self.assertGreaterEqual(res_ai.match_score, 90.0)
+            self.assertLessEqual(res_admin.match_score, 65.0)
+
+        finally:
+            os.unlink(cv_path)
+
     def test_extract_dynamic_cv_skills_section_based(self):
         """Test extract_dynamic_cv_skills with structured section-based skills text."""
         section_text = """
@@ -1416,8 +1462,8 @@ class TestDynamicFitScoring(unittest.TestCase):
         score_0 = calculate_match_score(Job(job_id="3", title="Dev", tech_stack=["Python", "FastAPI", "Docker", "PostgreSQL"], company="C"), prefs, profile=profile_0_of_4)
 
         self.assertGreaterEqual(score_4, 85.0)
-        self.assertGreaterEqual(score_2, 45.0)
-        self.assertLessEqual(score_2, 75.0)
+        self.assertGreaterEqual(score_2, 20.0)
+        self.assertLessEqual(score_2, 50.0)
         self.assertEqual(score_0, 0.0)
 
     def test_filter_jobs_dynamic_seniority_alignment(self):

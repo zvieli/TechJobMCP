@@ -56,40 +56,13 @@ class WorkdayCompany:
 
 # Curated directory of tech enterprises using Workday ATS
 WORKDAY_COMPANIES: dict[str, WorkdayCompany] = {
-    "microsoft": WorkdayCompany(
-        name="Microsoft",
-        wd_company="microsoft",
-        wd_version=2,
-        wd_suffix="External",
-        wd_locations=[],
-    ),
-    "cisco": WorkdayCompany(
-        name="Cisco",
-        wd_company="cisco",
-        wd_version=5,
-        wd_suffix="Cisco_Careers",
-        wd_locations=["3419053a4e7d1001f4eede2208d40000"],
-    ),
-    "philips": WorkdayCompany(
-        name="Philips",
-        wd_company="philips",
-        wd_version=3,
-        wd_suffix="jobs-and-careers",
-        wd_locations=["477471c84a9210a115773e51114810c4"],
-    ),
-    "qualcomm": WorkdayCompany(
-        name="Qualcomm",
-        wd_company="qualcomm",
-        wd_version=5,
-        wd_suffix="External",
-        wd_locations=[],
-    ),
-    "ptc": WorkdayCompany(
-        name="PTC",
-        wd_company="ptc",
+    "intel": WorkdayCompany(
+        name="Intel",
+        wd_company="intel",
         wd_version=1,
         wd_suffix="External",
         wd_locations=[],
+        enabled=True,
     ),
     "nvidia": WorkdayCompany(
         name="NVIDIA",
@@ -97,6 +70,63 @@ WORKDAY_COMPANIES: dict[str, WorkdayCompany] = {
         wd_version=5,
         wd_suffix="NVIDIAExternalCareerSite",
         wd_locations=["970bf8c909a701c749f87bdcd4008607"],
+        enabled=True,
+    ),
+    "cisco": WorkdayCompany(
+        name="Cisco",
+        wd_company="cisco",
+        wd_version=5,
+        wd_suffix="Cisco_Careers",
+        wd_locations=["3419053a4e7d1001f4eede2208d40000"],
+        enabled=True,
+    ),
+    "philips": WorkdayCompany(
+        name="Philips",
+        wd_company="philips",
+        wd_version=3,
+        wd_suffix="jobs-and-careers",
+        wd_locations=["477471c84a9210a115773e51114810c4"],
+        enabled=True,
+    ),
+    "dell": WorkdayCompany(
+        name="Dell",
+        wd_company="dell",
+        wd_version=1,
+        wd_suffix="External",
+        wd_locations=[],
+        enabled=True,
+    ),
+    "autodesk": WorkdayCompany(
+        name="Autodesk",
+        wd_company="autodesk",
+        wd_version=1,
+        wd_suffix="Ext",
+        wd_locations=[],
+        enabled=True,
+    ),
+    "microsoft": WorkdayCompany(
+        name="Microsoft",
+        wd_company="microsoft",
+        wd_version=2,
+        wd_suffix="External",
+        wd_locations=[],
+        enabled=False,  # Microsoft uses careers.microsoft.com custom portal
+    ),
+    "qualcomm": WorkdayCompany(
+        name="Qualcomm",
+        wd_company="qualcomm",
+        wd_version=5,
+        wd_suffix="External",
+        wd_locations=[],
+        enabled=False,  # Qualcomm Workday blocks direct automated POSTs
+    ),
+    "ptc": WorkdayCompany(
+        name="PTC",
+        wd_company="ptc",
+        wd_version=1,
+        wd_suffix="External",
+        wd_locations=[],
+        enabled=False,  # PTC endpoint changed
     ),
 }
 
@@ -350,7 +380,18 @@ class WorkdaySource(BaseJobSource):
 
         async with self.semaphore:
             cxs_url = company.get_cxs_url()
-            search_text = " ".join(preferences.keywords) if (preferences and preferences.keywords) else ""
+            
+            search_text = ""
+            if preferences and preferences.keywords:
+                if len(preferences.keywords) > 2:
+                    search_text = ""
+                else:
+                    joined = " ".join(preferences.keywords)
+                    if len(joined) <= 30:
+                        search_text = joined
+                    else:
+                        search_text = preferences.keywords[0][:30]
+
             applied_facets: dict[str, list[str]] = {}
             if company.wd_locations:
                 applied_facets["locations"] = list(company.wd_locations)

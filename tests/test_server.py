@@ -135,8 +135,8 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
 
     def test_server_metadata(self):
         """Test server name and instructions."""
-        self.assertEqual(mcp.name, "HireMeTech")
-        self.assertIn("HireMeTech MCP Server", mcp.instructions)
+        self.assertEqual(mcp.name, "TechJobMCP")
+        self.assertIn("Tech Job MCP Server", mcp.instructions)
 
     async def test_all_tools_registered(self):
         """Verify all required tools are properly registered on the FastMCP instance."""
@@ -157,6 +157,7 @@ class TestServerRegistration(unittest.IsolatedAsyncioTestCase):
             "get_linkedin_job_details",
             "notify_new_jobs",
             "test_notifier",
+            "run_job_scout",
         ]
 
         for expected in expected_tools:
@@ -737,8 +738,22 @@ class TestCliAndSetup(unittest.IsolatedAsyncioTestCase):
         }):
             server_main()
             mock_http_app.assert_called_once_with(transport="sse")
+    @patch("job_mcp.__main__.uvicorn.run")
+    @patch("job_mcp.__main__.mcp.http_app")
+    def test_main_https_alias(self, mock_http_app, mock_uvicorn_run):
+        """Test __main__.py maps https transport alias to http without error."""
+        mock_app = MagicMock()
+        mock_http_app.return_value = mock_app
+
+        with patch.dict(os.environ, {
+            "MCP_TRANSPORT": "https",
+            "MCP_HOST": "0.0.0.0",
+            "MCP_PORT": "8000",
+        }):
+            server_main()
+            mock_http_app.assert_called_once_with(transport="http")
             mock_app.add_middleware.assert_called_once_with(GeminiProbeMiddleware)
-            mock_uvicorn_run.assert_called_once_with(mock_app, host="0.0.0.0", port=9000)
+            mock_uvicorn_run.assert_called_once_with(mock_app, host="0.0.0.0", port=8000)
 
 
 class TestServerDynamicQueryPropagation(unittest.IsolatedAsyncioTestCase):

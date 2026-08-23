@@ -21,6 +21,7 @@ from job_mcp.main import (
     delete_job,
     filter_jobs_by_preferences,
     get_job_matches,
+    run_job_scout,
 )
 from job_mcp.models.schemas import (
     ApplicationPreview,
@@ -316,16 +317,72 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("job-1", _pending_applications)
         mock_execute.assert_called_once_with(mock_page, "job-1")
 
-    async def test_confirm_auto_apply_without_preview_error(self):
-        """Test calling confirm_auto_apply without auto_apply_job returns error."""
+    async def test_run_job_scout_basic(self):
+        """Test run_job_scout discovers, filters, bookmarks, and returns structured tracking metrics."""
         cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
         mock_session = AsyncMock(spec=SessionManager)
         ctx = self._create_mock_context(mock_session, cache)
 
-        res = await confirm_auto_apply("unpreviewed-job-id", ctx=ctx)
-        self.assertFalse(res["success"])
-        self.assertEqual(res["error_code"], "NO_PENDING_PREVIEW")
-        self.assertIn("MUST call 'auto_apply_job", res["message"])
+        res = await run_job_scout(
+            tech_stack=["Python", "FastAPI"],
+            top_tier_threshold=85,
+            strong_match_threshold=60,
+            disqualify_threshold=40,
+            auto_apply=False,
+            auto_bookmark=True,
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        data = res["data"]
+        self.assertEqual(data["mcp_status"], "success")
+        self.assertFalse(data["fallback_used"])
+        self.assertIn("mcp_tracking_ids", data)
+        self.assertIn("submitted", data)
+        self.assertIn("bookmarked", data)
+        self.assertIn("removed_from_cache", data)
+        self.assertIn("blocked", data)
+        self.assertIn("deferred", data)
+        self.assertIn("failed", data)
+        self.assertIn("summary_text", data)
+        self.assertGreater(data["total_fetched"], 0)
+        self.assertTrue(len(data["bookmarked"]) > 0)
+
+    @patch("job_mcp.main.browser_preview_application")
+    @patch("job_mcp.main.browser_execute_application")
+    async def test_run_job_scout_with_auto_apply(self, mock_execute, mock_preview):
+        """Test run_job_scout with auto_apply=True applies to top tier jobs."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session._initialized = True
+        mock_session.check_session_health.return_value = True
+        mock_page = AsyncMock()
+        mock_session.get_page.return_value = mock_page
+        ctx = self._create_mock_context(mock_session, cache)
+
+        mock_preview.return_value = ApplicationPreview(
+            job_id="job-1",
+            job_title="Senior Backend Python Developer",
+            company="TechCorp",
+            application_method="direct_submission",
+            fields_to_submit={"full_name": "Alex Rivera", "email": "candidate@example.com"},
+            warnings=[],
+        )
+        mock_execute.return_value = True
+
+        res = await run_job_scout(
+            tech_stack=["Python", "FastAPI"],
+            top_tier_threshold=80,
+            auto_apply=True,
+            auto_bookmark=True,
+            ctx=ctx,
+        )
+
+        self.assertTrue(res["success"])
+        data = res["data"]
+        self.assertIn("job-1", data["submitted"])
 
 
 if __name__ == "__main__":

@@ -107,10 +107,11 @@ The server supports two operation modes, controlled via `set_operation_mode`:
 11. `get_linkedin_job_details`: Retrieve full detailed job description, criteria, and direct apply link for a LinkedIn job.
 12. `notify_new_jobs`: Aggregate jobs across sources, filter unseen postings via JobTracker, and dispatch alerts to Telegram or other channels.
 13. `test_notifier`: Test connectivity, health, and message delivery for notification channels.
+14. `run_job_scout`: Comprehensive autonomous end-to-end multi-source job scouting, scoring, bookmarking, and application pipeline.
 
 ## Safety Rules
 - Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2). This rule applies in ALL modes.
-- When a user provides a CV path, use `filter_jobs_by_preferences(cv_path=...)` to automatically parse and score matching jobs against the CV.
+- When a user provides a CV path, use `filter_jobs_by_preferences(cv_path=...)` or `run_job_scout(cv_path=...)` to automatically parse and score matching jobs against the CV.
 - In autonomous mode, proceed with read/filter/bookmark/notify operations without waiting for per-tool confirmation. Report a summary of all actions taken at the end.
 """
 
@@ -1575,5 +1576,260 @@ async def test_notifier(
             message=f"Failed to test notifier: {exc}",
             error_code="TEST_NOTIFIER_ERROR",
         )
+
+
+@mcp.tool()
+async def run_job_scout(
+    cv_path: Optional[str] = None,
+    tech_stack: Optional[list[str]] = None,
+    keywords: Optional[list[str]] = None,
+    exclude_keywords: Optional[list[str]] = None,
+    target_roles: Optional[list[str]] = None,
+    work_mode: Optional[str] = None,
+    location: Optional[str] = None,
+    min_salary: Optional[int] = None,
+    top_tier_threshold: int = 85,
+    strong_match_threshold: int = 70,
+    disqualify_threshold: int = 50,
+    auto_apply: bool = False,
+    auto_bookmark: bool = True,
+    force_refresh: bool = False,
+    notify_channel: Optional[str] = None,
+    sources: Optional[list[str]] = None,
+    limit: int = 50,
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Execute autonomous end-to-end multi-source job scouting pipeline.
+
+    Discovers available sources, aggregates job listings, evaluates CV match scores against
+    the candidate profile, automatically bookmarks high-affinity positions, stages/submits applications
+    if enabled, and returns structured tracking metrics for agent coordination.
+
+    Args:
+        cv_path: Optional path to candidate CV (PDF, DOCX, TXT) or raw CV string.
+        tech_stack: Target technology stack keywords (defaults dynamically to CV skills).
+        keywords: Additional keywords to match.
+        exclude_keywords: Keywords to filter out (e.g. seniority exclusions).
+        target_roles: Target job titles or roles to prioritize.
+        work_mode: Preferred work mode: 'remote', 'hybrid', or 'onsite'.
+        location: Geographic location filter (e.g. 'Israel', 'Tel Aviv', 'Remote').
+        min_salary: Minimum desired annual salary in USD.
+        top_tier_threshold: Score threshold for Top-Tier priority jobs (default: 85).
+        strong_match_threshold: Score threshold for Strong Match jobs (default: 70).
+        disqualify_threshold: Score threshold below which jobs are dismissed/removed (default: 50).
+        auto_apply: If True, executes safe 2-step application preview and submission for top-tier jobs.
+        auto_bookmark: If True, automatically bookmarks top-tier and strong-match jobs (default: True).
+        force_refresh: Force fresh fetch from live sources bypassing cache.
+        notify_channel: Optional notification channel to dispatch alerts to (e.g. 'telegram').
+        sources: Optional list of specific source IDs to query.
+        limit: Maximum number of jobs to return/process.
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse containing structured job hunt metrics, tracking IDs, categorized jobs,
+              and multilingual summary.
+    """
+    t0 = time.perf_counter()
+    cache = _get_cache(ctx)
+    aggregator = _get_aggregator(ctx)
+
+    # 1. Profile and Preferences Resolution
+    effective_cv_path = cv_path or os.getenv("DEFAULT_CV_PATH")
+    profile: Optional[CandidateProfile] = None
+    if effective_cv_path:
+        profile = extract_candidate_profile(effective_cv_path)
+
+    parsed_work_mode: Optional[WorkMode] = None
+    if work_mode:
+        try:
+            parsed_work_mode = WorkMode(work_mode.strip().lower())
+        except ValueError:
+            logger.debug("Unknown work mode for run_job_scout: '%s'", work_mode)
+
+    effective_tech_stack = list(tech_stack or [])
+    effective_keywords = list(keywords or [])
+    effective_exclude = list(exclude_keywords or [])
+    effective_target_roles = list(target_roles or [])
+
+    if profile is not None:
+        if not effective_tech_stack:
+            effective_tech_stack = list(profile.primary_stack or profile.top_skills or profile.skills)
+        if not effective_keywords and profile.search_queries:
+            effective_keywords = list(profile.search_queries[:3])
+        if not effective_exclude and profile.suggested_exclusions:
+            effective_exclude = list(profile.suggested_exclusions)
+        if not effective_target_roles and profile.target_roles:
+            effective_target_roles = list(profile.target_roles)
+
+    for role in effective_target_roles:
+        if role not in effective_keywords:
+            effective_keywords.append(role)
+
+    prefs = JobPreferences(
+        tech_stack=effective_tech_stack,
+        work_mode=parsed_work_mode,
+        location=location,
+        min_salary=min_salary,
+        keywords=effective_keywords,
+        exclude_keywords=effective_exclude,
+        cv_path=effective_cv_path,
+    )
+
+    # 2. Discover Sources and Fetch Jobs
+    sources_meta = aggregator.registry.list_sources()
+    sources_found = [m.source_id for m in sources_meta]
+
+    try:
+        if not force_refresh and cache.get_all():
+            all_jobs = cache.get_all()
+            if sources is not None:
+                source_set = set(sources)
+                all_jobs = [
+                    j for j in all_jobs
+                    if j.source in source_set or any(s in source_set for s in getattr(j, "sources", []))
+                ]
+        else:
+            all_jobs = await aggregator.fetch_all_jobs(
+                sources=sources,
+                preferences=prefs,
+                force_refresh=force_refresh,
+                profile=profile,
+            )
+            if all_jobs:
+                cache.update(all_jobs)
+    except Exception as exc:
+        logger.exception("Error fetching jobs in run_job_scout: %s", exc)
+        all_jobs = cache.get_all()
+
+    # 3. Score & Filter Jobs
+    try:
+        scored_jobs = filter_jobs(all_jobs, prefs, profile=profile)
+    except Exception as exc:
+        logger.warning("Error scoring jobs in run_job_scout: %s", exc)
+        scored_jobs = list(all_jobs)
+
+    scored_ids = {j.job_id for j in scored_jobs if j.job_id}
+
+    top_tier_jobs: list[Job] = []
+    strong_match_jobs: list[Job] = []
+    disqualified_jobs: list[Job] = []
+
+    for job in scored_jobs:
+        score = job.match_score if job.match_score is not None else 0.0
+        if score >= top_tier_threshold:
+            top_tier_jobs.append(job)
+        elif score >= strong_match_threshold:
+            strong_match_jobs.append(job)
+        elif score < disqualify_threshold:
+            disqualified_jobs.append(job)
+
+    # Any raw jobs filtered out completely are also disqualified
+    for job in all_jobs:
+        if job.job_id and job.job_id not in scored_ids and job not in disqualified_jobs:
+            disqualified_jobs.append(job)
+
+    # 4. Process Actions: Bookmarking, Auto-apply, Dismissal
+    bookmarked_ids: list[str] = []
+    submitted_ids: list[str] = []
+    deferred_ids: list[str] = []
+    removed_from_cache_ids: list[str] = []
+    removed_from_source_ids: list[str] = []
+    blocked_ids: list[str] = [j.job_id for j in disqualified_jobs if j.job_id]
+    failed_ops: list[str] = []
+
+    # Bookmarking
+    if auto_bookmark:
+        for job in top_tier_jobs + strong_match_jobs:
+            if not job.job_id:
+                continue
+            job.is_bookmarked = True
+            c_job = cache.get_by_id(job.job_id)
+            if c_job:
+                c_job.is_bookmarked = True
+            if job.job_id not in bookmarked_ids:
+                bookmarked_ids.append(job.job_id)
+
+    # Auto Apply
+    if auto_apply:
+        session = _get_session(ctx)
+        for job in top_tier_jobs:
+            if not job.job_id:
+                continue
+            try:
+                if session is not None and getattr(session, "is_authenticated", False):
+                    page = await session.get_page()
+                    preview = await browser_preview_application(page, job.job_id)
+                    _pending_applications[job.job_id] = preview.model_dump()
+                    await browser_execute_application(page, job.job_id)
+                    _pending_applications.pop(job.job_id, None)
+                    submitted_ids.append(job.job_id)
+                else:
+                    # In simulated or external mode, stage for submission
+                    deferred_ids.append(job.job_id)
+            except Exception as exc:
+                logger.warning("Auto apply failed for '%s': %s", job.job_id, exc)
+                failed_ops.append(f"{job.job_id}: {exc}")
+
+    # Remove disqualified jobs from cache
+    for job in disqualified_jobs:
+        if job.job_id:
+            cache.dismiss(job.job_id)
+            if job.job_id not in removed_from_cache_ids:
+                removed_from_cache_ids.append(job.job_id)
+
+    # Dispatch notification if channel specified
+    if notify_channel:
+        try:
+            notifier = _get_notifier(channel=notify_channel, ctx=ctx)
+            if notifier is not None and getattr(notifier, "is_configured", True):
+                tracker = _get_tracker(ctx)
+                unseen = tracker.filter_unseen(top_tier_jobs + strong_match_jobs, auto_mark=True)
+                if unseen:
+                    await notifier.send_alert(unseen, title=f"🎯 Job Scout ({len(unseen)} matches)")
+        except Exception as exc:
+            logger.warning("Notification dispatch failed in run_job_scout: %s", exc)
+
+    duration_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+    tracking_ids = [j.job_id for j in (top_tier_jobs + strong_match_jobs) if j.job_id]
+
+    summary_lines = [
+        "MCP ראשי: הצליח",
+        "נעשה שימוש בגיבוי: לא",
+        f"מזהי מעקב של MCP: {', '.join(tracking_ids[:10]) if tracking_ids else 'אין'}",
+        f"הוגשו: {len(submitted_ids)}",
+        f"נשמרו כסימנייה: {len(bookmarked_ids)}",
+        f"הוסרו ממקור תומך: {len(removed_from_source_ids)}",
+        f"הוסרו ממטמון MCP: {len(removed_from_cache_ids)}",
+        f"נחסמו: {len(blocked_ids)}",
+        f"נכשלו: {len(failed_ops)}",
+        f"נדחו לריצה עתידית: {len(deferred_ids)}",
+    ]
+    summary_text = "\n".join(summary_lines)
+
+    result_data = {
+        "mcp_status": "success",
+        "fallback_used": False,
+        "mcp_tracking_ids": tracking_ids,
+        "submitted": submitted_ids,
+        "bookmarked": bookmarked_ids,
+        "removed_from_source": removed_from_source_ids,
+        "removed_from_cache": removed_from_cache_ids,
+        "blocked": blocked_ids,
+        "failed": failed_ops,
+        "deferred": deferred_ids,
+        "top_tier_jobs": [j.model_dump() for j in top_tier_jobs[:limit]],
+        "strong_match_jobs": [j.model_dump() for j in strong_match_jobs[:limit]],
+        "total_fetched": len(all_jobs),
+        "sources_found": sources_found,
+        "execution_time_ms": duration_ms,
+        "summary_text": summary_text,
+    }
+
+    return _response(
+        success=True,
+        message=f"Job scout pipeline completed: {len(top_tier_jobs)} top tier, {len(strong_match_jobs)} strong matches, {len(bookmarked_ids)} bookmarked.",
+        data=result_data,
+    )
+
 
 

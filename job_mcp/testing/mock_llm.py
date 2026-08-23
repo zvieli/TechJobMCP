@@ -20,6 +20,7 @@ from job_mcp.main import (
     filter_jobs_by_preferences,
     get_job_matches,
     list_job_sources,
+    run_job_scout,
     set_operation_mode,
 )
 from job_mcp.models.schemas import CandidateProfile
@@ -63,6 +64,7 @@ TOOL_DISPATCH: dict[str, Callable[..., Any]] = {
     "confirm_auto_apply": confirm_auto_apply,
     "set_operation_mode": set_operation_mode,
     "calibrate_selectors": calibrate_selectors,
+    "run_job_scout": run_job_scout,
 }
 
 

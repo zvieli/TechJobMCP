@@ -54,20 +54,7 @@ EIGHTFOLD_COMPANIES: dict[str, EightfoldCompany] = {
         domain="nvidia.com",
         locations=["Yokne'am Illit", "Tel Aviv", "Israel"],
         filter_distance="16",
-    ),
-    "intel": EightfoldCompany(
-        name="Intel",
-        hostname="intel.eightfold.ai",
-        domain="intel.com",
-        locations=["Israel", "Haifa", "Petach Tikva", "Jerusalem"],
-        filter_distance="16",
-    ),
-    "elbit_systems": EightfoldCompany(
-        name="Elbit Systems",
-        hostname="elbitsystems.eightfold.ai",
-        domain="elbitsystems.com",
-        locations=["Israel"],
-        filter_distance="16",
+        enabled=True,
     ),
     "micron": EightfoldCompany(
         name="Micron",
@@ -75,6 +62,7 @@ EIGHTFOLD_COMPANIES: dict[str, EightfoldCompany] = {
         domain="micron.com",
         locations=[],
         filter_distance="16",
+        enabled=True,
     ),
     "paypal": EightfoldCompany(
         name="PayPal",
@@ -82,6 +70,23 @@ EIGHTFOLD_COMPANIES: dict[str, EightfoldCompany] = {
         domain="paypal.com",
         locations=["Israel", "Tel Aviv"],
         filter_distance="16",
+        enabled=True,
+    ),
+    "intel": EightfoldCompany(
+        name="Intel",
+        hostname="intel.eightfold.ai",
+        domain="intel.com",
+        locations=["Israel", "Haifa", "Petach Tikva", "Jerusalem"],
+        filter_distance="16",
+        enabled=False,  # Intel careers use Workday (intel.wd1.myworkdayjobs.com)
+    ),
+    "elbit_systems": EightfoldCompany(
+        name="Elbit Systems",
+        hostname="elbitsystems.eightfold.ai",
+        domain="elbitsystems.com",
+        locations=["Israel"],
+        filter_distance="16",
+        enabled=False,  # Elbit Systems does not use Eightfold AI public PCSX
     ),
 }
 

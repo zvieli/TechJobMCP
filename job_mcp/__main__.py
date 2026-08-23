@@ -31,8 +31,10 @@ def main() -> None:
         port,
     )
 
-    if transport in ("http", "sse", "streamable-http"):
+    if transport in ("http", "https", "sse", "streamable-http"):
         http_transport = "sse" if transport == "sse" else "http"
+        if transport == "https":
+            logger.info("Transport 'https' detected; running internal HTTP listener for reverse proxy / tunnel.")
         app = mcp.http_app(transport=http_transport)
         app.add_middleware(GeminiProbeMiddleware)
         uvicorn.run(app, host=host, port=port)

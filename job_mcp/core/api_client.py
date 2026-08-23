@@ -1238,11 +1238,11 @@ def calculate_match_score(
         if s in all_matched_tokens or s in job_skills or re.search(r"(?<![a-zA-Z0-9_])" + re.escape(s) + r"(?![a-zA-Z0-9_])", job_full_text)
     ]
     if len(top_matches) >= 3:
-        a_top = 12.0
+        a_top = 35.0
     elif len(top_matches) == 2:
-        a_top = 8.0
+        a_top = 22.0
     elif len(top_matches) == 1:
-        a_top = 4.0
+        a_top = 10.0
     else:
         a_top = 0.0
 
@@ -1250,19 +1250,23 @@ def calculate_match_score(
     b_role = 0.0
     matched_target_role = None
     title_lower = job.title.lower()
-    for role in target_roles:
-        pattern = r"(?<![a-zA-Z0-9_])" + re.escape(role) + r"(?![a-zA-Z0-9_])"
-        if re.search(pattern, title_lower):
-            b_role = 8.0
-            matched_target_role = role
-            break
+    
+    is_admin_title = any(x in title_lower for x in ["מנתח מערכות", "מנהל פרויקטים", "data annotator", "qa", "project manager", "system analyst", "scrum master", "product manager", "help desk", "support"])
 
-    if b_role == 0.0 and explicit_keywords:
-        for kw in explicit_keywords:
-            pattern = r"(?<![a-zA-Z0-9_])" + re.escape(kw) + r"(?![a-zA-Z0-9_])"
+    if not is_admin_title:
+        for role in target_roles:
+            pattern = r"(?<![a-zA-Z0-9_])" + re.escape(role) + r"(?![a-zA-Z0-9_])"
             if re.search(pattern, title_lower):
-                b_role = 5.0
+                b_role = 15.0
+                matched_target_role = role
                 break
+
+        if b_role == 0.0 and explicit_keywords:
+            for kw in explicit_keywords:
+                pattern = r"(?<![a-zA-Z0-9_])" + re.escape(kw) + r"(?![a-zA-Z0-9_])"
+                if re.search(pattern, title_lower):
+                    b_role = 12.0
+                    break
 
     # 4. Explicit Tech Stack Alignment
     if explicit_tech:
@@ -1282,18 +1286,31 @@ def calculate_match_score(
         if has_cv_profile:
             kw_matched = _match_terms_in_job(explicit_keywords, job_full_text, job_tech_tokens)
             kw_cov = len(kw_matched) / len(explicit_keywords) if explicit_keywords else 1.0
-            if explicit_tech and explicit_keywords:
-                base_score = ((c_req * 0.5) + (tech_coverage * 0.3) + (kw_cov * 0.2)) * 65.0
-            elif explicit_tech:
-                base_score = ((c_req * 0.6) + (tech_coverage * 0.4)) * 65.0
+            
+            num_matched = len(all_matched_tokens)
+            if num_matched >= 4:
+                volume_score = 30.0
+            elif num_matched == 3:
+                volume_score = 22.0
+            elif num_matched == 2:
+                volume_score = 15.0
+            elif num_matched == 1:
+                volume_score = 8.0
             else:
-                base_score = c_req * 70.0
-            volume_bonus = min(15.0, len(all_matched_tokens) * 5.0)
-            raw_score = base_score + volume_bonus + a_top + b_role
+                volume_score = 0.0
+
+            if explicit_tech and explicit_keywords:
+                coverage_score = ((c_req * 0.5) + (tech_coverage * 0.3) + (kw_cov * 0.2)) * 20.0
+            elif explicit_tech:
+                coverage_score = ((c_req * 0.6) + (tech_coverage * 0.4)) * 20.0
+            else:
+                coverage_score = c_req * 20.0
+
+            raw_score = volume_score + coverage_score + a_top + b_role
             if (c_req >= 0.85 or (tech_coverage == 1.0 and len(all_matched_tokens) >= 3 and c_req >= 0.65)) and len(all_matched_tokens) >= 3:
                 raw_score = max(raw_score, 88.0)
             elif c_req >= 0.65 and len(all_matched_tokens) >= 3:
-                raw_score = max(raw_score, 72.0)
+                raw_score = max(raw_score, 75.0)
         else:
             # Pure explicit search (no CV)
             kw_matched = _match_terms_in_job(explicit_keywords, job_full_text, job_tech_tokens)
@@ -1318,8 +1335,16 @@ def calculate_match_score(
             for t in explicit_tech | profile_skills | explicit_keywords:
                 pattern = r"(?<![a-zA-Z0-9_])" + re.escape(t) + r"(?![a-zA-Z0-9_])"
                 if re.search(pattern, title_lower):
-                    raw_score = min(100.0, raw_score + 5.0)
+                    if not is_admin_title and has_cv_profile:
+                        raw_score += 5.0
                     break
+        
+        if is_admin_title:
+            raw_score = min(raw_score, 65.0)
+
+        if job.work_mode == WorkMode.ONSITE and "eilat" in job.location.lower():
+            if not prefs.location or "israel" in prefs.location.lower():
+                raw_score = min(raw_score, 60.0)
 
         score = round(max(0.0, min(100.0, raw_score)), 1)
 
