@@ -39,6 +39,7 @@ from job_mcp.core.discovery import (
     discover_card_selector,
     discover_child_selector,
 )
+from job_mcp.core.application import ApplicationLedger
 from job_mcp.core.llm import (
     LLMCache,
     LLMError,
@@ -49,6 +50,7 @@ from job_mcp.core.llm import (
 )
 
 __all__ = [
+
     "BASE_URL",
     "DASHBOARD_PATH",
     "LOGIN_PATH",
@@ -86,5 +88,7 @@ __all__ = [
     "LLMError",
     "RateLimitOrUnavailableError",
     "LLMProviderError",
+    "ApplicationLedger",
 ]
+
 

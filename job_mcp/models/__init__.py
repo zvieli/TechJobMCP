@@ -1,5 +1,10 @@
 """Models package for Tech Job  MCP server."""
 
+from job_mcp.models.ledger import (
+    ApplicationEntry,
+    ApplicationMethod,
+    ApplicationStatus,
+)
 from job_mcp.models.schemas import (
     ApplicationPreview,
     Job,
@@ -14,4 +19,8 @@ __all__ = [
     "JobPreferences",
     "ApplicationPreview",
     "ToolResponse",
+    "ApplicationStatus",
+    "ApplicationMethod",
+    "ApplicationEntry",
 ]
+
