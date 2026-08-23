@@ -11,6 +11,7 @@ import uuid
 
 import httpx
 
+from job_mcp.core.application.mapper import SemanticFormMapper
 from job_mcp.core.application.strategy import ApplicationStrategy
 from job_mcp.models.ledger import ApplicationMethod
 from job_mcp.models.schemas import ApplicationPreview, CandidateProfile, Job
@@ -27,15 +28,18 @@ class ApiPostStrategy(ApplicationStrategy):
         self,
         client: Optional[httpx.AsyncClient] = None,
         timeout: float = 30.0,
+        form_mapper: Optional[SemanticFormMapper] = None,
     ) -> None:
         """Initialize ApiPostStrategy.
 
         Args:
             client: Optional shared httpx.AsyncClient instance.
             timeout: HTTP request timeout in seconds.
+            form_mapper: Optional SemanticFormMapper instance for field resolution.
         """
         self._client = client
         self.timeout = timeout
+        self.form_mapper = form_mapper or SemanticFormMapper()
 
     async def preview(
         self,
@@ -59,6 +63,15 @@ class ApiPostStrategy(ApplicationStrategy):
             "company": job.company,
             "position": job.title,
             "source": job.source,
+            "applicant_name": await self.form_mapper.resolve_field(
+                "applicant_name", "Full Name", "text", profile=profile
+            ),
+            "applicant_email": await self.form_mapper.resolve_field(
+                "applicant_email", "Email Address", "email", profile=profile
+            ),
+            "work_authorization": await self.form_mapper.resolve_field(
+                "work_authorization", "Are you legally authorized to work in Israel?", "text", profile=profile
+            ),
             "skills": profile.skills or profile.primary_stack,
             "top_skills": profile.top_skills,
             "seniority_level": profile.seniority_level or job.seniority_level,
@@ -120,6 +133,15 @@ class ApiPostStrategy(ApplicationStrategy):
             "company": job.company,
             "title": job.title,
             "source": job.source,
+            "applicant_name": await self.form_mapper.resolve_field(
+                "applicant_name", "Full Name", "text", profile=profile
+            ),
+            "applicant_email": await self.form_mapper.resolve_field(
+                "applicant_email", "Email Address", "email", profile=profile
+            ),
+            "work_authorization": await self.form_mapper.resolve_field(
+                "work_authorization", "Are you legally authorized to work in Israel?", "text", profile=profile
+            ),
             "candidate_skills": profile.skills or profile.primary_stack,
             "seniority": profile.seniority_level or job.seniority_level,
             "applied_at": applied_at,

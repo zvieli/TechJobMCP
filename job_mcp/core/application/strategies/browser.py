@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 import uuid
 
+from job_mcp.core.application.mapper import SemanticFormMapper
 from job_mcp.core.application.strategy import ApplicationStrategy
 from job_mcp.models.ledger import ApplicationMethod
 from job_mcp.models.schemas import ApplicationPreview, CandidateProfile, Job
@@ -20,13 +21,19 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
 
     method = ApplicationMethod.BROWSER
 
-    def __init__(self, session_manager: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        session_manager: Optional[Any] = None,
+        form_mapper: Optional[SemanticFormMapper] = None,
+    ) -> None:
         """Initialize BrowserPlaywrightStrategy.
 
         Args:
             session_manager: Optional browser session manager or active browser context.
+            form_mapper: Optional SemanticFormMapper instance for field resolution.
         """
         self.session_manager = session_manager
+        self.form_mapper = form_mapper or SemanticFormMapper()
 
     async def preview(
         self,
@@ -59,9 +66,16 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                 logger.warning("Active browser preview failed, falling back to simulated DOM preview: %s", exc)
                 warnings.append(f"Active browser inspection failed ({exc}); using fallback inspection.")
 
+        resolved_name = await self.form_mapper.resolve_field(
+            "applicant_name", "Full Name", "text", profile=profile
+        )
+        resolved_email = await self.form_mapper.resolve_field(
+            "applicant_email", "Email Address", "email", profile=profile
+        )
+
         fields_to_submit = {
-            "applicant_name": {"type": "text", "required": True},
-            "applicant_email": {"type": "email", "required": True},
+            "applicant_name": {"type": "text", "required": True, "value": resolved_name},
+            "applicant_email": {"type": "email", "required": True, "value": resolved_email},
             "resume_upload": {"type": "file", "required": True},
             "target_position": {"type": "hidden", "value": job.title},
             "company": {"type": "hidden", "value": job.company},

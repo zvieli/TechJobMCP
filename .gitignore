@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.db
+application_ledger.db
+
 
 # Environments
 .venv/
