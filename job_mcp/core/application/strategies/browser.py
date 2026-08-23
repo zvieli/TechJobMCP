@@ -238,15 +238,20 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                         for sel in apply_selectors:
                             try:
                                 btn = page.locator(sel).first
-                                count = await btn.count()
+                                cnt_val = btn.count()
+                                count = await cnt_val if (hasattr(cnt_val, "__await__") or asyncio.iscoroutine(cnt_val)) else cnt_val
                                 if count > 0:
                                     vis = btn.is_visible()
-                                    if hasattr(vis, "__await__"):
+                                    if hasattr(vis, "__await__") or asyncio.iscoroutine(vis):
                                         vis = await vis
                                     if vis:
-                                        await btn.click()
+                                        click_res = btn.click()
+                                        if hasattr(click_res, "__await__") or asyncio.iscoroutine(click_res):
+                                            await click_res
                                         if hasattr(page, "wait_for_timeout"):
-                                            await page.wait_for_timeout(800)
+                                            tout_res = page.wait_for_timeout(800)
+                                            if hasattr(tout_res, "__await__") or asyncio.iscoroutine(tout_res):
+                                                await tout_res
                                         fields = await extract_form_schema(page)
                                         if fields:
                                             break
@@ -276,7 +281,9 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                                     continue
 
                                 locator = target_ctx.locator(f.selector)
-                                if await locator.count() == 0:
+                                cnt_res = locator.count()
+                                count = await cnt_res if (hasattr(cnt_res, "__await__") or asyncio.iscoroutine(cnt_res)) else cnt_res
+                                if count == 0:
                                     continue
 
                                 ftype = (f.field_type or "text").lower()
@@ -328,11 +335,17 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                     submit_clicked = False
                     if submit_info is not None:
                         submit_locator = submit_info.get_locator(page)
-                        if await submit_locator.count() > 0:
-                            await submit_locator.first.click()
+                        cnt_res = submit_locator.count()
+                        count = await cnt_res if (hasattr(cnt_res, "__await__") or asyncio.iscoroutine(cnt_res)) else cnt_res
+                        if count > 0:
+                            click_res = submit_locator.first.click()
+                            if hasattr(click_res, "__await__") or asyncio.iscoroutine(click_res):
+                                await click_res
                             submit_clicked = True
                             if hasattr(page, "wait_for_timeout"):
-                                await page.wait_for_timeout(1000)
+                                tout_res = page.wait_for_timeout(1000)
+                                if hasattr(tout_res, "__await__") or asyncio.iscoroutine(tout_res):
+                                    await tout_res
 
                     return {
                         "success": True,
