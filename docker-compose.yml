@@ -24,8 +24,22 @@ services:
       - APPLICATION_LEDGER_PATH=/app/data/application_ledger.db
       - LLM_CACHE_PATH=/app/data/llm_cache.db
       - JOB_TRACKER_PATH=/app/data/job_tracker.json
+      - OLLAMA_URL=http://ollama:11434/api/generate
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: techjob-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  ollama_data:
+
 
 
 
