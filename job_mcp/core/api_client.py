@@ -1338,6 +1338,11 @@ def calculate_match_score(
                     if not is_admin_title and has_cv_profile:
                         raw_score += 5.0
                     break
+                    
+        is_dev_role = any(x in title_lower for x in ["developer", "engineer", "software", "ai", "backend", "frontend", "full stack", "data engineer", "mlops"]) or matched_target_role
+        has_primary_match = any(s in all_matched_tokens for s in primary_skills)
+        if is_dev_role and has_primary_match:
+            raw_score = max(raw_score, 75.0)
         
         if is_admin_title:
             raw_score = min(raw_score, 65.0)
@@ -1505,7 +1510,14 @@ def filter_jobs(
             loc_pref = prefs.location.strip().lower()
             job_loc = job.location.lower()
             is_remote_job = job.work_mode == WorkMode.REMOTE or "remote" in job_loc
-            if loc_pref not in job_loc and loc_pref not in job_full_text:
+            
+            loc_matched = loc_pref in job_loc or loc_pref in job_full_text
+            if loc_pref == "israel" or "israel" in loc_pref:
+                israel_aliases = [", il", " il", "(il)", "- il", "il,", "isr", "ישראל", "tel aviv", "herzliya", "haifa", "petah tikva", "jerusalem", "rehovot", "netanya", "ra'anana", "ramat gan", "holon", "rishon lezion", "yokneam", "beer sheva", "karmiel", "azor"]
+                if any(alias in job_loc or alias in job_full_text for alias in israel_aliases):
+                    loc_matched = True
+
+            if not loc_matched:
                 if not (is_remote_job and "remote" in loc_pref):
                     continue
 

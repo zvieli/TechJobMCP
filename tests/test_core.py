@@ -437,6 +437,22 @@ class TestApiClient(unittest.TestCase):
         self.assertTrue(len(top_job.match_reasons) > 0)
         self.assertTrue(any("stack matched" in r.lower() for r in top_job.match_reasons))
 
+    def test_filter_jobs_israel_location_aliases(self):
+        """Test that country aliases for Israel locations pass the filter."""
+        jobs = [
+            Job(job_id="1", title="Dev", company="A", location="Petah Tikva, IL", tech_stack=["Python"]),
+            Job(job_id="2", title="Dev", company="B", location="karmiel, IL", tech_stack=["Python"]),
+            Job(job_id="3", title="Dev", company="C", location="Azor, IL", tech_stack=["Python"]),
+            Job(job_id="4", title="Dev", company="D", location="New York, NY", tech_stack=["Python"]),
+        ]
+        prefs = JobPreferences(location="Israel")
+        filtered = filter_jobs(jobs, prefs)
+        ids = [j.job_id for j in filtered]
+        self.assertIn("1", ids)
+        self.assertIn("2", ids)
+        self.assertIn("3", ids)
+        self.assertNotIn("4", ids)
+
     def test_job_schema_explainability_defaults_and_serialization(self):
         """Test Job schema defaults for new explainability fields and serialization."""
         job = Job(job_id="test-1", title="Backend Engineer", company="TestCo")

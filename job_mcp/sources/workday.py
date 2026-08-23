@@ -69,7 +69,7 @@ WORKDAY_COMPANIES: dict[str, WorkdayCompany] = {
         wd_company="nvidia",
         wd_version=5,
         wd_suffix="NVIDIAExternalCareerSite",
-        wd_locations=["970bf8c909a701c749f87bdcd4008607"],
+        wd_locations=[],
         enabled=True,
     ),
     "cisco": WorkdayCompany(
@@ -77,7 +77,7 @@ WORKDAY_COMPANIES: dict[str, WorkdayCompany] = {
         wd_company="cisco",
         wd_version=5,
         wd_suffix="Cisco_Careers",
-        wd_locations=["3419053a4e7d1001f4eede2208d40000"],
+        wd_locations=[],
         enabled=True,
     ),
     "philips": WorkdayCompany(
@@ -85,7 +85,7 @@ WORKDAY_COMPANIES: dict[str, WorkdayCompany] = {
         wd_company="philips",
         wd_version=3,
         wd_suffix="jobs-and-careers",
-        wd_locations=["477471c84a9210a115773e51114810c4"],
+        wd_locations=[],
         enabled=True,
     ),
     "dell": WorkdayCompany(
