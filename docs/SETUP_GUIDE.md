@@ -10,8 +10,8 @@ TechJobMCP is built to serve **any candidate profile** across all technical disc
 
 ### Supported Resume Formats
 Place your CV/resume in the project root directory or any accessible path:
-- **PDF**: `cv.pdf`, `resume.pdf`, `my_cv.pdf` (parsed via `pypdf`)
-- **Word Document**: `cv.docx`, `resume.docx` (parsed via `python-docx`)
+- **PDF**: `cv.pdf`, `resume.pdf`, `my_cv.pdf` (parsed via `pypdf` / `pymupdf`)
+- **Word Document**: `cv.docx`, `resume.docx` (parsed via built-in XML extractor)
 - **Plain Text**: `cv.txt`, `resume.txt`
 
 ### Setting up Environment Variables (`.env`)
@@ -33,6 +33,22 @@ CANDIDATE_EMAIL=your.email@example.com
 MCP_TRANSPORT=http
 MCP_HOST=0.0.0.0
 MCP_PORT=8000
+
+# Resilient Free-Tier LLM Gateway (for screening questions)
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-flash-lite-latest
+
+OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_MODEL=google/gemini-2.0-flash-lite-preview-02-05:free
+
+OLLAMA_URL=http://localhost:11434/api/generate
+OLLAMA_MODEL=llama3.2
+LLM_CACHE_PATH=llm_cache.db
+
+# Autonomous Application Safety Guardrails
+AUTO_APPLY_ENABLED=false
+MAX_DAILY_APPLICATIONS=10
+APPLICATION_LEDGER_PATH=application_ledger.db
 
 # Playwright Browser Automation
 BROWSER_HEADLESS=true
@@ -76,22 +92,22 @@ You can always pass explicit target roles or keyword overrides when invoking MCP
 
 ## 3. Running the Server
 
-### Option A: Using Docker Compose (Recommended for Tunneling & Remote Clients)
+### Option A: Using Docker Compose (Recommended)
 
-Docker runs the server on port 8000 inside an isolated container with Chromium and all dependencies pre-installed:
+Docker runs the server on port 8000 inside an isolated container with Chromium, Ollama, and all dependencies pre-installed:
 
 ```bash
 # Build and start container in detached mode
 docker compose up -d
 
 # View real-time logs
-docker compose logs -f hireme-mcp
+docker compose logs -f techjob-mcp
 
 # Stop container
 docker compose down
 ```
 
-### Option B: Running Locally with Python (`uv`)
+### Option B: Running Locally with Python (`uv` / virtualenv)
 
 If you want to run directly in your local terminal:
 
@@ -117,7 +133,7 @@ Once the server is running on port 8000, verify it locally:
 ```bash
 # Check health endpoint
 curl http://localhost:8000/health
-# Output: {"status": "ok", "service": "TechJobMCP", ...}
+# Output: {"status":"ok","server":"Tech Job MCP FastMCP Server"}
 
 # Check MCP endpoint
 curl -I http://localhost:8000/mcp
