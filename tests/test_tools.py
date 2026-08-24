@@ -30,6 +30,7 @@ from job_mcp.main import (
     delete_job,
     filter_jobs_by_preferences,
     get_job_matches,
+    mark_job_as_applied,
     run_job_scout,
 )
 from job_mcp.models.schemas import (
@@ -391,6 +392,70 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
                 data = res["data"]
                 self.assertIn("job-1", data["submitted"])
 
+    async def test_mark_job_as_applied_and_dismiss_cache(self):
+        """Test mark_job_as_applied writes to ledger and removes job from cache."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        ledger = ApplicationLedger(db_path=":memory:")
+
+        mock_ctx = MagicMock(spec=Context)
+        mock_ctx.lifespan_context = {"cache": cache, "ledger": ledger}
+
+        # Verify job is initially in cache
+        self.assertIsNotNone(cache.get_by_id("job-1"))
+        self.assertFalse(ledger.is_applied("job-1"))
+
+        res = await mark_job_as_applied(
+            job_id="job-1",
+            company="TechCorp",
+            job_title="Senior Backend Python Developer",
+            notes="Applied manually on company website",
+            ctx=mock_ctx,
+        )
+        self.assertTrue(res["success"])
+        self.assertTrue(ledger.is_applied("job-1"))
+        self.assertIsNone(cache.get_by_id("job-1"))
+        self.assertIn("job-1", cache.dismissed_ids)
+
+    async def test_run_job_scout_filters_already_applied(self):
+        """Test that run_job_scout skips jobs that have already been applied to."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update(self.mock_jobs)
+        ledger = ApplicationLedger(db_path=":memory:")
+        # Mark job-1 as applied in ledger
+        from job_mcp.models.ledger import ApplicationEntry, ApplicationStatus
+        ledger.record_application(
+            ApplicationEntry(
+                job_id="job-1",
+                company="TechCorp",
+                job_title="Senior Backend Python Developer",
+                method="browser",
+                status=ApplicationStatus.SUCCESS,
+            )
+        )
+
+        mock_session = AsyncMock(spec=SessionManager)
+        mock_session._initialized = True
+        mock_session.check_session_health.return_value = True
+        ctx = self._create_mock_context(mock_session, cache)
+        ctx.lifespan_context["ledger"] = ledger
+
+        res = await run_job_scout(
+            tech_stack=["Python", "FastAPI"],
+            top_tier_threshold=80,
+            auto_apply=False,
+            auto_bookmark=False,
+            ctx=ctx,
+        )
+        self.assertTrue(res["success"])
+        data = res["data"]
+        # job-1 should NOT appear in top_tier_jobs or strong_match_jobs
+        top_ids = [j["job_id"] for j in data["top_tier_jobs"]]
+        strong_ids = [j["job_id"] for j in data["strong_match_jobs"]]
+        self.assertNotIn("job-1", top_ids)
+        self.assertNotIn("job-1", strong_ids)
+        self.assertIn("job-1", data["blocked"])
+        self.assertIn("job-1", data["removed_from_cache"])
 
 
 if __name__ == "__main__":

@@ -172,29 +172,55 @@ class ApplicationLedger:
                 if self._mem_conn is None:
                     conn.close()
 
-    def is_applied(self, job_id: str) -> bool:
+    def is_applied(
+        self,
+        job_id: str,
+        company: Optional[str] = None,
+        job_title: Optional[str] = None,
+    ) -> bool:
         """Check if a job has already been successfully applied to.
 
         Args:
             job_id: The job identifier.
+            company: Optional company name for fallback matching.
+            job_title: Optional job title for fallback matching.
 
         Returns:
             True if a successful application exists for this job, False otherwise.
         """
-        if not job_id:
+        if not job_id and not (company and job_title):
             return False
 
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT COUNT(*) AS total FROM applications
-                    WHERE job_id = ? AND status = ?;
-                    """,
-                    (job_id, ApplicationStatus.SUCCESS.value),
-                )
+                if company and job_title and job_id:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS total FROM applications
+                        WHERE (job_id = ? OR (LOWER(company) = LOWER(?) AND LOWER(job_title) = LOWER(?)))
+                          AND status = ?;
+                        """,
+                        (job_id, company.strip(), job_title.strip(), ApplicationStatus.SUCCESS.value),
+                    )
+                elif company and job_title:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS total FROM applications
+                        WHERE LOWER(company) = LOWER(?) AND LOWER(job_title) = LOWER(?)
+                          AND status = ?;
+                        """,
+                        (company.strip(), job_title.strip(), ApplicationStatus.SUCCESS.value),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) AS total FROM applications
+                        WHERE job_id = ? AND status = ?;
+                        """,
+                        (job_id, ApplicationStatus.SUCCESS.value),
+                    )
                 row = cursor.fetchone()
                 return bool(row and row["total"] > 0)
             finally:

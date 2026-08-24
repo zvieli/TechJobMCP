@@ -37,6 +37,11 @@ from job_mcp.core.browser import (
     preview_application as browser_preview_application,
 )
 from job_mcp.core.discovery import calibrate_all_selectors
+from job_mcp.models.ledger import (
+    ApplicationEntry,
+    ApplicationMethod,
+    ApplicationStatus,
+)
 from job_mcp.models.schemas import (
     CandidateProfile,
     Job,
@@ -1341,6 +1346,65 @@ async def get_application_history(
 
 
 @mcp.tool()
+async def mark_job_as_applied(
+    job_id: str,
+    company: str = "",
+    job_title: str = "",
+    notes: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> dict[str, Any]:
+    """Manually record a job as applied in the persistent ledger and dismiss it from cache.
+
+    This ensures the job will never reappear in future job scout runs.
+
+    Args:
+        job_id: Job identifier (e.g., from job listings or 'manual_<id>').
+        company: Company name.
+        job_title: Position / Job title.
+        notes: Optional notes (e.g. 'Applied manually on company portal').
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse confirming the record was saved in the ledger and dismissed from cache.
+    """
+    try:
+        ledger = _get_ledger(ctx)
+        cache = _get_cache(ctx)
+
+        # If job is in cache, extract missing company/title
+        cached_job = cache.get_by_id(job_id)
+        if cached_job:
+            if not company:
+                company = cached_job.company
+            if not job_title:
+                job_title = cached_job.title
+
+        entry = ApplicationEntry(
+            job_id=job_id,
+            company=company or "Unknown",
+            job_title=job_title or "Unknown",
+            method=ApplicationMethod.BROWSER,
+            status=ApplicationStatus.SUCCESS,
+            notes=notes or "Manually marked as applied",
+        )
+        ledger.record_application(entry)
+        cache.dismiss(job_id)
+
+        return _response(
+            success=True,
+            message=f"Job '{job_id}' ({company} - {job_title}) marked as applied and dismissed from cache.",
+            data={"job_id": job_id, "company": company, "job_title": job_title},
+        )
+    except Exception as exc:
+        logger.exception("Error marking job as applied: %s", exc)
+        return _response(
+            success=False,
+            message=f"Failed to mark job as applied: {exc}",
+            error_code="LEDGER_ERROR",
+        )
+
+
+@mcp.tool()
 async def calibrate_selectors(
     force_recalibrate: bool = False,
     ctx: Optional[Context] = None,
@@ -1904,7 +1968,13 @@ async def run_job_scout(
     strong_match_jobs: list[Job] = []
     disqualified_jobs: list[Job] = []
 
+    ledger = _get_ledger(ctx)
     for job in scored_jobs:
+        # Check if already applied to prevent surfacing previously submitted jobs
+        if job.job_id and ledger.is_applied(job.job_id, company=job.company, job_title=job.title):
+            disqualified_jobs.append(job)
+            continue
+
         score = job.match_score if job.match_score is not None else 0.0
         if score >= top_tier_threshold:
             top_tier_jobs.append(job)

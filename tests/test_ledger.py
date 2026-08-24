@@ -232,6 +232,11 @@ def test_is_applied_guardrail(memory_ledger: ApplicationLedger):
     )
     memory_ledger.record_application(success_entry)
     assert memory_ledger.is_applied("job-success") is True
+    # Test company and job title matching
+    assert memory_ledger.is_applied("different-id", company="SuccessInc", job_title="Architect") is True
+    assert memory_ledger.is_applied("", company="SuccessInc", job_title="Architect") is True
+    assert memory_ledger.is_applied("", company="SuccessInc", job_title="OtherRole") is False
+    assert memory_ledger.is_applied("", company="OtherCo", job_title="Architect") is False
 
 
 def test_get_daily_count_across_dates_and_statuses(memory_ledger: ApplicationLedger):
