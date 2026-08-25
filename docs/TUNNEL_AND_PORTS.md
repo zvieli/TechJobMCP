@@ -6,7 +6,7 @@ We recommend **Cloudflare Tunnel (`cloudflared`)** for fast, zero-config, free H
 
 ---
 
-## 1. Download & Install `cloudflared`
+## 1. Download & Install `cloudflared` && Start the HTTPS Tunnel
 
 Run the following commands in your terminal:
 
@@ -16,20 +16,21 @@ curl -L --output cloudflared https://github.com/cloudflare/cloudflared/releases/
 
 # 2. Make it executable
 chmod +x cloudflared
+
+#Make sure your TechJobMCP server is already running locally on port 8000 (`docker compose up -d` or `uv run python -m job_mcp`).
+
+#Start the tunnel:
+./cloudflared tunnel --url http://localhost:8000
 ```
 
 *(For macOS: `brew install cloudflared`; for Windows: download `cloudflared-windows-amd64.exe`)*.
 
 ---
 
-## 2. Start the HTTPS Tunnel
 
-Make sure your TechJobMCP server is already running locally on port 8000 (`docker compose up -d` or `uv run python -m job_mcp`).
 
-Start the tunnel:
-```bash
-./cloudflared tunnel --url http://localhost:8000
-```
+
+
 
 `cloudflared` will generate a public HTTPS URL looking like:
 ```text

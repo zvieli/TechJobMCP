@@ -45,7 +45,7 @@ user-data/
 *.swo
 .venv
 lior_zvieli_cv.pdf
-logs.txt
+logs.md
 sparkchat.txt
 uv.lock
 diff.txt
