@@ -417,17 +417,17 @@ _BUTTON_EXTRACTOR_JS = """
 # ---------------------------------------------------------------------------
 
 _EXACT_SUBMIT_PATTERNS = re.compile(
-    r"^(submit(\s+application)?|apply(\s+now)?|send(\s+application)?|complete\s+application|submit\s+resume|finish(\s+application)?|confirm\s+application|confirm|send)$",
+    r"^(submit(\s+application)?|apply(\s+now)?|send(\s+application)?|complete\s+application|submit\s+resume|finish(\s+application)?|confirm\s+application|confirm|send|הגש|הגשת\s+מועמדות|הגש\s+מועמדות|שלח|שלח\s+מועמדות|שליחה|הגש\s+עכשיו)$",
     re.IGNORECASE,
 )
 
 _CONTAINS_SUBMIT_PATTERNS = re.compile(
-    r"\b(submit|apply|send\s+application|complete\s+application|submit\s+resume)\b",
+    r"\b(submit|apply|send\s+application|complete\s+application|submit\s+resume|הגש|הגשת\s+מועמדות|הגש\s+מועמדות|שלח|שלח\s+מועמדות|שליחה|הגש\s+עכשיו)\b",
     re.IGNORECASE,
 )
 
 _NEXT_STEP_PATTERNS = re.compile(
-    r"^(next(\s+step)?|continue|save\s+(&|and)\s+continue|proceed|review(\s+application)?|next\s+page)$",
+    r"^(next(\s+step)?|continue|save\s+(&|and)\s+continue|proceed|review(\s+application)?|next\s+page|הבא|המשך|שמור\s+והמשך)$",
     re.IGNORECASE,
 )
 

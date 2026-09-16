@@ -16,23 +16,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 FIRST_NAME_REGEX = re.compile(
-    r"^(first[_\s\-]*name|fname|given[_\s\-]*name|first)$|\b(first[_\s\-]*name|given[_\s\-]*name)\b",
+    r"^(first[_\s\-]*name|fname|given[_\s\-]*name|first|שם\s+פרטי)$|\b(first[_\s\-]*name|given[_\s\-]*name|שם\s+פרטי)\b",
     re.IGNORECASE,
 )
 LAST_NAME_REGEX = re.compile(
-    r"^(last[_\s\-]*name|lname|surname|family[_\s\-]*name|last)$|\b(last[_\s\-]*name|family[_\s\-]*name|surname)\b",
+    r"^(last[_\s\-]*name|lname|surname|family[_\s\-]*name|last|שם\s+משפחה)$|\b(last[_\s\-]*name|family[_\s\-]*name|surname|שם\s+משפחה)\b",
     re.IGNORECASE,
 )
 FULL_NAME_REGEX = re.compile(
-    r"^(full[_\s\-]*name|fullname|candidate[_\s\-]*name|applicant[_\s\-]*name|your[_\s\-]*name|name)$|\b(full[_\s\-]*name|candidate[_\s\-]*name|applicant[_\s\-]*name)\b",
+    r"^(full[_\s\-]*name|fullname|candidate[_\s\-]*name|applicant[_\s\-]*name|your[_\s\-]*name|name|שם\s+מלא|שם\s+המועמד|שם)$|\b(full[_\s\-]*name|candidate[_\s\-]*name|applicant[_\s\-]*name|שם\s+מלא|שם\s+המועמד|שם)\b",
     re.IGNORECASE,
 )
 EMAIL_REGEX = re.compile(
-    r"\b(e[_\s\-]*mail|email[_\s\-]*address|applicant[_\s\-]*email|primary[_\s\-]*email|mail)\b",
+    r"\b(e[_\s\-]*mail|email[_\s\-]*address|applicant[_\s\-]*email|primary[_\s\-]*email|mail|דוא[\"״]ל|אימייל|כתובת\s+מייל|מייל)\b",
     re.IGNORECASE,
 )
 PHONE_REGEX = re.compile(
-    r"\b(phone|mobile|cell|telephone|tel|phone[_\s\-]*number|mobile[_\s\-]*number|contact[_\s\-]*number)\b",
+    r"\b(phone|mobile|cell|telephone|tel|phone[_\s\-]*number|mobile[_\s\-]*number|contact[_\s\-]*number|טלפון\s+נייד|מספר\s+טלפון|טלפון|נייד|סלולרי)\b",
     re.IGNORECASE,
 )
 LINKEDIN_REGEX = re.compile(
@@ -48,7 +48,7 @@ PORTFOLIO_REGEX = re.compile(
     re.IGNORECASE,
 )
 LOCATION_REGEX = re.compile(
-    r"^(location|city|country|address|residence|current[_\s\-]*location|state|zip|postal[_\s\-]*code)$|\b(current[_\s\-]*location|current[_\s\-]*city|residence[_\s\-]*city|home[_\s\-]*address|postal[_\s\-]*code)\b|\b(location|city|country|address)\b",
+    r"^(location|city|country|address|residence|current[_\s\-]*location|state|zip|postal[_\s\-]*code|עיר\s+מגורים|מגורים|כתובת|עיר|יישוב)$|\b(current[_\s\-]*location|current[_\s\-]*city|residence[_\s\-]*city|home[_\s\-]*address|postal[_\s\-]*code|עיר\s+מגורים)\b|\b(location|city|country|address|עיר\s+מגורים|מגורים|כתובת|עיר|יישוב)\b",
     re.IGNORECASE,
 )
 TITLE_REGEX = re.compile(
@@ -60,7 +60,7 @@ COMPANY_REGEX = re.compile(
     re.IGNORECASE,
 )
 CV_REGEX = re.compile(
-    r"\b(resume|cv|resume[_\s\-]*file|cv[_\s\-]*file|resume[_\s\-]*path|cv[_\s\-]*path|upload[_\s\-]*resume|upload[_\s\-]*cv|attachment)\b",
+    r"\b(resume|cv|resume[_\s\-]*file|cv[_\s\-]*file|resume[_\s\-]*path|cv[_\s\-]*path|upload[_\s\-]*resume|upload[_\s\-]*cv|attachment|קובץ\s+קורות\s+חיים|קורות\s+חיים|צרף\s+קו[\"״]ח|צרף\s+קובץ|קו[\"״]ח)\b",
     re.IGNORECASE,
 )
 
@@ -73,7 +73,7 @@ SPONSORSHIP_REGEX = re.compile(
     re.IGNORECASE,
 )
 WORK_AUTH_REGEX = re.compile(
-    r"\b(authoriz(ed|ation)|legal(ly)?\s+work|eligible\s+to\s+work|right\s+to\s+work|work\s+permit|israel(i)?\s+citizen(ship)?|work\s+in\s+israel|permitted\s+to\s+work)\b",
+    r"\b(authoriz(ed|ation)|legal(ly)?\s+work|eligible\s+to\s+work|right\s+to\s+work|work\s+permit|israel(i)?\s+citizen(ship)?|work\s+in\s+israel|permitted\s+to\s+work|אזרחות\s+ישראלית|אישור\s+עבודה|מורשה\s+לעבוד\s+בישראל)\b",
     re.IGNORECASE,
 )
 RELOCATION_REGEX = re.compile(

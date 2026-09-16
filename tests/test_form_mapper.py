@@ -491,3 +491,116 @@ async def test_browser_playwright_strategy_integrates_mapper(
     assert fields["applicant_name"]["type"] == "text"
     assert fields["applicant_name"]["value"] != ""
     assert "@" in fields["applicant_email"]["value"]
+
+
+# ===========================================================================
+# 7. Hebrew Form Field Mapping (Zero-Cost Regex Heuristics)
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_hebrew_standard_form_fields(
+    mock_llm_gateway: MagicMock, sample_profile_dict: dict
+) -> None:
+    """Verify Hebrew form labels match standard candidate fields with zero LLM calls."""
+    mapper = SemanticFormMapper(llm_gateway=mock_llm_gateway)
+
+    test_cases = [
+        # Full name: שם מלא, שם המועמד, שם
+        ("field_1", "שם מלא", "text", sample_profile_dict["full_name"]),
+        ("field_2", "שם המועמד", "text", sample_profile_dict["full_name"]),
+        ("field_3", "שם", "text", sample_profile_dict["full_name"]),
+        # First name: שם פרטי
+        ("field_4", "שם פרטי", "text", sample_profile_dict["first_name"]),
+        # Last name: שם משפחה
+        ("field_5", "שם משפחה", "text", sample_profile_dict["last_name"]),
+        # Email: דוא"ל, אימייל, מייל, כתובת מייל
+        ("field_6", 'דוא"ל', "email", sample_profile_dict["email"]),
+        ("field_7", "אימייל", "email", sample_profile_dict["email"]),
+        ("field_8", "מייל", "email", sample_profile_dict["email"]),
+        ("field_9", "כתובת מייל", "email", sample_profile_dict["email"]),
+        # Phone: טלפון, נייד, טלפון נייד, מספר טלפון, סלולרי
+        ("field_10", "טלפון", "tel", sample_profile_dict["phone"]),
+        ("field_11", "נייד", "tel", sample_profile_dict["phone"]),
+        ("field_12", "טלפון נייד", "tel", sample_profile_dict["phone"]),
+        ("field_13", "מספר טלפון", "tel", sample_profile_dict["phone"]),
+        ("field_14", "סלולרי", "tel", sample_profile_dict["phone"]),
+        # CV: קורות חיים, קובץ קורות חיים, צרף קו"ח, צרף קובץ, קו"ח, קו״ח
+        ("field_15", "קורות חיים", "file", sample_profile_dict["cv_path"]),
+        ("field_16", "קובץ קורות חיים", "file", sample_profile_dict["cv_path"]),
+        ("field_17", 'צרף קו"ח', "file", sample_profile_dict["cv_path"]),
+        ("field_18", "צרף קובץ", "file", sample_profile_dict["cv_path"]),
+        ("field_19", 'קו"ח', "file", sample_profile_dict["cv_path"]),
+        ("field_20", "קו״ח", "file", sample_profile_dict["cv_path"]),
+        # Location: עיר מגורים, מגורים, כתובת, עיר, יישוב
+        ("field_21", "עיר מגורים", "text", sample_profile_dict["location"]),
+        ("field_22", "מגורים", "text", sample_profile_dict["location"]),
+        ("field_23", "כתובת", "text", sample_profile_dict["location"]),
+        ("field_24", "עיר", "text", sample_profile_dict["location"]),
+        ("field_25", "יישוב", "text", sample_profile_dict["location"]),
+    ]
+
+    for field_id, label, ftype, expected_val in test_cases:
+        res = await mapper.resolve_field(
+            field_id=field_id,
+            label=label,
+            field_type=ftype,
+            profile=sample_profile_dict,
+        )
+        assert res == expected_val, f"Failed resolving Hebrew label: {label} (field_id={field_id})"
+
+    mock_llm_gateway.ask_question.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hebrew_work_authorization(mock_llm_gateway: MagicMock) -> None:
+    """Verify Hebrew work authorization questions resolve deterministically without LLM."""
+    mapper = SemanticFormMapper(llm_gateway=mock_llm_gateway)
+
+    for phrase in ("אזרחות ישראלית", "אישור עבודה", "מורשה לעבוד בישראל"):
+        text_val = await mapper.resolve_field(
+            field_id="work_auth_heb",
+            label=f"האם יש לך {phrase}?",
+            field_type="text",
+        )
+        assert text_val == "Yes", f"Failed resolving Hebrew work auth text: {phrase}"
+
+        bool_val = await mapper.resolve_field(
+            field_id="work_auth_heb_cb",
+            label=phrase,
+            field_type="checkbox",
+        )
+        assert bool_val is True, f"Failed resolving Hebrew work auth checkbox: {phrase}"
+
+    mock_llm_gateway.ask_question.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hebrew_full_form_mapping(
+    mock_llm_gateway: MagicMock, sample_profile_dict: dict
+) -> None:
+    """Verify map_form_fields handles an entire Hebrew ATS application form."""
+    mapper = SemanticFormMapper(llm_gateway=mock_llm_gateway)
+
+    schema = [
+        {"id": "name_heb", "label": "שם מלא", "type": "text"},
+        {"id": "email_heb", "label": "כתובת מייל", "type": "email"},
+        {"id": "phone_heb", "label": "טלפון נייד", "type": "tel"},
+        {"id": "cv_heb", "label": "קובץ קורות חיים", "type": "file"},
+        {"id": "city_heb", "label": "עיר מגורים", "type": "text"},
+        {"id": "auth_heb", "label": "מורשה לעבוד בישראל", "type": "checkbox"},
+    ]
+
+    mapped = await mapper.map_form_fields(
+        fields_schema=schema,
+        profile=sample_profile_dict,
+    )
+
+    assert mapped["name_heb"] == "Lior Zvieli"
+    assert mapped["email_heb"] == "lior@example.com"
+    assert mapped["phone_heb"] == "+972-54-1234567"
+    assert mapped["cv_heb"] == "/home/lior/cv.pdf"
+    assert mapped["city_heb"] == "Tel Aviv, Israel"
+    assert mapped["auth_heb"] is True
+
+    mock_llm_gateway.ask_question.assert_not_called()
+

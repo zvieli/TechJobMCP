@@ -41,6 +41,34 @@ class TestDOMInspectorHeuristics(unittest.TestCase):
         score, action = _score_button_candidate({"text": "Sign in to apply", "button_type": "button"})
         self.assertLess(score, 0)
 
+    def test_score_button_candidate_hebrew_submit(self):
+        """Test deterministic scoring for Hebrew submit buttons."""
+        hebrew_submit_texts = [
+            "הגש",
+            "הגשת מועמדות",
+            "הגש מועמדות",
+            "שלח",
+            "שלח מועמדות",
+            "שליחה",
+            "הגש עכשיו",
+        ]
+        for txt in hebrew_submit_texts:
+            score, action = _score_button_candidate({"text": txt, "button_type": "submit"})
+            self.assertGreaterEqual(score, 80, f"Failed score threshold for Hebrew submit: {txt}")
+            self.assertEqual(action, "submit", f"Failed action_type for Hebrew submit: {txt}")
+
+    def test_score_button_candidate_hebrew_next_step(self):
+        """Test deterministic scoring for Hebrew next step buttons."""
+        hebrew_next_texts = [
+            "הבא",
+            "המשך",
+            "שמור והמשך",
+        ]
+        for txt in hebrew_next_texts:
+            score, action = _score_button_candidate({"text": txt, "button_type": "button"})
+            self.assertGreaterEqual(score, 60, f"Failed score threshold for Hebrew next step: {txt}")
+            self.assertEqual(action, "continue", f"Failed action_type for Hebrew next step: {txt}")
+
     def test_form_field_schema_serialization(self):
         """Test FormFieldSchema model dump."""
         field = FormFieldSchema(
@@ -437,3 +465,27 @@ class TestDOMInspectorAsync(unittest.IsolatedAsyncioTestCase):
 
         btn = await identify_submit_button(mock_page)
         self.assertIsNone(btn)
+
+    async def test_identify_submit_button_hebrew_html(self):
+        """Test identifying Hebrew submit and next-step buttons on a live page."""
+        html_content = """
+        <!DOCTYPE html>
+        <html dir="rtl" lang="he">
+        <body>
+            <form>
+                <label for="f_name">שם מלא</label>
+                <input type="text" id="f_name" name="name" />
+                <button type="button" id="btn_cancel">ביטול</button>
+                <button type="submit" id="btn_hebrew_submit">הגשת מועמדות</button>
+            </form>
+        </body>
+        </html>
+        """
+        await self.page.set_content(html_content)
+
+        btn = await identify_submit_button(self.page)
+        self.assertIsNotNone(btn)
+        self.assertEqual(btn.action_type, "submit")
+        self.assertEqual(btn.selector, "#btn_hebrew_submit")
+        self.assertIn("הגשת מועמדות", btn.text)
+
