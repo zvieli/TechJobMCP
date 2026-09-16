@@ -619,7 +619,7 @@ def _detect_cv_seniority(text: str) -> Optional[str]:
             return "Student"
     if re.search(r"\b(intern|internship)\b", header_chunk, re.IGNORECASE):
         return "Intern"
-    if re.search(r"\b(junior|entry[\s-]level|graduate)\b", header_chunk, re.IGNORECASE):
+    if re.search(r"\b(junior|entry[\s-]level|graduate\s+(?:developer|engineer|program|scheme))\b", header_chunk, re.IGNORECASE):
         return "Junior"
     if re.search(r"\b(principal|distinguished)\b", header_chunk, re.IGNORECASE):
         return "Principal"

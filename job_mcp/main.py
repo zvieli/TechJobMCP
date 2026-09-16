@@ -178,7 +178,22 @@ async def _warm_cache(
         if cache is not None:
             agg.cache = cache
 
-        jobs = await agg.fetch_all_jobs(force_refresh=True)
+        effective_cv_path = os.getenv("DEFAULT_CV_PATH")
+        prefs: Optional[JobPreferences] = None
+        profile: Optional[CandidateProfile] = None
+        if effective_cv_path and os.path.exists(effective_cv_path):
+            try:
+                profile = extract_candidate_profile(effective_cv_path)
+                prefs = JobPreferences(
+                    cv_path=effective_cv_path,
+                    tech_stack=list(profile.primary_stack or profile.skills)[:5],
+                    keywords=list(profile.search_queries or profile.target_roles)[:3] or ["AI Engineer", "LLM", "RAG"],
+                    location="Israel",
+                )
+            except Exception as exc:
+                logger.debug("Could not resolve profile for cache warmup: %s", exc)
+
+        jobs = await agg.fetch_all_jobs(preferences=prefs, profile=profile, force_refresh=True)
         if cache is not None and jobs:
             cache.update(jobs)
         logger.info("Cache warmup completed with %d jobs across sources.", len(jobs))
@@ -1934,8 +1949,22 @@ async def run_job_scout(
     sources_found = [m.source_id for m in sources_meta]
 
     try:
-        if not force_refresh and cache.get_all():
-            all_jobs = cache.get_all()
+        cached_jobs = cache.get_all() if not force_refresh else []
+        has_targeted_cache = False
+        if cached_jobs:
+            test_terms = [t.lower() for t in (effective_target_roles + effective_keywords)[:3] if t]
+            if not test_terms:
+                has_targeted_cache = True
+            else:
+                matches_in_cache = sum(
+                    1 for j in cached_jobs
+                    if any(t in f"{j.title} {j.description} {' '.join(j.tech_stack)}".lower() for t in test_terms)
+                )
+                if matches_in_cache >= 3:
+                    has_targeted_cache = True
+
+        if has_targeted_cache:
+            all_jobs = cached_jobs
             if sources is not None:
                 source_set = set(sources)
                 all_jobs = [
