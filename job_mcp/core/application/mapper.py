@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any, Optional, Sequence
 
@@ -131,9 +132,9 @@ class SemanticFormMapper:
     def _get_candidate_attribute(
         self, profile_data: dict[str, Any], attr: str, default: Any = ""
     ) -> Any:
-        """Retrieve candidate attribute with fallback aliases."""
+        """Retrieve candidate attribute with fallback aliases and environment variables."""
         if not profile_data:
-            return default
+            profile_data = {}
 
         if attr in profile_data and profile_data[attr]:
             return profile_data[attr]
@@ -144,6 +145,13 @@ class SemanticFormMapper:
                 return str(profile_data["name"]).split()[0]
             if "full_name" in profile_data and profile_data["full_name"]:
                 return str(profile_data["full_name"]).split()[0]
+            env_val = os.getenv("CANDIDATE_FIRST_NAME") or (
+                os.getenv("CANDIDATE_NAME", "").split()[0]
+                if os.getenv("CANDIDATE_NAME")
+                else None
+            )
+            if env_val:
+                return env_val
         elif attr == "last_name":
             if "name" in profile_data and profile_data["name"]:
                 parts = str(profile_data["name"]).split()
@@ -151,6 +159,13 @@ class SemanticFormMapper:
             if "full_name" in profile_data and profile_data["full_name"]:
                 parts = str(profile_data["full_name"]).split()
                 return parts[-1] if len(parts) > 1 else ""
+            env_val = os.getenv("CANDIDATE_LAST_NAME") or (
+                os.getenv("CANDIDATE_NAME", "").split()[-1]
+                if len(os.getenv("CANDIDATE_NAME", "").split()) > 1
+                else None
+            )
+            if env_val:
+                return env_val
         elif attr == "full_name":
             first = profile_data.get("first_name", "")
             last = profile_data.get("last_name", "")
@@ -158,6 +173,25 @@ class SemanticFormMapper:
                 return f"{first} {last}".strip()
             if "name" in profile_data and profile_data["name"]:
                 return profile_data["name"]
+            env_val = os.getenv("CANDIDATE_NAME")
+            if env_val:
+                return env_val
+        elif attr == "email":
+            env_val = os.getenv("CANDIDATE_EMAIL")
+            if env_val:
+                return env_val
+        elif attr == "phone":
+            env_val = os.getenv("CANDIDATE_PHONE")
+            if env_val:
+                return env_val
+        elif attr == "linkedin":
+            env_val = os.getenv("CANDIDATE_LINKEDIN")
+            if env_val:
+                return env_val
+        elif attr == "github":
+            env_val = os.getenv("CANDIDATE_GITHUB")
+            if env_val:
+                return env_val
         elif attr == "current_title":
             target_roles = profile_data.get("target_roles", [])
             if target_roles and isinstance(target_roles, list) and len(target_roles) > 0:
@@ -169,6 +203,9 @@ class SemanticFormMapper:
             for k in ("cv_path", "resume_path", "cv_file", "resume_file"):
                 if k in profile_data and profile_data[k]:
                     return profile_data[k]
+            env_val = os.getenv("DEFAULT_CV_PATH")
+            if env_val:
+                return env_val
 
         return profile_data.get(attr, default)
 

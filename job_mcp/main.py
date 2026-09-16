@@ -2010,7 +2010,8 @@ async def run_job_scout(
                 bookmarked_ids.append(job.job_id)
 
     # Auto Apply via HybridApplicationDispatcher
-    should_apply = auto_apply or (action_mode is not None and action_mode.strip().lower() == "autonomous")
+    effective_action_mode = action_mode or _operation_mode.value
+    should_apply = auto_apply or (effective_action_mode.strip().lower() == "autonomous")
     if should_apply:
         dispatcher = _get_dispatcher(ctx)
         target_jobs = [j for j in top_tier_jobs if j.job_id][:max_applications]
