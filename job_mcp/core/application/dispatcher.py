@@ -413,7 +413,13 @@ class HybridApplicationDispatcher:
                 method = fallback_strategy.method
 
             is_success = bool(result.get("success", False))
-            status = ApplicationStatus.SUCCESS if is_success else ApplicationStatus.FAILED
+            res_status = str(result.get("status", "")).lower()
+            if res_status == "blocked" or result.get("error_code") == "SSO_LOGIN_REQUIRED":
+                status = ApplicationStatus.BLOCKED
+            elif is_success:
+                status = ApplicationStatus.SUCCESS
+            else:
+                status = ApplicationStatus.FAILED
 
             self.ledger.record_application(
                 ApplicationEntry(
@@ -428,10 +434,14 @@ class HybridApplicationDispatcher:
                     response_payload=result.get("response") or result,
                     error_message=result.get("error") if not is_success else None,
                     notes=(
-                        "Autonomous application dispatch (browser fallback)"
-                        if method in (ApplicationMethod.BROWSER, ApplicationMethod.BROWSER.value)
-                        and strategy.method not in (ApplicationMethod.BROWSER, ApplicationMethod.BROWSER.value)
-                        else "Autonomous application dispatch"
+                        result.get("error")
+                        if status == ApplicationStatus.BLOCKED
+                        else (
+                            "Autonomous application dispatch (browser fallback)"
+                            if method in (ApplicationMethod.BROWSER, ApplicationMethod.BROWSER.value)
+                            and strategy.method not in (ApplicationMethod.BROWSER, ApplicationMethod.BROWSER.value)
+                            else "Autonomous application dispatch"
+                        )
                     ),
                 )
             )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import httpx
 
@@ -468,3 +468,160 @@ async def test_browser_playwright_strategy_apply():
     assert result["status"] == "success"
     assert "submission_id" in result
     assert "Playwright Browser Automation" in result["response"]["portal"]
+
+
+@pytest.mark.asyncio
+async def test_browser_playwright_strategy_sso_wall_detected():
+    """Verify BrowserPlaywrightStrategy detects Google/Apple SSO login wall and blocks with SSO_LOGIN_REQUIRED."""
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://accounts.google.com/v3/signin/identifier"
+    mock_page.title = AsyncMock(return_value="Sign in - Google Accounts")
+    mock_page.screenshot = AsyncMock()
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    job = Job(
+        job_id="direct_google_123",
+        title="Software Engineer, Search",
+        company="Google",
+        source="direct_tech",
+        apply_url="https://www.google.com/about/careers/applications/signin?jobId=123",
+    )
+    profile = CandidateProfile(skills=["Python", "Algorithms"])
+
+    strategy = BrowserPlaywrightStrategy(session_manager=mock_session_manager)
+    result = await strategy.apply(job, profile)
+
+    assert result["success"] is False
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "SSO_LOGIN_REQUIRED"
+    assert "Google" in result["error"]
+    assert result["screenshot_path"] is not None
+
+
+@pytest.mark.asyncio
+async def test_browser_playwright_strategy_apple_sso_wall_detected():
+    """Verify BrowserPlaywrightStrategy detects Apple ID authentication wall."""
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://idmsa.apple.com/IDMSWebAuth/signin"
+    mock_page.title = AsyncMock(return_value="Sign In - Apple")
+    mock_page.screenshot = AsyncMock()
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    job = Job(
+        job_id="direct_apple_456",
+        title="Full Stack Developer : Agentic AI",
+        company="Apple",
+        source="direct_tech",
+        apply_url="https://jobs.apple.com/en-il/details/200674773-1451/full-stack-developer-agentic-ai",
+    )
+    profile = CandidateProfile(skills=["Agentic AI", "Python"])
+
+    strategy = BrowserPlaywrightStrategy(session_manager=mock_session_manager)
+    result = await strategy.apply(job, profile)
+
+    assert result["success"] is False
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "SSO_LOGIN_REQUIRED"
+    assert "Apple ID" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_browser_playwright_strategy_no_submit_button_returns_incomplete():
+    """Verify BrowserPlaywrightStrategy returns incomplete if form fields exist but submit button not found."""
+    from job_mcp.core.application.dom_inspector import FormFieldSchema
+
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://jobs.example.com/apply"
+    mock_page.title = AsyncMock(return_value="Careers Application")
+    mock_page.screenshot = AsyncMock()
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    mock_loc = MagicMock()
+    mock_loc.count = AsyncMock(return_value=1)
+    mock_loc.fill = AsyncMock()
+    mock_page.locator = MagicMock(return_value=mock_loc)
+
+    job = Job(
+        job_id="custom_portal_789",
+        title="DevOps Engineer",
+        company="StartupTech",
+        source="browser",
+        apply_url="https://jobs.example.com/apply",
+    )
+    profile = CandidateProfile(skills=["Kubernetes", "AWS"])
+
+    strategy = BrowserPlaywrightStrategy(session_manager=mock_session_manager)
+
+    with (
+        patch("job_mcp.core.application.strategies.browser.extract_form_schema", AsyncMock(return_value=[
+            FormFieldSchema(field_id="email", name="email", field_type="email", selector="input[name='email']")
+        ])),
+        patch("job_mcp.core.application.strategies.browser.identify_submit_button", AsyncMock(return_value=None)),
+    ):
+        result = await strategy.apply(job, profile)
+
+    assert result["success"] is False
+    assert result["status"] == "incomplete"
+    assert result["error_code"] == "NO_SUBMIT_BUTTON"
+
+
+@pytest.mark.asyncio
+async def test_browser_playwright_strategy_success_with_receipt():
+    """Verify BrowserPlaywrightStrategy validates submit click and post-submission receipt."""
+    from job_mcp.core.application.dom_inspector import FormFieldSchema, SubmitButtonInfo
+
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://jobs.example.com/confirmation"
+    mock_page.title = AsyncMock(return_value="Application Received")
+    mock_page.content = AsyncMock(return_value="<div>Thank you for your application!</div>")
+    mock_page.screenshot = AsyncMock()
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    mock_btn_loc = MagicMock()
+    mock_btn_loc.count = AsyncMock(return_value=1)
+    mock_btn_loc.first = mock_btn_loc
+    mock_btn_loc.click = AsyncMock()
+
+    mock_field_loc = MagicMock()
+    mock_field_loc.count = AsyncMock(return_value=1)
+    mock_field_loc.fill = AsyncMock()
+
+    def locator_mock(selector):
+        if "submit" in selector:
+            return mock_btn_loc
+        return mock_field_loc
+
+    mock_page.locator = MagicMock(side_effect=locator_mock)
+
+    job = Job(
+        job_id="custom_portal_999",
+        title="Backend Engineer",
+        company="StartupTech",
+        source="browser",
+        apply_url="https://jobs.example.com/apply",
+    )
+    profile = CandidateProfile(skills=["Python"])
+
+    strategy = BrowserPlaywrightStrategy(session_manager=mock_session_manager)
+
+    mock_submit_info = SubmitButtonInfo(selector="button[type='submit']", text="Submit", confidence=0.95)
+
+    with (
+        patch("job_mcp.core.application.strategies.browser.extract_form_schema", AsyncMock(return_value=[
+            FormFieldSchema(field_id="email", name="email", field_type="email", selector="input[name='email']")
+        ])),
+        patch("job_mcp.core.application.strategies.browser.identify_submit_button", AsyncMock(return_value=mock_submit_info)),
+    ):
+        result = await strategy.apply(job, profile)
+
+    assert result["success"] is True
+    assert result["status"] == "success"
+    assert result["submit_clicked"] is True
+    assert result["confirmed"] is True
+    assert "confirmation" in result["receipt"].lower() or "thank you" in result["receipt"].lower()
+    assert result["screenshot_path"] is not None
+
