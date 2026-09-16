@@ -233,6 +233,81 @@ async def test_guardrail_match_score_threshold(
         assert res_force["success"] is True
 
 
+@pytest.mark.asyncio
+async def test_guardrail_match_score_fallback_when_none(
+    memory_ledger: ApplicationLedger,
+    sample_profile: CandidateProfile,
+):
+    """Verify that jobs with match_score=None calculate skill overlap fallback score instead of being blocked."""
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+        dispatcher = HybridApplicationDispatcher(ledger=memory_ledger, min_match_score=85.0)
+
+        # 1. Job with match_score=None but matching skills in title/tech_stack
+        matching_job = Job(
+            job_id="job_none_score_matching",
+            title="Senior Python Backend Developer",
+            company="Comeet Startup",
+            location="Tel Aviv, Israel",
+            tech_stack=["Python", "FastAPI"],
+            description="We are looking for a Python engineer with FastAPI expertise.",
+            match_score=None,
+            source="comeet",
+        )
+        # Direct _validate_match_score check
+        assert dispatcher._validate_match_score(matching_job, sample_profile) is True
+        assert matching_job.match_score is not None
+        assert matching_job.match_score >= 85.0
+
+        # Autonomous execution should succeed rather than being blocked
+        res = await dispatcher.execute_application(matching_job, sample_profile)
+        assert res["success"] is True
+        assert res["status"] == "success"
+
+        # Check ledger recorded the calculated fallback score
+        entry = memory_ledger.get_application(matching_job.job_id)
+        assert entry is not None
+        assert entry.match_score is not None
+        assert entry.match_score >= 85.0
+
+        # 2. Job with match_score=None but completely irrelevant skills should fail match validation
+        irrelevant_job = Job(
+            job_id="job_none_score_irrelevant",
+            title="Rust Systems Engineer",
+            company="Embedded Corp",
+            location="Tel Aviv, Israel",
+            tech_stack=["Rust", "C++"],
+            description="Developing bare metal firmware in Rust and C++.",
+            match_score=None,
+            source="comeet",
+        )
+        assert dispatcher._validate_match_score(irrelevant_job, sample_profile) is False
+
+        res_irrelevant = await dispatcher.execute_application(irrelevant_job, sample_profile)
+        assert res_irrelevant["success"] is False
+        assert res_irrelevant["error_code"] == "LOW_MATCH_SCORE"
+
+        # 3. Validating match score without profile should return False when score is None
+        unscored_job = Job(
+            job_id="job_no_profile",
+            title="Python Developer",
+            company="Startup",
+            location="Tel Aviv",
+            match_score=None,
+        )
+        assert dispatcher._validate_match_score(unscored_job, None) is False
+
+        # 4. Normalization of 0-1 scale to 0-100 scale updates job.match_score
+        scaled_job = Job(
+            job_id="job_scaled_0_1",
+            title="Engineer",
+            company="Startup",
+            location="Tel Aviv",
+            match_score=0.92,
+        )
+        assert dispatcher._validate_match_score(scaled_job) is True
+        assert scaled_job.match_score == 92.0
+
+
 # ---------------------------------------------------------
 # Guardrail 5: Location Constraint
 # ---------------------------------------------------------
@@ -294,6 +369,62 @@ async def test_guardrail_location_constraint(
             # force=True bypasses location constraint
             res_force = await dispatcher.execute_application(job, sample_profile, force=True)
             assert res_force["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_guardrail_location_constraint_hebrew_locations(
+    memory_ledger: ApplicationLedger,
+    sample_profile: CandidateProfile,
+):
+    """Verify Israeli cities and regions specified in Hebrew pass location validation."""
+    dispatcher = HybridApplicationDispatcher(ledger=memory_ledger, max_daily_applications=100)
+
+    hebrew_locations = [
+        "תל אביב - יפו",
+        "מרכז",
+        "חיפה",
+        "ישראל",
+        "הרצליה",
+        "רמת גן",
+        "פתח תקווה",
+        "פתח תקוה",
+        "גוש דן",
+        "שרון",
+        "באר שבע",
+        "ירושלים",
+        "נתניה",
+        "רעננה",
+        "חולון",
+        "ראשון לציון",
+        "רחובות",
+        "כפר סבא",
+        "הוד השרון",
+        "בת ים",
+        "מודיעין",
+        "גבעתיים",
+        "נס ציונה",
+        "בני ברק",
+    ]
+
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+        for idx, loc in enumerate(hebrew_locations):
+            job = Job(
+                job_id=f"job_hebrew_{idx}",
+                title="Fullstack Developer",
+                company="Israeli High-Tech",
+                location=loc,
+                work_mode=WorkMode.HYBRID,
+                match_score=90.0,
+                source="comeet",
+            )
+            # Direct _validate_location check
+            assert dispatcher._validate_location(job) is True, f"Failed _validate_location for Hebrew location: {loc}"
+
+            # Full execute_application check
+            res = await dispatcher.execute_application(job, sample_profile)
+            assert res["success"] is True, f"Failed execute_application for Hebrew location: {loc}"
+            assert res["status"] == "success"
+
 
 
 # ---------------------------------------------------------

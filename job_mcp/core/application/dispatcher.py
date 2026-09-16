@@ -15,11 +15,34 @@ from job_mcp.models.schemas import ApplicationPreview, CandidateProfile, Job, Wo
 
 logger = logging.getLogger(__name__)
 
-# Regex pattern matching Israel, Israeli cities/regions, IL country code, and Remote
+# Regex pattern matching Israel, Israeli cities/regions, IL country code, and Remote (both English and Hebrew)
 ISRAEL_LOCATION_PATTERN = re.compile(
-    r"\b(israel|il|remote|tel[\s\-_]*aviv|herzliya|haifa|jerusalem|rehovot|ramat[\s\-_]*gan|raanana|ra'anana|petah[\s\-_]*tikva|petach[\s\-_]*tikva|beer[\s\-_]*sheva|beersheba|yokneam|yokne'am|netanya|kfar[\s\-_]*saba|hod[\s\-_]*hasharon|holon|bat[\s\-_]*yam|modiin|modi'in|rishon[\s\-_]*lezion|givatayim|caesarea|ness[\s\-_]*ziona|bnei[\s\-_]*brak|glilot)\b",
+    r"\b("
+    r"israel|il|remote|tel[\s\-_]*aviv|herzliya|haifa|jerusalem|rehovot|ramat[\s\-_]*gan|"
+    r"raanana|ra'anana|petah[\s\-_]*tikva|petach[\s\-_]*tikva|beer[\s\-_]*sheva|beersheba|"
+    r"yokneam|yokne'am|netanya|kfar[\s\-_]*saba|hod[\s\-_]*hasharon|holon|bat[\s\-_]*yam|"
+    r"modiin|modi'in|rishon[\s\-_]*lezion|givatayim|caesarea|ness[\s\-_]*ziona|bnei[\s\-_]*brak|glilot|"
+    r"ישראל|מרכז|גוש[\s\-_]*דן|שרון|תל[\s\-_]*אביב(?:[\s\-_]*יפו)?|חיפה|ירושלים|רמת[\s\-_]*גן|"
+    r"הרצליה|פתח[\s\-_]*תקו+ה|רעננה|נתניה|באר[\s\-_]*שבע|חולון|ראשון[\s\-_]*לציון|רחובות|"
+    r"כפר[\s\-_]*סבא|הוד[\s\-_]*השרון|בת[\s\-_]*ים|מודיעין|גבעתיים|קיסריה|נס[\s\-_]*ציונה|בני[\s\-_]*ברק|גלילות|יקנעם"
+    r")\b",
     re.IGNORECASE,
 )
+
+
+def _matches_keyword(keyword: str, text: str) -> bool:
+    """Helper to check if a keyword or skill is mentioned in text with boundary awareness."""
+    kw = keyword.strip()
+    if not kw:
+        return False
+    if re.fullmatch(r"[\w\s\-]+", kw):
+        parts = [re.escape(p) for p in re.split(r"[\s\-]+", kw) if p]
+        pattern = r"\b" + r"[\s\-_]+".join(parts) + r"\b"
+        return bool(re.search(pattern, text, re.IGNORECASE))
+    else:
+        escaped = re.escape(kw)
+        pattern = r"(?:^|[^\w])" + escaped + r"(?:$|[^\w])"
+        return bool(re.search(pattern, text, re.IGNORECASE))
 
 
 class HybridApplicationDispatcher:
@@ -77,23 +100,72 @@ class HybridApplicationDispatcher:
 
         return bool(ISRAEL_LOCATION_PATTERN.search(location_str))
 
-    def _validate_match_score(self, job: Job) -> bool:
+    def _validate_match_score(
+        self,
+        job: Job,
+        profile: Optional[CandidateProfile] = None,
+    ) -> bool:
         """Validate that the job match score meets the minimum threshold.
+
+        Supports:
+        - Pre-computed match scores on 0-100 scale (score >= min_match_score).
+        - Pre-computed match scores on 0-1 scale (normalized to 0-100 scale).
+        - Fallback keyword overlap scoring between candidate profile and job listing
+          when job.match_score is None.
 
         Args:
             job: Target Job listing.
+            profile: Optional CandidateProfile with candidate skills and stack.
 
         Returns:
-            bool: True if score >= min_match_score (supports 0-100 and 0-1 scales).
+            bool: True if score >= min_match_score, False otherwise.
         """
-        if job.match_score is None:
+        if job.match_score is not None:
+            score = float(job.match_score)
+            if 0.0 < score <= 1.0:
+                score = score * 100.0
+                job.match_score = score
+            return score >= self.min_match_score
+
+        # When job.match_score is None, calculate fallback score using keyword overlap
+        if profile is None:
             return False
 
-        score = float(job.match_score)
-        if 0.0 < score <= 1.0:
-            score = score * 100.0
+        # Gather candidate skills from skills, primary_stack, and top_skills
+        candidate_skills: list[str] = []
+        seen = set()
+        for skill in (profile.skills + profile.primary_stack + profile.top_skills):
+            s = skill.strip()
+            if s and s.lower() not in seen:
+                seen.add(s.lower())
+                candidate_skills.append(s)
 
-        return score >= self.min_match_score
+        if not candidate_skills:
+            job.match_score = 0.0
+            return False
+
+        job_tech_tokens = {t.strip().lower() for t in job.tech_stack if t and t.strip()}
+        job_combined_text = f"{job.title} {job.description}".lower()
+
+        matched_skills: list[str] = []
+        for s in candidate_skills:
+            if s.lower() in job_tech_tokens or _matches_keyword(s, job_combined_text):
+                matched_skills.append(s)
+
+        if not matched_skills:
+            job.match_score = 0.0
+            return False
+
+        # If skills match, calculate fallback score (defaults to at least min_match_score)
+        # Scaled up to 100.0 based on overlap ratio
+        overlap_ratio = len(matched_skills) / len(candidate_skills)
+        fallback_score = self.min_match_score + (100.0 - self.min_match_score) * overlap_ratio
+        job.match_score = round(fallback_score, 1)
+
+        if not job.matched_skills:
+            job.matched_skills = matched_skills
+
+        return job.match_score >= self.min_match_score
 
     async def preview_application(
         self,
@@ -132,7 +204,7 @@ class HybridApplicationDispatcher:
                 f"Guardrail Alert: Daily application cap reached ({daily_count}/{self.max_daily_applications})."
             )
 
-        if not self._validate_match_score(job):
+        if not self._validate_match_score(job, profile=profile):
             preview.warnings.append(
                 f"Guardrail Alert: Match score ({job.match_score}) is below required threshold ({self.min_match_score})."
             )
@@ -253,7 +325,7 @@ class HybridApplicationDispatcher:
             }
 
         # 4. Match score threshold check
-        if not self._validate_match_score(job) and not force:
+        if not self._validate_match_score(job, profile=profile) and not force:
             msg = f"Job match score ({job.match_score}) is below the required threshold of {self.min_match_score}."
             logger.warning("Guardrail blocked job '%s': %s", job.job_id, msg)
             self.ledger.record_application(
