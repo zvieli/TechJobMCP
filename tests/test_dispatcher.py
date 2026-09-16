@@ -548,3 +548,131 @@ async def test_dispatcher_strategy_exception_handling(
             assert entry is not None
             assert entry.status == ApplicationStatus.FAILED.value
             assert "Fatal strategy crash" in (entry.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_fallback_from_api_to_browser_on_endpoint_not_an_api(
+    memory_ledger: ApplicationLedger,
+    sample_profile: CandidateProfile,
+):
+    """Verify dispatcher gracefully falls back from API to Browser when endpoint is not an API."""
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+        dispatcher = HybridApplicationDispatcher(ledger=memory_ledger)
+
+        api_job = Job(
+            job_id="job_fallback_api_1",
+            title="Senior Backend Engineer",
+            company="FallbackCorp",
+            location="Tel Aviv, Israel",
+            match_score=92.0,
+            source="direct_tech",
+            apply_url="https://fallbackcorp.com/careers/job1",
+        )
+
+        api_mock_return = {
+            "success": False,
+            "job_id": api_job.job_id,
+            "method": ApplicationMethod.API.value,
+            "status": "failed",
+            "error_code": "ENDPOINT_NOT_AN_API",
+            "error": "ATS endpoint returned HTML content (200): target appears to be a frontend web page",
+        }
+
+        browser_mock_return = {
+            "success": True,
+            "job_id": api_job.job_id,
+            "method": ApplicationMethod.BROWSER.value,
+            "status": "success",
+            "submission_id": "pw_sub_fallback123",
+            "response": {"message": "Submitted via browser fallback"},
+        }
+
+        with patch(
+            "job_mcp.core.application.strategies.api.ApiPostStrategy.apply",
+            new_callable=AsyncMock,
+        ) as mock_api_apply, patch(
+            "job_mcp.core.application.strategies.browser.BrowserPlaywrightStrategy.apply",
+            new_callable=AsyncMock,
+        ) as mock_browser_apply:
+            mock_api_apply.return_value = api_mock_return
+            mock_browser_apply.return_value = browser_mock_return
+
+            result = await dispatcher.execute_application(api_job, sample_profile)
+
+            mock_api_apply.assert_called_once()
+            mock_browser_apply.assert_called_once_with(api_job, sample_profile, cv_path=None)
+
+            assert result["success"] is True
+            assert result["method"] == ApplicationMethod.BROWSER.value
+            assert result["status"] == "success"
+
+            # Check ledger entry
+            entry = memory_ledger.get_application(api_job.job_id)
+            assert entry is not None
+            assert entry.status == ApplicationStatus.SUCCESS.value
+            assert entry.method == ApplicationMethod.BROWSER.value
+            assert "fallback" in (entry.notes or "").lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_code", ["HTTP_405", "HTTP_301"])
+async def test_dispatcher_fallback_from_api_to_browser_on_http_redirect_or_not_allowed(
+    memory_ledger: ApplicationLedger,
+    sample_profile: CandidateProfile,
+    error_code: str,
+):
+    """Verify dispatcher gracefully falls back from API to Browser on HTTP 405 or 301."""
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+        dispatcher = HybridApplicationDispatcher(ledger=memory_ledger)
+
+        api_job = Job(
+            job_id=f"job_fallback_{error_code.lower()}",
+            title="Cloud Architect",
+            company="HttpErrorCorp",
+            location="Remote",
+            work_mode=WorkMode.REMOTE,
+            match_score=89.0,
+            source="direct_tech",
+            apply_url="https://httperrorcorp.com/apply",
+        )
+
+        api_mock_return = {
+            "success": False,
+            "job_id": api_job.job_id,
+            "method": ApplicationMethod.API.value,
+            "status": "failed",
+            "error_code": error_code,
+            "error": f"ATS endpoint returned {error_code}",
+        }
+
+        browser_mock_return = {
+            "success": True,
+            "job_id": api_job.job_id,
+            "method": ApplicationMethod.BROWSER.value,
+            "status": "success",
+            "submission_id": f"pw_sub_{error_code}",
+            "response": {"message": "Success via browser"},
+        }
+
+        with patch(
+            "job_mcp.core.application.strategies.api.ApiPostStrategy.apply",
+            new_callable=AsyncMock,
+        ) as mock_api_apply, patch(
+            "job_mcp.core.application.strategies.browser.BrowserPlaywrightStrategy.apply",
+            new_callable=AsyncMock,
+        ) as mock_browser_apply:
+            mock_api_apply.return_value = api_mock_return
+            mock_browser_apply.return_value = browser_mock_return
+
+            result = await dispatcher.execute_application(api_job, sample_profile)
+
+            mock_api_apply.assert_called_once()
+            mock_browser_apply.assert_called_once_with(api_job, sample_profile, cv_path=None)
+
+            assert result["success"] is True
+            assert result["method"] == ApplicationMethod.BROWSER.value
+
+            entry = memory_ledger.get_application(api_job.job_id)
+            assert entry is not None
+            assert entry.status == ApplicationStatus.SUCCESS.value
+            assert entry.method == ApplicationMethod.BROWSER.value

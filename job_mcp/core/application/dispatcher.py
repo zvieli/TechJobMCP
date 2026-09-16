@@ -386,6 +386,32 @@ class HybridApplicationDispatcher:
 
         try:
             result = await strategy.apply(job, profile, cv_path=cv_path)
+
+            # Fallback routing: Graceful fallback from API to Browser automation when endpoint is not a REST API
+            error_code = result.get("error_code")
+            is_non_api_endpoint = (
+                error_code in ("ENDPOINT_NOT_AN_API", "HTTP_405", "HTTP_301")
+                or (
+                    method in (ApplicationMethod.API, ApplicationMethod.API.value)
+                    and (
+                        error_code in ("ENDPOINT_NOT_AN_API", "HTTP_405", "HTTP_301")
+                        or "not an api" in str(result.get("error", "")).lower()
+                    )
+                )
+            )
+            if not result.get("success", False) and is_non_api_endpoint:
+                logger.info(
+                    "API endpoint is not supported for job '%s' (%s). Attempting browser automation fallback.",
+                    job.job_id,
+                    error_code or "non-API endpoint",
+                )
+                from job_mcp.core.application.strategies.browser import BrowserPlaywrightStrategy
+
+                fallback_strategy = BrowserPlaywrightStrategy(session_manager=self.session_manager)
+                fallback_result = await fallback_strategy.apply(job, profile, cv_path=cv_path)
+                result = fallback_result
+                method = fallback_strategy.method
+
             is_success = bool(result.get("success", False))
             status = ApplicationStatus.SUCCESS if is_success else ApplicationStatus.FAILED
 
@@ -401,7 +427,12 @@ class HybridApplicationDispatcher:
                     cv_used=cv_path,
                     response_payload=result.get("response") or result,
                     error_message=result.get("error") if not is_success else None,
-                    notes="Autonomous application dispatch",
+                    notes=(
+                        "Autonomous application dispatch (browser fallback)"
+                        if method in (ApplicationMethod.BROWSER, ApplicationMethod.BROWSER.value)
+                        and strategy.method not in (ApplicationMethod.BROWSER, ApplicationMethod.BROWSER.value)
+                        else "Autonomous application dispatch"
+                    ),
                 )
             )
             return result

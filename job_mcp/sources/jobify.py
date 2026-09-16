@@ -27,10 +27,16 @@ JOBIFY_HEADERS: dict[str, str] = {
     "Accept-Language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 
-DEFAULT_JOBIFY_SEED_URLS: list[str] = [
+DEFAULT_SEED_URLS: list[str] = [
+    "https://jobify360.co.il/jobs",
+    "https://jobify360.co.il/myjob-roles/ai-engineer-5752190",
+    "https://jobify360.co.il/myjob-roles/software-engineer",
     "https://jobify360.co.il/jobs/191_302995-emp",
     "https://jobify360.co.il/jobs/8821105-aj",
 ]
+
+DEFAULT_JOBIFY_SEED_URLS: list[str] = DEFAULT_SEED_URLS
+
 
 _ASSET_EXTENSIONS: tuple[str, ...] = (
     ".png",

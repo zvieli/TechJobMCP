@@ -67,6 +67,7 @@ from job_mcp.sources.linkedin import (
 from job_mcp.sources.hiremetech import HireMeTechSource
 from job_mcp.sources.jobify import (
     DEFAULT_JOBIFY_SEED_URLS,
+    DEFAULT_SEED_URLS,
     JOBIFY_BASE_URL,
     JOBIFY_HEADERS,
     JobifySource,
@@ -270,6 +271,7 @@ __all__ = [
     "LINKEDIN_JOB_DETAIL_URL",
     "LINKEDIN_HEADERS",
     "JobifySource",
+    "DEFAULT_SEED_URLS",
     "DEFAULT_JOBIFY_SEED_URLS",
     "JOBIFY_BASE_URL",
     "JOBIFY_HEADERS",
