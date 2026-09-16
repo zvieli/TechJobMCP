@@ -105,19 +105,42 @@ class EasyApplyStrategy(ApplicationStrategy):
             try:
                 page = await self.session_manager.get_page()
                 if page is not None:
-                    # Look for Easy Apply button
-                    easy_btn = page.locator("button.jobs-apply-button, button:has-text('Easy Apply'), [aria-label*='Easy Apply']").first
+                    target_url = job.apply_url or job.url or ""
+                    current_url = getattr(page, "url", "")
+                    if target_url and current_url != target_url:
+                        await page.goto(target_url, wait_until="domcontentloaded")
+
+                    # Look for Easy Apply button (English & Hebrew)
+                    easy_apply_selectors = (
+                        "button.jobs-apply-button, "
+                        "button:has-text('Easy Apply'), "
+                        "[aria-label*='Easy Apply'], "
+                        "button:has-text('הגש מועמדות'), "
+                        "button:has-text('הגשה מהירה'), "
+                        "[aria-label*='הגש מועמדות'], "
+                        "[aria-label*='הגשה מהירה']"
+                    )
+                    easy_btn = page.locator(easy_apply_selectors).first
                     if await easy_btn.count() > 0 and await easy_btn.is_visible():
                         await easy_btn.click()
                         await page.wait_for_timeout(500)
 
-                        # Click submit in modal
-                        submit_btn = page.locator("button[aria-label*='Submit application'], button:has-text('Submit application')").first
+                        # Click submit in modal (English & Hebrew)
+                        submit_selectors = (
+                            "button[aria-label*='Submit application'], "
+                            "button:has-text('Submit application'), "
+                            "button[aria-label*='הגש מועמדות'], "
+                            "button:has-text('הגש מועמדות'), "
+                            "button[aria-label*='שלח'], "
+                            "button:has-text('שלח')"
+                        )
+                        submit_btn = page.locator(submit_selectors).first
                         if await submit_btn.count() > 0 and await submit_btn.is_visible():
                             await submit_btn.click()
                             await page.wait_for_timeout(1000)
             except Exception as exc:
                 logger.warning("Browser-assisted Easy Apply encountered exception: %s", exc)
+
 
         return {
             "success": True,

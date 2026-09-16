@@ -122,13 +122,10 @@ def get_application_strategy(
     if any(s in src for s in easy_apply_sources):
         return EasyApplyStrategy(session_manager=session_manager)
 
-    # 2. Direct API POST Sources
-    api_sources = ("hiremetech", "api_direct", "direct_tech", "api_post")
-    if any(s in src for s in api_sources) or src == "api":
-        return ApiPostStrategy()
-
-    # 3. Dynamic ATS Browser Strategy (Comeet, Workday, Eightfold, Greenhouse, Lever, AllJobs, Browser)
+    # 2. Dynamic ATS / Web sources (hiremetech, jobify, comeet, workday, eightfold, greenhouse, lever, alljobs, browser, playwright)
     browser_sources = (
+        "hiremetech",
+        "jobify",
         "comeet",
         "workday",
         "eightfold",
@@ -141,5 +138,12 @@ def get_application_strategy(
     if any(s in src for s in browser_sources):
         return BrowserPlaywrightStrategy(session_manager=session_manager)
 
+    # 3. Direct API POST Sources (strictly api, api_direct, api_post, direct_tech)
+    api_sources = ("api", "api_direct", "api_post", "direct_tech")
+    if src in api_sources or any(s in src for s in ("api_direct", "api_post", "direct_tech")):
+        return ApiPostStrategy()
+
+
     # Default fallback: Browser Playwright strategy
     return BrowserPlaywrightStrategy(session_manager=session_manager)
+

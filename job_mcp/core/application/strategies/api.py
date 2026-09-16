@@ -179,7 +179,56 @@ class ApiPostStrategy(ApplicationStrategy):
                             headers=headers,
                         )
 
-                if response.status_code in (200, 201, 202):
+                # Check for non-API endpoints: HTTP 405, HTTP 301, or HTML response
+                content_type = ""
+                if hasattr(response, "headers") and response.headers is not None:
+                    try:
+                        ct = response.headers.get("content-type")
+                        if isinstance(ct, str):
+                            content_type = ct.lower()
+                    except Exception:
+                        content_type = ""
+
+                if response.status_code == 405:
+                    return {
+                        "success": False,
+                        "job_id": job.job_id,
+                        "method": ApplicationMethod.API.value,
+                        "status": "failed",
+                        "error_code": "ENDPOINT_NOT_AN_API",
+                        "error": (
+                            f"ATS endpoint returned HTTP 405 Method Not Allowed: target '{endpoint}' "
+                            "is not an API endpoint (frontend web page detected)."
+                        ),
+                        "timestamp": applied_at,
+                    }
+                elif response.status_code == 301:
+                    return {
+                        "success": False,
+                        "job_id": job.job_id,
+                        "method": ApplicationMethod.API.value,
+                        "status": "failed",
+                        "error_code": "ENDPOINT_NOT_AN_API",
+                        "error": (
+                            f"ATS endpoint returned HTTP 301 Moved Permanently: target '{endpoint}' "
+                            "is not an API endpoint (redirect/web page detected)."
+                        ),
+                        "timestamp": applied_at,
+                    }
+                elif "text/html" in content_type:
+                    return {
+                        "success": False,
+                        "job_id": job.job_id,
+                        "method": ApplicationMethod.API.value,
+                        "status": "failed",
+                        "error_code": "ENDPOINT_NOT_AN_API",
+                        "error": (
+                            f"ATS endpoint returned HTML content ({response.status_code}): "
+                            f"target '{endpoint}' appears to be a frontend web page rather than a REST API endpoint."
+                        ),
+                        "timestamp": applied_at,
+                    }
+                elif response.status_code in (200, 201, 202):
                     try:
                         resp_data = response.json()
                     except Exception:

@@ -62,19 +62,21 @@ def dummy_cv_file(tmp_path: Path) -> Path:
 
 def test_get_application_strategy_routing():
     """Verify strategy routing maps ATS sources to appropriate Strategy instances."""
-    # Direct API Post sources
-    assert isinstance(get_application_strategy("hiremetech"), ApiPostStrategy)
+    # Direct API Post sources (strictly api, api_direct, api_post, direct_tech)
     assert isinstance(get_application_strategy("api_direct"), ApiPostStrategy)
-    assert isinstance(get_application_strategy("direct_tech"), ApiPostStrategy)
     assert isinstance(get_application_strategy("api_post"), ApiPostStrategy)
+    assert isinstance(get_application_strategy("direct_tech"), ApiPostStrategy)
     assert isinstance(get_application_strategy("api"), ApiPostStrategy)
+
 
     # Easy Apply sources
     assert isinstance(get_application_strategy("linkedin"), EasyApplyStrategy)
     assert isinstance(get_application_strategy("easy_apply"), EasyApplyStrategy)
     assert isinstance(get_application_strategy("quick_apply"), EasyApplyStrategy)
 
-    # Dynamic ATS Browser Playwright sources & fallback
+    # Dynamic ATS Browser Playwright sources & web platforms (including hiremetech, jobify)
+    assert isinstance(get_application_strategy("hiremetech"), BrowserPlaywrightStrategy)
+    assert isinstance(get_application_strategy("jobify"), BrowserPlaywrightStrategy)
     assert isinstance(get_application_strategy("comeet"), BrowserPlaywrightStrategy)
     assert isinstance(get_application_strategy("comeet_12345"), BrowserPlaywrightStrategy)
     assert isinstance(get_application_strategy("greenhouse"), BrowserPlaywrightStrategy)
@@ -85,6 +87,7 @@ def test_get_application_strategy_routing():
     assert isinstance(get_application_strategy("browser"), BrowserPlaywrightStrategy)
     assert isinstance(get_application_strategy("playwright"), BrowserPlaywrightStrategy)
     assert isinstance(get_application_strategy("custom_unknown_ats"), BrowserPlaywrightStrategy)
+
 
 
 def test_custom_strategy_registration():
@@ -218,6 +221,63 @@ async def test_api_post_strategy_apply_network_error(sample_job: Job, sample_pro
     assert "Connection failed" in result["error"]
 
 
+@pytest.mark.asyncio
+async def test_api_post_strategy_apply_http_405_method_not_allowed(sample_job: Job, sample_profile: CandidateProfile):
+    """Test ApiPostStrategy handles HTTP 405 by reporting endpoint is not an API."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 405
+    mock_resp.text = "Method Not Allowed"
+    mock_resp.headers = {"content-type": "text/html"}
+    mock_client.post.return_value = mock_resp
+
+    strategy = ApiPostStrategy(client=mock_client)
+    result = await strategy.apply(sample_job, sample_profile)
+
+    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert result["error_code"] in ("ENDPOINT_NOT_AN_API", "HTTP_405")
+    assert "not an API endpoint" in result["error"].lower() or "method not allowed" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_api_post_strategy_apply_http_301_redirect(sample_job: Job, sample_profile: CandidateProfile):
+    """Test ApiPostStrategy handles HTTP 301 by reporting endpoint is not an API."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 301
+    mock_resp.text = "Moved Permanently"
+    mock_resp.headers = {"content-type": "text/html"}
+    mock_client.post.return_value = mock_resp
+
+    strategy = ApiPostStrategy(client=mock_client)
+    result = await strategy.apply(sample_job, sample_profile)
+
+    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert result["error_code"] == "ENDPOINT_NOT_AN_API"
+    assert "not an API endpoint" in result["error"].lower() or "redirect" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_api_post_strategy_apply_html_content_type(sample_job: Job, sample_profile: CandidateProfile):
+    """Test ApiPostStrategy rejects HTTP 200 responses that are actually HTML web pages."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.text = "<!DOCTYPE html><html><body>Job Listing Page</body></html>"
+    mock_resp.headers = {"content-type": "text/html; charset=utf-8"}
+    mock_client.post.return_value = mock_resp
+
+    strategy = ApiPostStrategy(client=mock_client)
+    result = await strategy.apply(sample_job, sample_profile)
+
+    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert result["error_code"] == "ENDPOINT_NOT_AN_API"
+    assert "web page" in result["error"].lower() or "not an api" in result["error"].lower()
+
+
 # ---------------------------------------------------------
 # EasyApplyStrategy Tests
 # ---------------------------------------------------------
@@ -257,6 +317,115 @@ async def test_easy_apply_strategy_apply():
     assert result["status"] == "success"
     assert "submission_id" in result
     assert result["response"]["easy_apply_status"] == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_easy_apply_strategy_apply_navigates_to_job_url():
+    """Verify EasyApplyStrategy navigates to target URL when page is not on target URL."""
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://www.linkedin.com/feed/"
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    mock_locator = MagicMock()
+    mock_locator.count = AsyncMock(return_value=0)
+    mock_locator.first = mock_locator
+    mock_page.locator = MagicMock(return_value=mock_locator)
+
+    job = Job(
+        job_id="li-999",
+        title="Backend Developer",
+        company="InnoTech",
+        source="linkedin",
+        apply_url="https://www.linkedin.com/jobs/view/123456789/",
+    )
+    profile = CandidateProfile(skills=["Python"])
+
+    strategy = EasyApplyStrategy(session_manager=mock_session_manager)
+    result = await strategy.apply(job, profile)
+
+    assert result["success"] is True
+    mock_page.goto.assert_awaited_once_with(
+        "https://www.linkedin.com/jobs/view/123456789/",
+        wait_until="domcontentloaded",
+    )
+
+
+@pytest.mark.asyncio
+async def test_easy_apply_strategy_apply_skips_navigation_if_already_on_url():
+    """Verify EasyApplyStrategy does not call page.goto if page is already on target URL."""
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://www.linkedin.com/jobs/view/123456789/"
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    mock_locator = MagicMock()
+    mock_locator.count = AsyncMock(return_value=0)
+    mock_locator.first = mock_locator
+    mock_page.locator = MagicMock(return_value=mock_locator)
+
+    job = Job(
+        job_id="li-999",
+        title="Backend Developer",
+        company="InnoTech",
+        source="linkedin",
+        apply_url="https://www.linkedin.com/jobs/view/123456789/",
+    )
+    profile = CandidateProfile(skills=["Python"])
+
+    strategy = EasyApplyStrategy(session_manager=mock_session_manager)
+    result = await strategy.apply(job, profile)
+
+    assert result["success"] is True
+    mock_page.goto.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_easy_apply_strategy_hebrew_buttons():
+    """Verify EasyApplyStrategy queries and clicks Hebrew apply buttons."""
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://www.jobify.co.il/jobs/456"
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    mock_apply_btn = AsyncMock()
+    mock_apply_btn.count = AsyncMock(return_value=1)
+    mock_apply_btn.is_visible = AsyncMock(return_value=True)
+
+    mock_submit_btn = AsyncMock()
+    mock_submit_btn.count = AsyncMock(return_value=1)
+    mock_submit_btn.is_visible = AsyncMock(return_value=True)
+
+    def locator_side_effect(selector):
+        loc = MagicMock()
+        # Distinguish between Easy Apply button and modal submit button
+        if "הגשה מהירה" in selector or "Easy Apply" in selector:
+            loc.first = mock_apply_btn
+        elif "שלח" in selector or "Submit application" in selector:
+            loc.first = mock_submit_btn
+        else:
+            loc.first = mock_apply_btn
+        return loc
+
+    mock_page.locator = MagicMock(side_effect=locator_side_effect)
+
+
+    job = Job(
+        job_id="jobify-456",
+        title="Fullstack Developer",
+        company="StartupIL",
+        source="jobify",
+        url="https://www.jobify.co.il/jobs/456",
+    )
+    profile = CandidateProfile(skills=["React", "Node"])
+
+    strategy = EasyApplyStrategy(session_manager=mock_session_manager)
+    result = await strategy.apply(job, profile)
+
+    assert result["success"] is True
+    mock_apply_btn.click.assert_awaited_once()
+    mock_submit_btn.click.assert_awaited_once()
+
 
 
 # ---------------------------------------------------------
