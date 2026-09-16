@@ -65,6 +65,15 @@ from job_mcp.sources.linkedin import (
     search_linkedin_jobs_api,
 )
 from job_mcp.sources.hiremetech import HireMeTechSource
+from job_mcp.sources.jobify import (
+    DEFAULT_JOBIFY_SEED_URLS,
+    JOBIFY_BASE_URL,
+    JOBIFY_HEADERS,
+    JobifySource,
+    extract_jsonld_job_postings,
+    extract_related_job_urls,
+    parse_jobify_position,
+)
 from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
 
 
@@ -162,11 +171,12 @@ def create_default_registry(
     enable_eightfold: Optional[bool] = None,
     enable_direct_tech: Optional[bool] = None,
     enable_linkedin: Optional[bool] = None,
+    enable_jobify: Optional[bool] = None,
 ) -> SourceRegistry:
     """Create and return a SourceRegistry pre-populated with standard job sources.
 
     By default, all enterprise sources (HireMeTech, Comeet, Workday, Eightfold AI,
-    Direct Tech, and LinkedIn) are enabled out-of-the-box.
+    Direct Tech, LinkedIn, and Jobify) are enabled out-of-the-box.
     AllJobs is disabled by default and can be enabled via ENABLE_ALLJOBS=true.
 
     Args:
@@ -176,6 +186,7 @@ def create_default_registry(
         enable_eightfold: Explicitly enable/disable EightfoldAISource. Defaults to ENABLE_EIGHTFOLD env var (default: True).
         enable_direct_tech: Explicitly enable/disable DirectTechSource. Defaults to ENABLE_DIRECT_TECH env var (default: True).
         enable_linkedin: Explicitly enable/disable LinkedInSource. Defaults to ENABLE_LINKEDIN env var (default: True).
+        enable_jobify: Explicitly enable/disable JobifySource. Defaults to ENABLE_JOBIFY env var (default: True).
 
     Returns:
         SourceRegistry: Populated registry instance.
@@ -204,6 +215,9 @@ def create_default_registry(
 
     if _is_enabled("ENABLE_LINKEDIN", enable_linkedin, default_enabled=True):
         reg.register(LinkedInSource(session_manager=session_manager))
+
+    if _is_enabled("ENABLE_JOBIFY", enable_jobify, default_enabled=True):
+        reg.register(JobifySource())
     return reg
 
 
@@ -255,6 +269,13 @@ __all__ = [
     "LINKEDIN_SEARCH_API_URL",
     "LINKEDIN_JOB_DETAIL_URL",
     "LINKEDIN_HEADERS",
+    "JobifySource",
+    "DEFAULT_JOBIFY_SEED_URLS",
+    "JOBIFY_BASE_URL",
+    "JOBIFY_HEADERS",
+    "parse_jobify_position",
+    "extract_jsonld_job_postings",
+    "extract_related_job_urls",
     # Registry & Aggregator
     "SourceRegistry",
     "create_default_registry",

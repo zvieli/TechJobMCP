@@ -424,13 +424,14 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.delenv("ENABLE_ALLJOBS", raising=False)
         reg = create_default_registry()
-        assert len(reg) == 6
+        assert len(reg) == 7
         assert "hiremetech" in reg
         assert "comeet" in reg
         assert "workday" in reg
         assert "eightfold" in reg
         assert "direct_tech" in reg
         assert "linkedin" in reg
+        assert "jobify" in reg
         assert "alljobs" not in reg
 
     @pytest.mark.parametrize("env_val", ["true", "1", "yes", "TRUE", "True"])
@@ -439,13 +440,14 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
         reg = create_default_registry()
-        assert len(reg) == 7
+        assert len(reg) == 8
         assert "hiremetech" in reg
         assert "comeet" in reg
         assert "workday" in reg
         assert "eightfold" in reg
         assert "direct_tech" in reg
         assert "linkedin" in reg
+        assert "jobify" in reg
         assert "alljobs" in reg
 
     @pytest.mark.parametrize("env_val", ["false", "0", "no", "", "invalid"])
@@ -454,9 +456,10 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
         reg = create_default_registry()
-        assert len(reg) == 6
+        assert len(reg) == 7
         assert "hiremetech" in reg
         assert "comeet" in reg
+        assert "jobify" in reg
         assert "alljobs" not in reg
 
     def test_passes_session_manager(self) -> None:
@@ -473,6 +476,7 @@ class TestCreateDefaultRegistry:
         ("ENABLE_EIGHTFOLD", "eightfold"),
         ("ENABLE_DIRECT_TECH", "direct_tech"),
         ("ENABLE_LINKEDIN", "linkedin"),
+        ("ENABLE_JOBIFY", "jobify"),
     ])
     def test_registration_with_disable_individual_flags(
         self, monkeypatch: pytest.MonkeyPatch, flag: str, source_id: str
@@ -492,9 +496,10 @@ class TestCreateDefaultRegistry:
             enable_eightfold=True,
             enable_direct_tech=True,
             enable_linkedin=True,
+            enable_jobify=True,
         )
-        assert len(reg) == 7
-        for sid in ("hiremetech", "comeet", "alljobs", "workday", "eightfold", "direct_tech", "linkedin"):
+        assert len(reg) == 8
+        for sid in ("hiremetech", "comeet", "alljobs", "workday", "eightfold", "direct_tech", "linkedin", "jobify"):
             assert sid in reg
 
 
