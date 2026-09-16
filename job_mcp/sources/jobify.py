@@ -28,7 +28,7 @@ JOBIFY_HEADERS: dict[str, str] = {
 }
 
 DEFAULT_SEED_URLS: list[str] = [
-    "https://jobify360.co.il/jobs",
+    "https://jobify360.co.il/",
     "https://jobify360.co.il/myjob-roles/ai-engineer-5752190",
     "https://jobify360.co.il/myjob-roles/software-engineer",
     "https://jobify360.co.il/jobs/191_302995-emp",
@@ -294,8 +294,9 @@ class JobifySource(BaseJobSource):
         self,
         seed_urls: Optional[list[str]] = None,
         client: Optional[httpx.AsyncClient] = None,
-        timeout: float = 10.0,
-        max_crawl_pages: int = 50,
+        timeout: float = 4.0,
+        max_crawl_pages: int = 15,
+        concurrency: int = 4,
     ) -> None:
         """Initialize JobifySource with seed URLs and optional HTTP client.
 
@@ -304,11 +305,13 @@ class JobifySource(BaseJobSource):
             client: Optional shared httpx.AsyncClient instance.
             timeout: HTTP request timeout in seconds.
             max_crawl_pages: Maximum number of pages to crawl during snowball fetch.
+            concurrency: Number of concurrent HTTP requests when crawling pages.
         """
         self.seed_urls = list(seed_urls) if seed_urls is not None else list(DEFAULT_JOBIFY_SEED_URLS)
         self._client = client
         self.timeout = timeout
         self.max_crawl_pages = max_crawl_pages
+        self.concurrency = concurrency
 
     async def check_health(self) -> bool:
         """Check the operational health of Jobify platform.
@@ -357,43 +360,58 @@ class JobifySource(BaseJobSource):
         seen_job_ids: set[str] = set()
         visited_urls: set[str] = set()
         url_queue: list[str] = list(self.seed_urls)
+        sem = asyncio.Semaphore(self.concurrency)
+
+        async def _fetch_page(target_url: str) -> tuple[str, Optional[str]]:
+            async with sem:
+                try:
+                    resp = await client.get(target_url, headers=JOBIFY_HEADERS, timeout=self.timeout)
+                    if resp.status_code == 200:
+                        return target_url, resp.text
+                    logger.debug("Jobify crawl URL %s returned status %d", target_url, resp.status_code)
+                except Exception as exc:
+                    logger.warning("Error fetching Jobify page %s: %s", target_url, exc)
+                return target_url, None
 
         try:
             while url_queue and len(visited_urls) < self.max_crawl_pages:
                 if not preferences and limit and len(jobs) >= limit:
                     break
 
-                current_url = url_queue.pop(0)
-                if current_url in visited_urls:
-                    continue
-                visited_urls.add(current_url)
+                batch_size = min(self.concurrency, self.max_crawl_pages - len(visited_urls))
+                batch_urls: list[str] = []
+                while url_queue and len(batch_urls) < batch_size:
+                    candidate = url_queue.pop(0)
+                    if candidate not in visited_urls and candidate not in batch_urls:
+                        batch_urls.append(candidate)
 
-                try:
-                    response = await client.get(current_url, headers=JOBIFY_HEADERS, timeout=self.timeout)
-                    if response.status_code != 200:
-                        logger.debug("Jobify crawl URL %s returned status %d", current_url, response.status_code)
+                if not batch_urls:
+                    break
+
+                for u in batch_urls:
+                    visited_urls.add(u)
+
+                page_results = await asyncio.gather(*(_fetch_page(u) for u in batch_urls))
+                for page_url, html_content in page_results:
+                    if not html_content:
                         continue
-                    html_content = response.text
-                except Exception as exc:
-                    logger.warning("Error fetching Jobify page %s: %s", current_url, exc)
-                    continue
 
-                # Extract JSON-LD job postings
-                postings = extract_jsonld_job_postings(html_content)
-                for posting in postings:
-                    try:
-                        job = parse_jobify_position(posting, url=current_url)
-                        if job.job_id not in seen_job_ids:
-                            seen_job_ids.add(job.job_id)
-                            jobs.append(job)
-                    except Exception as exc:
-                        logger.warning("Error parsing Jobify position from %s: %s", current_url, exc)
+                    # Extract JSON-LD job postings
+                    postings = extract_jsonld_job_postings(html_content)
+                    for posting in postings:
+                        try:
+                            job = parse_jobify_position(posting, url=page_url)
+                            if job.job_id not in seen_job_ids:
+                                seen_job_ids.add(job.job_id)
+                                jobs.append(job)
+                        except Exception as exc:
+                            logger.warning("Error parsing Jobify position from %s: %s", page_url, exc)
 
-                # Extract recommended/related job links for snowball crawling
-                related_urls = extract_related_job_urls(html_content)
-                for r_url in related_urls:
-                    if r_url not in visited_urls and r_url not in url_queue:
-                        url_queue.append(r_url)
+                    # Extract recommended/related job links for snowball crawling
+                    related_urls = extract_related_job_urls(html_content)
+                    for r_url in related_urls:
+                        if r_url not in visited_urls and r_url not in url_queue:
+                            url_queue.append(r_url)
 
                 if preferences and limit:
                     filtered_preview = filter_jobs(jobs, preferences)
