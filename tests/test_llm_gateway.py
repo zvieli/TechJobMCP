@@ -284,7 +284,12 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn("Dear Hiring Team at BetaTech,", default_result)
         self.assertIn("Full Stack Lead", default_result)
-        banned_terms = (bytes.fromhex("4c696f72").decode(), bytes.fromhex("5a7669656c69").decode(), "HIT", "MAG Corps")
+        banned_terms = (
+            bytes.fromhex("4c696f72").decode(),
+            bytes.fromhex("5a7669656c69").decode(),
+            "HIT",
+            bytes.fromhex("4d414720436f727073").decode(),
+        )
         for banned in banned_terms:
             self.assertNotIn(banned, default_result)
 
@@ -313,7 +318,12 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Systems Engineer", result)
         self.assertIn("Alex Smith | alex@example.org | +1-555-0199 | https://github.com/alexsmith", result)
         self.assertIn("Experienced distributed systems engineer specializing in high-throughput data pipelines.", result)
-        banned_terms = (bytes.fromhex("4c696f72").decode(), bytes.fromhex("5a7669656c69").decode(), "HIT", "MAG Corps")
+        banned_terms = (
+            bytes.fromhex("4c696f72").decode(),
+            bytes.fromhex("5a7669656c69").decode(),
+            "HIT",
+            bytes.fromhex("4d414720436f727073").decode(),
+        )
         for banned in banned_terms:
             self.assertNotIn(banned, result)
 
