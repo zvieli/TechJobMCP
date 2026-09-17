@@ -190,7 +190,7 @@ class ResilientLLMGateway:
         headers = {
             "Authorization": f"Bearer {self.openrouter_api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/zvieli/TechJobMCP",
+            "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", "https://github.com/TechJobMCP/TechJobMCP"),
             "X-Title": "TechJobMCP Application Engine",
         }
         payload = {
@@ -439,10 +439,11 @@ class ResilientLLMGateway:
                 return cached_val
 
         # 2. Candidate Details Extraction
-        candidate_name = "Lior Zvieli"
-        candidate_email = "liorzvieli@gmail.com"
-        candidate_phone = "+972-52-2276810"
-        candidate_github = "https://github.com/zvieli"
+        candidate_name = os.getenv("CANDIDATE_NAME", "Candidate")
+        candidate_email = os.getenv("CANDIDATE_EMAIL", "")
+        candidate_phone = os.getenv("CANDIDATE_PHONE", "")
+        candidate_github = os.getenv("CANDIDATE_GITHUB", "")
+        candidate_linkedin = os.getenv("CANDIDATE_LINKEDIN", "")
 
         if candidate_profile is not None:
             if candidate_profile.full_name and candidate_profile.full_name.strip():
@@ -462,51 +463,95 @@ class ResilientLLMGateway:
                 candidate_phone = candidate_profile.phone.strip()
             if candidate_profile.github_url and candidate_profile.github_url.strip():
                 candidate_github = candidate_profile.github_url.strip()
+            if candidate_profile.linkedin_url and candidate_profile.linkedin_url.strip():
+                candidate_linkedin = candidate_profile.linkedin_url.strip()
 
         clean_company = raw_company if raw_company else "your team"
         clean_title = raw_title if raw_title else "AI Engineer"
+
+        # Dynamically resolve skills
+        skills: list[str] = []
+        if candidate_profile is not None:
+            skills = candidate_profile.skills or candidate_profile.top_skills or []
+        if not skills:
+            env_skills = os.getenv("CANDIDATE_SKILLS", "")
+            if env_skills:
+                skills = [s.strip() for s in env_skills.split(",") if s.strip()]
+
+        skills_summary = (
+            f" My core technical competencies include {', '.join(skills)}."
+            if skills
+            else ""
+        )
+
+        background = os.getenv("CANDIDATE_BACKGROUND")
+        if not background:
+            background = (
+                f"As a software engineering professional applying for the {clean_title} role, "
+                f"I bring hands-on experience designing robust backend architectures, distributed pipelines, "
+                f"and modern scalable solutions.{skills_summary}"
+            )
+
+        contact_parts = [
+            p
+            for p in (
+                candidate_name,
+                candidate_email,
+                candidate_phone,
+                candidate_github,
+                candidate_linkedin,
+            )
+            if p and p.strip()
+        ]
+        contact_line = " | ".join(contact_parts) if contact_parts else candidate_name
 
         # Offline Structured Template Fallback
         company_greeting = f" at {clean_company}" if clean_company != "your team" else ""
         offline_template = (
             f"Dear Hiring Team{company_greeting},\n\n"
             f"I am applying for the {clean_title} role with strong enthusiasm for {clean_company}'s work. "
-            "As a Computer Science B.Sc. graduate from HIT specializing in Applied AI and backend "
-            "engineering, I bring hands-on experience designing multi-agent LangGraph state machines, "
-            "serverless ingestion pipelines, and hybrid GraphRAG retrieval platforms "
-            "(integrating Azure Cosmos DB and Azure AI Search for IDF MAG Corps).\n\n"
+            f"{background}\n\n"
             "My background pairs rigorous statistical evaluation with production-grade "
             "Python/FastAPI and Asyncio development. I am eager to apply this engineering mindset "
             "to deliver immediate impact on your team's initiatives.\n\n"
             "Best regards,\n"
-            f"{candidate_name} | {candidate_email} | {candidate_phone} | {candidate_github}"
+            f"{contact_line}"
         )
 
         # 3. Prompt Engineering
         system_prompt = (
             "You are an expert AI Career Strategist writing a concise, high-impact "
-            "personal note / cover letter for a junior AI Engineer applying for a tech role in Israel. "
+            "personal note / cover letter for a candidate applying for a tech role. "
             'Write directly in the first person ("I am...").\n'
             "Keep it concise (2-3 paragraphs, around 120-160 words), authentic, and laser-focused "
             "on why the candidate's specific background creates immediate value for this specific role and company.\n"
-            "Connect candidate's hands-on GraphRAG, Agentic (LangGraph), and Python/FastAPI backend engineering to the role.\n"
+            "Connect candidate's technical competencies, relevant project achievements, and backend engineering background to the role.\n"
             "End with professional sign-off and candidate contact details."
         )
 
-        achievements = cv_context or (
-            "Computer Science B.Sc. graduate from HIT specializing in Applied AI. "
-            "Production experience with multi-agent LangGraph state machines, "
-            "serverless ingestion pipelines, and hybrid GraphRAG retrieval platforms "
-            "(Azure Cosmos DB + Azure AI Search for IDF MAG Corps). "
-            "Proficient in Python, FastAPI, Asyncio, and modern ML/LLM engineering."
+        achievements = cv_context or os.getenv(
+            "CANDIDATE_BACKGROUND",
+            "Professional software engineer with hands-on experience in backend architectures, API integration, and modern engineering practices.",
         )
+        if candidate_profile and (candidate_profile.skills or candidate_profile.top_skills):
+            profile_skills = candidate_profile.skills or candidate_profile.top_skills
+            achievements += f" Key skills: {', '.join(profile_skills)}."
+        elif not cv_context and skills:
+            achievements += f" Key skills: {', '.join(skills)}."
+
+        contact_info_parts = [
+            p
+            for p in (candidate_email, candidate_phone, candidate_github, candidate_linkedin)
+            if p and p.strip()
+        ]
+        contact_info = " | ".join(contact_info_parts) if contact_info_parts else "Not provided"
 
         user_prompt = (
             f"Company: {clean_company}\n"
             f"Role: {clean_title}\n"
             f"Job Description: {job_description or 'Not provided'}\n\n"
             f"Candidate Name: {candidate_name}\n"
-            f"Contact: {candidate_email} | {candidate_phone} | {candidate_github}\n"
+            f"Contact: {contact_info}\n"
             f"Candidate Background & Achievements:\n{achievements}\n\n"
             "Write a concise, compelling, tailored personal note / cover letter for this application."
         )

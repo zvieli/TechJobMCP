@@ -274,15 +274,47 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Backend Engineer", result)
         self.assertIn("Jane Doe | jane@example.com | +972-50-1234567 | https://github.com/janedoe", result)
 
-        # Also test with default profile (None)
-        default_result = await self.gateway.generate_personal_note(
-            job_title="Full Stack Lead",
-            company="BetaTech",
-            candidate_profile=None,
-        )
+        # Also test with default profile (None) and unset env vars
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("CANDIDATE_")}
+        with patch.dict(os.environ, clean_env, clear=True):
+            default_result = await self.gateway.generate_personal_note(
+                job_title="Full Stack Lead",
+                company="BetaTech",
+                candidate_profile=None,
+            )
         self.assertIn("Dear Hiring Team at BetaTech,", default_result)
         self.assertIn("Full Stack Lead", default_result)
-        self.assertIn("Lior Zvieli | liorzvieli@gmail.com | +972-52-2276810 | https://github.com/zvieli", default_result)
+        self.assertIn("Candidate", default_result)
+        for banned in ("Lior", "Zvieli", "HIT", "MAG Corps"):
+            self.assertNotIn(banned, default_result)
+
+    async def test_generate_personal_note_env_overrides(self) -> None:
+        """Verify environment variables override default candidate details and background."""
+        self.gateway.gemini_api_key = None
+        self.gateway.openrouter_api_key = None
+        self.gateway._call_ollama = AsyncMock(side_effect=httpx.ConnectError("Ollama offline"))
+
+        env = {
+            "CANDIDATE_NAME": "Alex Smith",
+            "CANDIDATE_EMAIL": "alex@example.org",
+            "CANDIDATE_PHONE": "+1-555-0199",
+            "CANDIDATE_GITHUB": "https://github.com/alexsmith",
+            "CANDIDATE_BACKGROUND": "Experienced distributed systems engineer specializing in high-throughput data pipelines.",
+        }
+
+        with patch.dict(os.environ, env):
+            result = await self.gateway.generate_personal_note(
+                job_title="Systems Engineer",
+                company="Omega Systems",
+                candidate_profile=None,
+            )
+
+        self.assertIn("Dear Hiring Team at Omega Systems,", result)
+        self.assertIn("Systems Engineer", result)
+        self.assertIn("Alex Smith | alex@example.org | +1-555-0199 | https://github.com/alexsmith", result)
+        self.assertIn("Experienced distributed systems engineer specializing in high-throughput data pipelines.", result)
+        for banned in ("Lior", "Zvieli", "HIT", "MAG Corps"):
+            self.assertNotIn(banned, result)
 
     async def test_generate_personal_note_cache_hit(self) -> None:
         """Verify second call retrieves cached personal note without network invocation."""
