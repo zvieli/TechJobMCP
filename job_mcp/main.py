@@ -718,7 +718,10 @@ async def list_job_sources(
     aggregator = _get_aggregator(ctx)
 
     try:
-        sources_meta = [m.model_dump() for m in registry.list_sources()]
+        sources_meta = [
+            m.model_dump(mode="json") if hasattr(m, "model_dump") else (m.dict() if hasattr(m, "dict") else dict(m))
+            for m in registry.list_sources()
+        ]
         if category:
             cat_lower = category.strip().lower()
             sources_meta = [
