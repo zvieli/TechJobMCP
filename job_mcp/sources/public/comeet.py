@@ -34,6 +34,56 @@ DEFAULT_COMEET_COMPANIES: list[dict[str, str]] = [
         "name": "Comm-IT",
         "token": "67826D067833C0CF002D48020581368",
     },
+    {
+        "uid": "17.008",
+        "name": "Cyera",
+        "token": "7182A90154871823783FD838C031A802378",
+    },
+    {
+        "uid": "89.005",
+        "name": "Exodigo",
+        "token": "98542A398504C28391E130A391E391E2614",
+    },
+    {
+        "uid": "C3.00F",
+        "name": "Cellebrite",
+        "token": "3CF130BF3C0B6D16DA1AA9B6D130B16DA",
+    },
+    {
+        "uid": "F2.004",
+        "name": "Claroty",
+        "token": "2F4EC42F42F45E814AC1A945E814AC5E8",
+    },
+    {
+        "uid": "73.00E",
+        "name": "Rapyd",
+        "token": "37E11766FC1F6E11761F6E6FC01BF06FC",
+    },
+    {
+        "uid": "59.004",
+        "name": "Port",
+        "token": "954414C02550414C4AA01BFC12A81BFC2550",
+    },
+    {
+        "uid": "66.00F",
+        "name": "Incredibuild",
+        "token": "66F269A66F2D0966F39E7269A202B134D3378",
+    },
+    {
+        "uid": "E5.000",
+        "name": "Gloat",
+        "token": "5E02340002F0017800234011A01780",
+    },
+    {
+        "uid": "96.005",
+        "name": "Komodor",
+        "token": "695277ED2A020E9277E69534A81A54277E",
+    },
+    {
+        "uid": "D1.00C",
+        "name": "Optibus",
+        "token": "1DC770D04770594B281DC3B83B81DC",
+    },
 ]
 
 

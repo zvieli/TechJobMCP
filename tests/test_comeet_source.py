@@ -143,6 +143,7 @@ class TestComeetSourceMetadataAndDirectory:
 
     def test_source_attributes(self) -> None:
         source = ComeetSource()
+        assert isinstance(source, BaseJobSource)
         assert source.source_id == "comeet"
         assert source.display_name == "Comeet (Direct ATS)"
         assert "Comeet ATS" in source.description
@@ -162,6 +163,20 @@ class TestComeetSourceMetadataAndDirectory:
         assert commit_entry is not None
         assert commit_entry.uid == "76.008"
         assert commit_entry.token == "67826D067833C0CF002D48020581368"
+
+    def test_default_companies_expanded_directory(self) -> None:
+        assert len(DEFAULT_COMEET_COMPANIES) >= 8
+        company_names = {c["name"] for c in DEFAULT_COMEET_COMPANIES}
+        for expected in ["Comm-IT", "Cyera", "Exodigo", "Cellebrite", "Gloat"]:
+            assert expected in company_names, f"Expected {expected} in DEFAULT_COMEET_COMPANIES"
+
+        source = ComeetSource()
+        source_companies = source.get_companies()
+        assert len(source_companies) >= 8
+        assert all(isinstance(c, ComeetCompany) for c in source_companies)
+        source_company_names = {c.name for c in source_companies}
+        for expected in ["Comm-IT", "Cyera", "Exodigo", "Cellebrite", "Gloat"]:
+            assert expected in source_company_names, f"Expected {expected} in ComeetSource initialized companies"
 
     def test_add_and_remove_company(self) -> None:
         source = ComeetSource(companies=[])
