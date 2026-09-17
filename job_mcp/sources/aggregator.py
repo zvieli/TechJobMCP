@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from job_mcp.core.api_client import JobCache, extract_candidate_profile, filter_jobs
 from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
-from job_mcp.sources.base import BaseJobSource
+from job_mcp.sources.contracts import IJobSource, SourceCategory
 from job_mcp.sources.dedup import deduplicate_jobs
 from job_mcp.utils.logger import get_logger
 
@@ -20,6 +20,13 @@ logger = get_logger(__name__)
 
 
 DEFAULT_SOURCE_TIMEOUT: float = float(os.getenv("SOURCE_TIMEOUT_SECONDS", "12.0"))
+
+
+def _normalize_category_to_str(cat: SourceCategory | str) -> str:
+    """Normalize a SourceCategory enum or string to a lowercase string."""
+    if isinstance(cat, SourceCategory):
+        return cat.value
+    return str(cat).lower()
 
 
 class JobAggregator:
@@ -55,6 +62,10 @@ class JobAggregator:
         limit_per_source: int = 50,
         force_refresh: bool = False,
         profile: Optional[CandidateProfile] = None,
+        category: Optional[SourceCategory | str] = None,
+        categories: Optional[list[SourceCategory | str]] = None,
+        per_source_limit: Optional[int] = None,
+        **kwargs: Any,
     ) -> list[Job]:
         """Fetch job listings concurrently from active registered sources, deduplicate, and score.
 
@@ -65,10 +76,17 @@ class JobAggregator:
             limit_per_source: Maximum number of jobs to fetch per individual source.
             force_refresh: If True, bypasses cache and forces live fetching across sources.
             profile: Optional pre-extracted CandidateProfile for dynamic search query propagation and scoring.
+            category: Optional category filter (e.g. SourceCategory.PUBLIC or 'public').
+            categories: Optional list of category filters.
+            per_source_limit: Optional alias for limit_per_source.
+            **kwargs: Additional parameters for backwards compatibility.
 
         Returns:
             list[Job]: Unified, deduplicated, and optionally scored list of Job listings.
         """
+        if per_source_limit is not None:
+            limit_per_source = per_source_limit
+
         # Resolve CandidateProfile if not explicitly passed and preferences contains cv_path
         if profile is None and preferences is not None and preferences.cv_path:
             profile = extract_candidate_profile(preferences.cv_path)
@@ -109,30 +127,67 @@ class JobAggregator:
                 )
                 preferences = child_preferences
 
-        # 1. Check cache if fresh and not forcing refresh
+        # 1. Resolve active candidate sources matching sources and category/categories
+        target_cats: set[str] = set()
+        if category is not None:
+            target_cats.add(_normalize_category_to_str(category))
+        if categories is not None:
+            for c in categories:
+                target_cats.add(_normalize_category_to_str(c))
+
+        if target_cats:
+            if hasattr(self.registry, "get_by_category"):
+                matched_sources: list[IJobSource] = []
+                seen_ids: set[str] = set()
+                for cat_str in target_cats:
+                    try:
+                        cat_enum = SourceCategory(cat_str)
+                        sources_for_cat = self.registry.get_by_category(cat_enum)
+                    except ValueError:
+                        sources_for_cat = self.registry.get_by_category(cat_str)
+                    for s in sources_for_cat:
+                        if s.source_id not in seen_ids:
+                            seen_ids.add(s.source_id)
+                            matched_sources.append(s)
+                if sources is not None:
+                    source_set = set(sources)
+                    active_sources = [s for s in matched_sources if s.source_id in source_set]
+                else:
+                    active_sources = matched_sources
+            else:
+                active_sources = [
+                    s for s in self.registry.get_active(sources)
+                    if _normalize_category_to_str(getattr(s, "category", "")) in target_cats
+                ]
+        else:
+            active_sources = self.registry.get_active(sources)
+
+        if not active_sources:
+            logger.warning(
+                "No active sources found in registry for filter: sources=%s, categories=%s",
+                sources,
+                target_cats,
+            )
+            return []
+
+        # 2. Check cache if fresh and not forcing refresh
         if not force_refresh and self.cache is not None and not self.cache.is_stale:
             cached_jobs = self.cache.get_all()
             if cached_jobs:
                 logger.info("Returning %d jobs from cache in JobAggregator.", len(cached_jobs))
                 results = cached_jobs
-                if sources is not None:
-                    source_set = set(sources)
+                if sources is not None or target_cats:
+                    allowed_source_ids = {s.source_id for s in active_sources}
                     results = [
                         j
                         for j in results
-                        if j.source in source_set or any(s in source_set for s in getattr(j, "sources", []))
+                        if j.source in allowed_source_ids or any(s in allowed_source_ids for s in getattr(j, "sources", []))
                     ]
                 if preferences is not None or profile is not None:
                     results = filter_jobs(results, preferences or JobPreferences(), profile=profile)
                 return results
 
-        # 2. Get active sources
-        active_sources = self.registry.get_active(sources)
-        if not active_sources:
-            logger.warning("No active sources found in registry for filter: %s", sources)
-            return []
-
-        # 3. Fetch from all sources concurrently with per-source timeout & error isolation
+        # 3. Fetch from active sources concurrently with per-source timeout & error isolation
         logger.info(
             "Fetching jobs concurrently from %d source(s): %s (timeout: %.1fs)",
             len(active_sources),
@@ -140,7 +195,7 @@ class JobAggregator:
             self.source_timeout,
         )
 
-        async def _fetch_with_timeout(src: BaseJobSource) -> list[Job]:
+        async def _fetch_with_timeout(src: IJobSource) -> list[Job]:
             t0 = time.perf_counter()
             try:
                 jobs = await asyncio.wait_for(
@@ -198,13 +253,50 @@ class JobAggregator:
 
         return deduped
 
-    async def check_all_health(self) -> dict[str, bool]:
-        """Check operational health across all registered sources concurrently.
+    async def fetch_all(
+        self,
+        sources: Optional[list[str]] = None,
+        preferences: Optional[JobPreferences] = None,
+        limit_per_source: int = 50,
+        force_refresh: bool = False,
+        profile: Optional[CandidateProfile] = None,
+        category: Optional[SourceCategory | str] = None,
+        categories: Optional[list[SourceCategory | str]] = None,
+        per_source_limit: Optional[int] = None,
+        **kwargs: Any,
+    ) -> list[Job]:
+        """Alias for fetch_all_jobs supporting protocol consumers and category filtering."""
+        return await self.fetch_all_jobs(
+            sources=sources,
+            preferences=preferences,
+            limit_per_source=limit_per_source,
+            force_refresh=force_refresh,
+            profile=profile,
+            category=category,
+            categories=categories,
+            per_source_limit=per_source_limit,
+            **kwargs,
+        )
+
+    async def check_all_health(
+        self,
+        category: Optional[SourceCategory | str] = None,
+    ) -> dict[str, bool]:
+        """Check operational health across registered sources concurrently.
+
+        Args:
+            category: Optional SourceCategory or string filter.
 
         Returns:
             dict[str, bool]: Mapping of source_id -> is_healthy.
         """
-        all_sources = self.registry.get_all()
+        all_sources: list[IJobSource] = self.registry.get_all()
+        if category is not None:
+            cat_str = _normalize_category_to_str(category)
+            all_sources = [
+                s for s in all_sources
+                if _normalize_category_to_str(getattr(s, "category", "")) == cat_str
+            ]
         if not all_sources:
             return {}
 

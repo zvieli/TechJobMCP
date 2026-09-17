@@ -24,6 +24,7 @@ from job_mcp.sources import (
     create_default_registry,
 )
 from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT
+from job_mcp.sources.contracts import IJobSource, SourceCategory
 
 
 class MockSource(BaseJobSource):
@@ -38,10 +39,12 @@ class MockSource(BaseJobSource):
         raise_on_fetch: Exception | None = None,
         raise_on_health: Exception | None = None,
         delay: float = 0.0,
+        category: SourceCategory = SourceCategory.PUBLIC,
     ) -> None:
         self.source_id = source_id
         self.display_name = display_name or source_id.capitalize()
         self.description = f"Mock {self.display_name} source"
+        self.category = category
         self._jobs = jobs or []
         self._is_healthy = is_healthy
         self._raise_on_fetch = raise_on_fetch
@@ -426,6 +429,60 @@ class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["health"]["hiremetech"], True)
         self.assertEqual(data["health"]["comeet"], True)
         self.assertEqual(data["health"]["alljobs"], False)
+        # Ensure category is included in metadata output
+        for s in data["sources"]:
+            self.assertIn("category", s)
+
+    async def test_list_job_sources_tool_category_filtering(self) -> None:
+        """Test list_job_sources filters sources and health by category parameter."""
+        src1 = MockSource("hiremetech", display_name="HireMeTech", category=SourceCategory.AUTHENTICATED, is_healthy=True)
+        src2 = MockSource("comeet", display_name="Comeet", category=SourceCategory.PUBLIC, is_healthy=True)
+        src3 = MockSource("alljobs", display_name="AllJobs", category=SourceCategory.PUBLIC, is_healthy=False)
+
+        reg = SourceRegistry()
+        reg.register(src1)
+        reg.register(src2)
+        reg.register(src3)
+
+        cache = JobCache()
+        agg = JobAggregator(registry=reg, cache=cache)
+        ctx = self._create_mock_context(reg, agg, cache)
+
+        res = await list_job_sources(category="public", ctx=ctx)
+
+        self.assertTrue(res["success"])
+        self.assertIn("Retrieved 2 registered", res["message"])
+        data = res["data"]
+        self.assertEqual(len(data["sources"]), 2)
+        source_ids = {s["source_id"] for s in data["sources"]}
+        self.assertEqual(source_ids, {"comeet", "alljobs"})
+        for s in data["sources"]:
+            self.assertEqual(s["category"], "public")
+        self.assertIn("comeet", data["health"])
+        self.assertIn("alljobs", data["health"])
+        self.assertNotIn("hiremetech", data["health"])
+
+    async def test_get_job_matches_with_category_filter(self) -> None:
+        """Test get_job_matches with category='public' queries only public sources."""
+        src_hmt = MockSource("hiremetech", jobs=[self.job1], category=SourceCategory.AUTHENTICATED)
+        src_comeet = MockSource("comeet", jobs=[self.job2], category=SourceCategory.PUBLIC)
+
+        reg = SourceRegistry()
+        reg.register(src_hmt)
+        reg.register(src_comeet)
+
+        cache = JobCache()
+        agg = JobAggregator(registry=reg, cache=cache)
+        ctx = self._create_mock_context(reg, agg, cache)
+
+        res = await get_job_matches(category="public", force_refresh=True, ctx=ctx)
+
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["data"]), 1)
+        self.assertEqual(res["data"][0]["job_id"], "comeet-200")
+        self.assertEqual(res["data"][0]["source"], "comeet")
+        self.assertEqual(src_hmt.fetch_call_count, 0)
+        self.assertEqual(src_comeet.fetch_call_count, 1)
 
     async def test_get_job_matches_with_sources_filter(self) -> None:
         """Test get_job_matches with sources=['comeet'] only fetches from Comeet."""
@@ -758,6 +815,229 @@ class TestDynamicQueryPropagationAggregator(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Python", src.last_preferences.tech_stack)
         # Verify tech_stack is populated with primary stack skills
         self.assertTrue("FastAPI" in src.last_preferences.tech_stack or "PostgreSQL" in src.last_preferences.tech_stack)
+
+
+class PureProtocolMockSource:
+    """Mock source that satisfies IJobSource protocol WITHOUT inheriting from BaseJobSource."""
+
+    def __init__(
+        self,
+        source_id: str,
+        display_name: str = "",
+        category: SourceCategory = SourceCategory.PUBLIC,
+        jobs: list[Job] | None = None,
+    ) -> None:
+        self.source_id = source_id
+        self.display_name = display_name or source_id.capitalize()
+        self.description = f"Pure protocol {self.display_name}"
+        self.category = category
+        self._jobs = jobs or []
+        self.fetch_count = 0
+
+    async def fetch_jobs(
+        self,
+        preferences: JobPreferences | None = None,
+        limit: int = 50,
+    ) -> list[Job]:
+        self.fetch_count += 1
+        return self._jobs[:limit]
+
+    async def check_health(self) -> bool:
+        return True
+
+    def get_metadata(self) -> SourceMetadata:
+        return SourceMetadata(
+            source_id=self.source_id,
+            display_name=self.display_name,
+            description=self.description,
+            category=self.category,
+        )
+
+
+class TestJobAggregatorCategoryFilteringAndProtocols(unittest.IsolatedAsyncioTestCase):
+    """Tests for protocol typing and category-based filtering in JobAggregator."""
+
+    def setUp(self) -> None:
+        self.job_pub = Job(
+            job_id="pub-1",
+            title="Public Job",
+            company="PubCorp",
+            source="public_src",
+            sources=["public_src"],
+        )
+        self.job_ent = Job(
+            job_id="ent-1",
+            title="Enterprise Job",
+            company="EntCorp",
+            source="ent_src",
+            sources=["ent_src"],
+        )
+        self.job_auth = Job(
+            job_id="auth-1",
+            title="Authenticated Job",
+            company="AuthCorp",
+            source="auth_src",
+            sources=["auth_src"],
+        )
+
+    async def test_fetch_all_jobs_filter_by_single_category_enum(self) -> None:
+        """Verify fetch_all_jobs only queries sources belonging to the specified SourceCategory enum."""
+        src_pub = MockSource("public_src", jobs=[self.job_pub], category=SourceCategory.PUBLIC)
+        src_ent = MockSource("ent_src", jobs=[self.job_ent], category=SourceCategory.ENTERPRISE)
+        src_auth = MockSource("auth_src", jobs=[self.job_auth], category=SourceCategory.AUTHENTICATED)
+
+        reg = SourceRegistry()
+        reg.register(src_pub)
+        reg.register(src_ent)
+        reg.register(src_auth)
+
+        agg = JobAggregator(registry=reg)
+        jobs = await agg.fetch_all_jobs(category=SourceCategory.PUBLIC, force_refresh=True)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].job_id, "pub-1")
+        self.assertEqual(src_pub.fetch_call_count, 1)
+        self.assertEqual(src_ent.fetch_call_count, 0)
+        self.assertEqual(src_auth.fetch_call_count, 0)
+
+    async def test_fetch_all_jobs_filter_by_single_category_str(self) -> None:
+        """Verify fetch_all_jobs supports string category parameter (case-insensitive)."""
+        src_pub = MockSource("public_src", jobs=[self.job_pub], category=SourceCategory.PUBLIC)
+        src_ent = MockSource("ent_src", jobs=[self.job_ent], category=SourceCategory.ENTERPRISE)
+
+        reg = SourceRegistry()
+        reg.register(src_pub)
+        reg.register(src_ent)
+
+        agg = JobAggregator(registry=reg)
+        jobs = await agg.fetch_all_jobs(category="enterprise", force_refresh=True)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].job_id, "ent-1")
+        self.assertEqual(src_pub.fetch_call_count, 0)
+        self.assertEqual(src_ent.fetch_call_count, 1)
+
+    async def test_fetch_all_jobs_filter_by_multiple_categories(self) -> None:
+        """Verify fetch_all_jobs with categories list filters candidate sources to union of categories."""
+        src_pub = MockSource("public_src", jobs=[self.job_pub], category=SourceCategory.PUBLIC)
+        src_ent = MockSource("ent_src", jobs=[self.job_ent], category=SourceCategory.ENTERPRISE)
+        src_auth = MockSource("auth_src", jobs=[self.job_auth], category=SourceCategory.AUTHENTICATED)
+
+        reg = SourceRegistry()
+        reg.register(src_pub)
+        reg.register(src_ent)
+        reg.register(src_auth)
+
+        agg = JobAggregator(registry=reg)
+        jobs = await agg.fetch_all_jobs(
+            categories=[SourceCategory.PUBLIC, SourceCategory.AUTHENTICATED],
+            force_refresh=True,
+        )
+
+        self.assertEqual(len(jobs), 2)
+        self.assertEqual({j.job_id for j in jobs}, {"pub-1", "auth-1"})
+        self.assertEqual(src_pub.fetch_call_count, 1)
+        self.assertEqual(src_ent.fetch_call_count, 0)
+        self.assertEqual(src_auth.fetch_call_count, 1)
+
+    async def test_fetch_all_jobs_category_and_sources_combined(self) -> None:
+        """Verify filtering by both sources list and category returns intersection."""
+        src_pub1 = MockSource("public_1", jobs=[self.job_pub], category=SourceCategory.PUBLIC)
+        src_pub2 = MockSource("public_2", jobs=[self.job_pub], category=SourceCategory.PUBLIC)
+        src_ent = MockSource("ent_1", jobs=[self.job_ent], category=SourceCategory.ENTERPRISE)
+
+        reg = SourceRegistry()
+        reg.register(src_pub1)
+        reg.register(src_pub2)
+        reg.register(src_ent)
+
+        agg = JobAggregator(registry=reg)
+        jobs = await agg.fetch_all_jobs(
+            sources=["public_1", "ent_1"],
+            category=SourceCategory.PUBLIC,
+            force_refresh=True,
+        )
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(src_pub1.fetch_call_count, 1)
+        self.assertEqual(src_pub2.fetch_call_count, 0)
+        self.assertEqual(src_ent.fetch_call_count, 0)
+
+    async def test_fetch_all_jobs_category_with_cache_hit(self) -> None:
+        """Verify cache hit respects category filter and filters out cached jobs from other categories."""
+        cache = JobCache(ttl_minutes=10)
+        cache.update([self.job_pub, self.job_ent, self.job_auth])
+
+        src_pub = MockSource("public_src", category=SourceCategory.PUBLIC)
+        src_ent = MockSource("ent_src", category=SourceCategory.ENTERPRISE)
+
+        reg = SourceRegistry()
+        reg.register(src_pub)
+        reg.register(src_ent)
+
+        agg = JobAggregator(registry=reg, cache=cache)
+        cached_jobs = await agg.fetch_all_jobs(category=SourceCategory.PUBLIC, force_refresh=False)
+
+        self.assertEqual(len(cached_jobs), 1)
+        self.assertEqual(cached_jobs[0].job_id, "pub-1")
+        self.assertEqual(src_pub.fetch_call_count, 0)
+        self.assertEqual(src_ent.fetch_call_count, 0)
+
+    async def test_fetch_all_alias_and_per_source_limit(self) -> None:
+        """Verify fetch_all is an alias for fetch_all_jobs and respects per_source_limit argument."""
+        src_pub = MockSource("public_src", jobs=[self.job_pub], category=SourceCategory.PUBLIC)
+
+        reg = SourceRegistry()
+        reg.register(src_pub)
+
+        agg = JobAggregator(registry=reg)
+        jobs = await agg.fetch_all(category=SourceCategory.PUBLIC, per_source_limit=15, force_refresh=True)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(src_pub.fetch_call_count, 1)
+
+    async def test_pure_protocol_ijobsource_implementation(self) -> None:
+        """Verify JobAggregator executes and aggregates sources implementing IJobSource without inheriting BaseJobSource."""
+        pure_job = Job(
+            job_id="pure-1",
+            title="Protocol Job",
+            company="DuckTyping Inc",
+            source="pure_source",
+            sources=["pure_source"],
+        )
+        pure_src = PureProtocolMockSource(
+            source_id="pure_source",
+            category=SourceCategory.ENTERPRISE,
+            jobs=[pure_job],
+        )
+
+        self.assertIsInstance(pure_src, IJobSource)
+
+        reg = SourceRegistry()
+        reg.register(pure_src)
+
+        agg = JobAggregator(registry=reg)
+        jobs = await agg.fetch_all(category=SourceCategory.ENTERPRISE, force_refresh=True)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].job_id, "pure-1")
+        self.assertEqual(pure_src.fetch_count, 1)
+
+    async def test_check_all_health_with_category_filtering(self) -> None:
+        """Verify check_all_health accepts optional category filter."""
+        src_pub = MockSource("public_src", category=SourceCategory.PUBLIC, is_healthy=True)
+        src_ent = MockSource("ent_src", category=SourceCategory.ENTERPRISE, is_healthy=False)
+
+        reg = SourceRegistry()
+        reg.register(src_pub)
+        reg.register(src_ent)
+
+        agg = JobAggregator(registry=reg)
+        health = await agg.check_all_health(category=SourceCategory.PUBLIC)
+
+        self.assertEqual(health, {"public_src": True})
+        self.assertEqual(src_pub.health_call_count, 1)
+        self.assertEqual(src_ent.health_call_count, 0)
 
 
 if __name__ == "__main__":

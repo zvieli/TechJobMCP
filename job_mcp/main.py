@@ -442,7 +442,7 @@ def _get_aggregator(ctx: Optional[Context] = None) -> JobAggregator:
                 hmt = registry.get("hiremetech")
                 if isinstance(hmt, HireMeTechSource):
                     hmt.session_manager = lifespan_ctx["session"]
-            if "aggregator" in lifespan_ctx:
+            if lifespan_ctx.get("aggregator") is not None:
                 agg = lifespan_ctx["aggregator"]
                 agg.cache = cache
                 return agg
@@ -702,11 +702,13 @@ async def set_operation_mode(
 
 @mcp.tool()
 async def list_job_sources(
+    category: Optional[str] = None,
     ctx: Optional[Context] = None,
 ) -> dict[str, Any]:
     """List all registered job sources, their capabilities, and current health status.
 
     Args:
+        category: Optional category filter ('public', 'enterprise', 'authenticated').
         ctx: FastMCP Context object.
 
     Returns:
@@ -717,7 +719,18 @@ async def list_job_sources(
 
     try:
         sources_meta = [m.model_dump() for m in registry.list_sources()]
-        health_status = await aggregator.check_all_health()
+        if category:
+            cat_lower = category.strip().lower()
+            sources_meta = [
+                m
+                for m in sources_meta
+                if str(m.get("category", "")).lower() == cat_lower
+                or getattr(m.get("category"), "value", "").lower() == cat_lower
+            ]
+        health_status = await aggregator.check_all_health(category=category)
+        if category:
+            valid_ids = {m["source_id"] for m in sources_meta}
+            health_status = {k: v for k, v in health_status.items() if k in valid_ids}
         return _response(
             success=True,
             message=f"Retrieved {len(sources_meta)} registered job sources.",
@@ -748,6 +761,8 @@ async def get_job_matches(
     force_refresh: bool = False,
     limit: int = 50,
     ctx: Optional[Context] = None,
+    category: Optional[str] = None,
+    categories: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Fetch matched job listings from registered sources (HireMeTech, Comeet, AllJobs, LinkedIn, Workday, Eightfold, DirectTech).
 
@@ -768,6 +783,8 @@ async def get_job_matches(
         force_refresh: Force a live scrape/fetch from sources even if cache is fresh.
         limit: Maximum number of jobs to return (default: 50).
         ctx: FastMCP Context object.
+        category: Optional category filter (e.g. 'public', 'enterprise', 'authenticated').
+        categories: Optional list of category filters.
 
     Returns:
         dict: ToolResponse with list of job listings.
@@ -820,6 +837,16 @@ async def get_job_matches(
             cv_path=effective_cv_path,
         )
 
+    aggregator = _get_aggregator(ctx)
+    aggregator.cache = cache
+
+    target_cats: set[str] = set()
+    if category:
+        target_cats.add(category.strip().lower())
+    if categories:
+        for c in categories:
+            target_cats.add(c.strip().lower())
+
     # 2. Check Cache
     if not force_refresh:
         cached_jobs = cache.get_all()
@@ -830,6 +857,18 @@ async def get_job_matches(
                     j
                     for j in cached_jobs
                     if j.source in source_set or any(s in source_set for s in getattr(j, "sources", []))
+                ]
+            if target_cats:
+                matching_sources = {
+                    s.source_id
+                    for s in aggregator.registry.get_all()
+                    if str(getattr(s, "category", "")).lower() in target_cats
+                    or getattr(getattr(s, "category", None), "value", "").lower() in target_cats
+                }
+                cached_jobs = [
+                    j
+                    for j in cached_jobs
+                    if j.source in matching_sources or any(s in matching_sources for s in getattr(j, "sources", []))
                 ]
             if prefs is not None or profile is not None:
                 cached_jobs = filter_jobs(cached_jobs, prefs or JobPreferences(), profile=profile)
@@ -842,9 +881,6 @@ async def get_job_matches(
                 data=[job.model_dump() for job in cached_jobs],
             )
 
-    aggregator = _get_aggregator(ctx)
-    aggregator.cache = cache
-
     # Ensure HireMeTechSource has current session if provided
     if ctx is not None:
         lifespan_ctx = getattr(ctx, "lifespan_context", None)
@@ -855,6 +891,13 @@ async def get_job_matches(
 
     # If single-source HireMeTech is requested or only HireMeTech is in registry, verify session auth
     active = aggregator.registry.get_active(sources)
+    if target_cats:
+        active = [
+            s
+            for s in active
+            if str(getattr(s, "category", "")).lower() in target_cats
+            or getattr(getattr(s, "category", None), "value", "").lower() in target_cats
+        ]
     if len(active) == 1 and active[0].source_id == "hiremetech":
         session, is_healthy = await _ensure_session(ctx)
         if not is_healthy:
@@ -874,6 +917,8 @@ async def get_job_matches(
                 preferences=prefs,
                 force_refresh=force_refresh,
                 profile=profile,
+                category=category,
+                categories=categories,
             ),
             timeout=_SCRAPE_TIMEOUT_SECONDS,
         )

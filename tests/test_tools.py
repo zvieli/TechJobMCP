@@ -30,6 +30,7 @@ from job_mcp.main import (
     delete_job,
     filter_jobs_by_preferences,
     get_job_matches,
+    list_job_sources,
     mark_job_as_applied,
     run_job_scout,
 )
@@ -456,6 +457,19 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("job-1", strong_ids)
         self.assertIn("job-1", data["blocked"])
         self.assertIn("job-1", data["removed_from_cache"])
+
+    async def test_list_job_sources_with_category_filtering(self):
+        """Test list_job_sources returns filtered sources when category parameter is supplied."""
+        mock_session = AsyncMock(spec=SessionManager)
+        cache = JobCache()
+        ctx = self._create_mock_context(mock_session, cache)
+
+        res = await list_job_sources(category="authenticated", ctx=ctx)
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["data"]["sources"]), 1)
+        self.assertEqual(res["data"]["sources"][0]["source_id"], "hiremetech")
+        self.assertEqual(res["data"]["sources"][0]["category"], "authenticated")
+        self.assertIn("hiremetech", res["data"]["health"])
 
 
 if __name__ == "__main__":
