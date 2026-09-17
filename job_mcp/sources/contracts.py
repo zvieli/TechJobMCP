@@ -30,7 +30,7 @@ class IJobSource(Protocol):
     category: SourceCategory
 
     async def fetch_jobs(
-        self, preferences: UserPreferences | None = None, limit: int = 20
+        self, preferences: UserPreferences | None = None, limit: int = 50
     ) -> list[Job]:
         """Fetch job listings matching optional preferences up to limit."""
         ...
