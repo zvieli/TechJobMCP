@@ -347,19 +347,21 @@ class TestProviderRegistration:
         reg = SourceRegistry()
         # Default providers are registered
         reg.populate_from_providers()
-        # 8 default enabled sources
-        assert len(reg) == 8
+        # 9 default enabled sources
+        assert len(reg) == 9
         assert "alljobs" not in reg
         assert "hiremetech" in reg
         assert "greenhouse" in reg
+        assert "lever" in reg
 
         # Enable alljobs via env
         monkeypatch.setenv("ENABLE_ALLJOBS", "true")
         reg2 = SourceRegistry()
         reg2.populate_from_providers()
-        assert len(reg2) == 9
+        assert len(reg2) == 10
         assert "alljobs" in reg2
         assert "greenhouse" in reg2
+        assert "lever" in reg2
 
     def test_provider_with_session_manager(self) -> None:
         mock_sm = MagicMock()
@@ -381,7 +383,7 @@ class TestBackwardsCompatibility:
     def test_create_default_registry_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ENABLE_ALLJOBS", raising=False)
         reg = create_default_registry()
-        assert len(reg) == 8
+        assert len(reg) == 9
         assert "hiremetech" in reg
         assert "comeet" in reg
         assert "workday" in reg
@@ -390,6 +392,7 @@ class TestBackwardsCompatibility:
         assert "linkedin" in reg
         assert "jobify" in reg
         assert "greenhouse" in reg
+        assert "lever" in reg
         assert "alljobs" not in reg
 
     def test_create_default_registry_explicit_args(self) -> None:
@@ -401,6 +404,7 @@ class TestBackwardsCompatibility:
             enable_linkedin=False,
             enable_jobify=False,
             enable_greenhouse=False,
+            enable_lever=False,
             enable_hiremetech=False,
             enable_comeet=False,
         )

@@ -373,6 +373,7 @@ def reset_builtin_providers() -> None:
     from job_mcp.sources.public.eightfold import EightfoldAISource
     from job_mcp.sources.public.greenhouse import GreenhouseSource
     from job_mcp.sources.public.jobify import JobifySource
+    from job_mcp.sources.public.lever import LeverSource
 
     register_provider(
         name="hiremetech",
@@ -437,6 +438,13 @@ def reset_builtin_providers() -> None:
         env_var="ENABLE_GREENHOUSE",
         category=SourceCategory.PUBLIC,
     )
+    register_provider(
+        name="lever",
+        factory_or_cls=LeverSource,
+        default_enabled=True,
+        env_var="ENABLE_LEVER",
+        category=SourceCategory.PUBLIC,
+    )
 
 
 # Register built-ins on module load
@@ -452,6 +460,7 @@ def create_default_registry(
     enable_linkedin: Optional[bool] = None,
     enable_jobify: Optional[bool] = None,
     enable_greenhouse: Optional[bool] = None,
+    enable_lever: Optional[bool] = None,
     enable_hiremetech: Optional[bool] = None,
     enable_comeet: Optional[bool] = None,
     **kwargs: Any,
@@ -459,7 +468,7 @@ def create_default_registry(
     """Create and return a SourceRegistry pre-populated with standard job sources.
 
     By default, all enterprise and authenticated sources (HireMeTech, Comeet, Workday,
-    Eightfold AI, Direct Tech, LinkedIn, Jobify, and Greenhouse) are enabled out-of-the-box.
+    Eightfold AI, Direct Tech, LinkedIn, Jobify, Greenhouse, and Lever) are enabled out-of-the-box.
     AllJobs is disabled by default and can be enabled via ENABLE_ALLJOBS=true.
     """
     reg = SourceRegistry()
@@ -473,6 +482,7 @@ def create_default_registry(
         "linkedin": enable_linkedin,
         "jobify": enable_jobify,
         "greenhouse": enable_greenhouse,
+        "lever": enable_lever,
     }
     reg.populate_from_providers(
         session_manager=session_manager,
