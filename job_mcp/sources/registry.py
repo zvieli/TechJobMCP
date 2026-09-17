@@ -372,6 +372,7 @@ def reset_builtin_providers() -> None:
     from job_mcp.sources.public.comeet import ComeetSource
     from job_mcp.sources.public.eightfold import EightfoldAISource
     from job_mcp.sources.public.greenhouse import GreenhouseSource
+    from job_mcp.sources.public.gotfriends import GotFriendsSource
     from job_mcp.sources.public.jobify import JobifySource
     from job_mcp.sources.public.lever import LeverSource
 
@@ -445,6 +446,13 @@ def reset_builtin_providers() -> None:
         env_var="ENABLE_LEVER",
         category=SourceCategory.PUBLIC,
     )
+    register_provider(
+        name="gotfriends",
+        factory_or_cls=GotFriendsSource,
+        default_enabled=True,
+        env_var="ENABLE_GOTFRIENDS",
+        category=SourceCategory.PUBLIC,
+    )
 
 
 # Register built-ins on module load
@@ -461,14 +469,15 @@ def create_default_registry(
     enable_jobify: Optional[bool] = None,
     enable_greenhouse: Optional[bool] = None,
     enable_lever: Optional[bool] = None,
+    enable_gotfriends: Optional[bool] = None,
     enable_hiremetech: Optional[bool] = None,
     enable_comeet: Optional[bool] = None,
     **kwargs: Any,
 ) -> SourceRegistry:
     """Create and return a SourceRegistry pre-populated with standard job sources.
 
-    By default, all enterprise and authenticated sources (HireMeTech, Comeet, Workday,
-    Eightfold AI, Direct Tech, LinkedIn, Jobify, Greenhouse, and Lever) are enabled out-of-the-box.
+    By default, all enterprise, public, and authenticated sources (HireMeTech, Comeet, Workday,
+    Eightfold AI, Direct Tech, LinkedIn, Jobify, Greenhouse, Lever, and GotFriends) are enabled out-of-the-box.
     AllJobs is disabled by default and can be enabled via ENABLE_ALLJOBS=true.
     """
     reg = SourceRegistry()
@@ -483,6 +492,7 @@ def create_default_registry(
         "jobify": enable_jobify,
         "greenhouse": enable_greenhouse,
         "lever": enable_lever,
+        "gotfriends": enable_gotfriends,
     }
     reg.populate_from_providers(
         session_manager=session_manager,

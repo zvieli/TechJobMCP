@@ -22,6 +22,12 @@ from job_mcp.sources.public.eightfold import (
     EightfoldCompany,
     parse_eightfold_position,
 )
+from job_mcp.sources.public.gotfriends import (
+    GOTFRIENDS_BASE_URL,
+    GOTFRIENDS_CATEGORIES,
+    GotFriendsSource,
+    parse_gotfriends_job_item,
+)
 from job_mcp.sources.public.greenhouse import (
     GREENHOUSE_COMPANIES,
     GreenhouseCompany,
@@ -63,6 +69,11 @@ __all__ = [
     "EightfoldAISource",
     "EightfoldCompany",
     "parse_eightfold_position",
+    # GotFriends
+    "GOTFRIENDS_BASE_URL",
+    "GOTFRIENDS_CATEGORIES",
+    "GotFriendsSource",
+    "parse_gotfriends_job_item",
     # Greenhouse
     "GREENHOUSE_COMPANIES",
     "GreenhouseCompany",

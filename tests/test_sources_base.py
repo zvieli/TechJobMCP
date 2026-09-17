@@ -586,24 +586,6 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.delenv("ENABLE_ALLJOBS", raising=False)
         reg = create_default_registry()
-        assert len(reg) == 9
-        assert "hiremetech" in reg
-        assert "comeet" in reg
-        assert "workday" in reg
-        assert "eightfold" in reg
-        assert "direct_tech" in reg
-        assert "linkedin" in reg
-        assert "jobify" in reg
-        assert "greenhouse" in reg
-        assert "lever" in reg
-        assert "alljobs" not in reg
-
-    @pytest.mark.parametrize("env_val", ["true", "1", "yes", "TRUE", "True"])
-    def test_registration_with_enable_alljobs(self, monkeypatch: pytest.MonkeyPatch, env_val: str) -> None:
-        from job_mcp.sources import create_default_registry
-
-        monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
-        reg = create_default_registry()
         assert len(reg) == 10
         assert "hiremetech" in reg
         assert "comeet" in reg
@@ -614,6 +596,26 @@ class TestCreateDefaultRegistry:
         assert "jobify" in reg
         assert "greenhouse" in reg
         assert "lever" in reg
+        assert "gotfriends" in reg
+        assert "alljobs" not in reg
+
+    @pytest.mark.parametrize("env_val", ["true", "1", "yes", "TRUE", "True"])
+    def test_registration_with_enable_alljobs(self, monkeypatch: pytest.MonkeyPatch, env_val: str) -> None:
+        from job_mcp.sources import create_default_registry
+
+        monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
+        reg = create_default_registry()
+        assert len(reg) == 11
+        assert "hiremetech" in reg
+        assert "comeet" in reg
+        assert "workday" in reg
+        assert "eightfold" in reg
+        assert "direct_tech" in reg
+        assert "linkedin" in reg
+        assert "jobify" in reg
+        assert "greenhouse" in reg
+        assert "lever" in reg
+        assert "gotfriends" in reg
         assert "alljobs" in reg
 
     @pytest.mark.parametrize("env_val", ["false", "0", "no", "", "invalid"])
@@ -622,12 +624,13 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
         reg = create_default_registry()
-        assert len(reg) == 9
+        assert len(reg) == 10
         assert "hiremetech" in reg
         assert "comeet" in reg
         assert "jobify" in reg
         assert "greenhouse" in reg
         assert "lever" in reg
+        assert "gotfriends" in reg
         assert "alljobs" not in reg
 
     def test_passes_session_manager(self) -> None:
@@ -647,6 +650,7 @@ class TestCreateDefaultRegistry:
         ("ENABLE_JOBIFY", "jobify"),
         ("ENABLE_GREENHOUSE", "greenhouse"),
         ("ENABLE_LEVER", "lever"),
+        ("ENABLE_GOTFRIENDS", "gotfriends"),
     ])
     def test_registration_with_disable_individual_flags(
         self, monkeypatch: pytest.MonkeyPatch, flag: str, source_id: str
@@ -669,9 +673,10 @@ class TestCreateDefaultRegistry:
             enable_jobify=True,
             enable_greenhouse=True,
             enable_lever=True,
+            enable_gotfriends=True,
         )
-        assert len(reg) == 10
-        for sid in ("hiremetech", "comeet", "alljobs", "workday", "eightfold", "direct_tech", "linkedin", "jobify", "greenhouse", "lever"):
+        assert len(reg) == 11
+        for sid in ("hiremetech", "comeet", "alljobs", "workday", "eightfold", "direct_tech", "linkedin", "jobify", "greenhouse", "lever", "gotfriends"):
             assert sid in reg
 
 
