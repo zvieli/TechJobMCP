@@ -370,23 +370,24 @@ def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
     if env_cv and env_cv.strip():
         add_candidate(Path(env_cv.strip()).expanduser())
 
-    # 3. Container paths (/app)
+    # 3. Basename matches in workspace (cwd) and container (/app)
+    cwd = Path.cwd()
     app_dir = Path("/app")
     if base_name:
+        add_candidate(cwd / base_name)
         add_candidate(app_dir / base_name)
-    add_candidate(app_dir / "cv.pdf")
-    add_candidate(app_dir / "resume.pdf")
-    add_candidate(app_dir / "lior_zvieli_cv.pdf")
 
     # 4. Local workspace paths (cwd)
-    cwd = Path.cwd()
-    if base_name:
-        add_candidate(cwd / base_name)
     add_candidate(cwd / "cv.pdf")
     add_candidate(cwd / "resume.pdf")
     add_candidate(cwd / "lior_zvieli_cv.pdf")
 
-    # 5. Any .pdf in working directory matching *cv*.pdf or *.pdf
+    # 5. Standard container paths (/app)
+    add_candidate(app_dir / "cv.pdf")
+    add_candidate(app_dir / "resume.pdf")
+    add_candidate(app_dir / "lior_zvieli_cv.pdf")
+
+    # 6. Any .pdf in working directory matching *cv*.pdf or *.pdf
     try:
         cv_glob = sorted(cwd.glob("*cv*.pdf"))
         all_glob = sorted(cwd.glob("*.pdf"))

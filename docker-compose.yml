@@ -13,6 +13,8 @@ services:
       - ./browser_profile:/app/browser_profile
       - ./data:/app/data
       - ./job_mcp:/app/job_mcp
+      - ./scripts:/app/scripts:ro
+      - ./tests:/app/tests:ro
       - ./cv.pdf:/app/cv.pdf:ro
     environment:
       - MCP_TRANSPORT=http

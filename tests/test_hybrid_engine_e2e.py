@@ -503,7 +503,7 @@ async def test_run_job_scout_hybrid_dispatch(isolated_engine_context):
     cache.update([top_job])
 
     # 1. With AUTO_APPLY_ENABLED=false, run_job_scout stages and defers application
-    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "false"}):
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "false", "DEFAULT_CV_PATH": ""}):
         res = await run_job_scout(
             sources=["comeet"],
             auto_apply=True,
@@ -516,7 +516,7 @@ async def test_run_job_scout_hybrid_dispatch(isolated_engine_context):
         assert len(data["submitted"]) == 0
 
     # 2. With AUTO_APPLY_ENABLED=true, run_job_scout executes submission through strategy
-    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true", "DEFAULT_CV_PATH": ""}):
         with patch("job_mcp.core.application.strategies.api.httpx.AsyncClient.post") as mock_post:
             mock_post.return_value = httpx.Response(
                 200,

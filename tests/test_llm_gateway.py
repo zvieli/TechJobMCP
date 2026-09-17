@@ -160,41 +160,44 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
 
     async def test_mock_fallback_when_offline_or_unconfigured(self) -> None:
         """Verify Mock LLM handles questions when no API keys are provided."""
-        gateway = ResilientLLMGateway(
-            cache=LLMCache(db_path=":memory:"),
-            rate_limiter=TokenBucketRateLimiter(rpm=600),
-            gemini_api_key=None,
-            openrouter_api_key=None,
-            mock_fallback=True,
-        )
-        # Ollama will fail connection
-        gateway._call_ollama = AsyncMock(side_effect=httpx.ConnectError("Ollama offline"))
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "OPENROUTER_API_KEY": ""}):
+            gateway = ResilientLLMGateway(
+                cache=LLMCache(db_path=":memory:"),
+                rate_limiter=TokenBucketRateLimiter(rpm=600),
+                gemini_api_key=None,
+                openrouter_api_key=None,
+                mock_fallback=True,
+            )
+            # Ollama will fail connection
+            gateway._call_ollama = AsyncMock(side_effect=httpx.ConnectError("Ollama offline"))
 
-        exp_answer = await gateway.ask_question("How many years of experience do you have?")
-        self.assertIn("7+", exp_answer)
+            exp_answer = await gateway.ask_question("How many years of experience do you have?")
+            self.assertIn("7+", exp_answer)
 
-        auth_answer = await gateway.ask_question("Are you legally authorized to work in the US?")
-        self.assertIn("authorized", auth_answer.lower())
+            auth_answer = await gateway.ask_question("Are you legally authorized to work in the US?")
+            self.assertIn("authorized", auth_answer.lower())
 
-        sponsor_answer = await gateway.ask_question("Do you require visa sponsorship?")
-        self.assertIn("no", sponsor_answer.lower())
+            sponsor_answer = await gateway.ask_question("Do you require visa sponsorship?")
+            self.assertIn("no", sponsor_answer.lower())
 
-        salary_answer = await gateway.ask_question("What is your expected salary?")
-        self.assertIn("compensation", salary_answer.lower())
+            salary_answer = await gateway.ask_question("What is your expected salary?")
+            self.assertIn("compensation", salary_answer.lower())
 
     async def test_error_raised_when_all_fail_and_no_mock(self) -> None:
         """Verify LLMProviderError is raised if all providers fail and mock_fallback is False."""
-        gateway = ResilientLLMGateway(
-            cache=LLMCache(db_path=":memory:"),
-            rate_limiter=TokenBucketRateLimiter(rpm=600),
-            gemini_api_key="fake_key",
-            mock_fallback=False,
-        )
-        gateway._call_gemini = AsyncMock(side_effect=LLMProviderError("Fatal error"))
-        gateway._call_ollama = AsyncMock(side_effect=LLMProviderError("Ollama failed"))
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}):
+            gateway = ResilientLLMGateway(
+                cache=LLMCache(db_path=":memory:"),
+                rate_limiter=TokenBucketRateLimiter(rpm=600),
+                gemini_api_key="fake_key",
+                openrouter_api_key=None,
+                mock_fallback=False,
+            )
+            gateway._call_gemini = AsyncMock(side_effect=LLMProviderError("Fatal error"))
+            gateway._call_ollama = AsyncMock(side_effect=LLMProviderError("Ollama failed"))
 
-        with self.assertRaises(LLMProviderError):
-            await gateway.ask_question("Any question?")
+            with self.assertRaises(LLMProviderError):
+                await gateway.ask_question("Any question?")
 
     def test_env_model_configuration(self) -> None:
         """Verify environment variables correctly override model and base URL settings."""

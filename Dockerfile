@@ -22,7 +22,7 @@ COPY job_mcp ./job_mcp
 
 # Build virtual environment
 RUN uv venv /app/.venv && \
-    uv pip install --no-cache -e .
+    uv pip install --no-cache -e ".[dev]"
 
 
 FROM python:3.12-slim AS runtime

@@ -1,5 +1,6 @@
 """Comprehensive tests for direct API client and payload mapping."""
 
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -519,7 +520,8 @@ async def test_warm_cache_api_success():
 
     cache = JobCache(ttl_minutes=15)
 
-    with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+    with patch.dict(os.environ, {"DEFAULT_CV_PATH": ""}), \
+         patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
          patch("job_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.return_value = sample_jobs
 
@@ -551,7 +553,8 @@ async def test_warm_cache_api_failure_fallback_to_dom():
 
     cache = JobCache(ttl_minutes=15)
 
-    with patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
+    with patch.dict(os.environ, {"DEFAULT_CV_PATH": ""}), \
+         patch("job_mcp.sources.hiremetech.fetch_jobs_via_api", new_callable=AsyncMock) as mock_api, \
          patch("job_mcp.sources.hiremetech.browser_extract_jobs", new_callable=AsyncMock) as mock_dom:
         mock_api.side_effect = RuntimeError("API 500 Error")
         mock_dom.return_value = sample_jobs
@@ -677,7 +680,8 @@ async def test_filter_jobs_by_preferences_supplements_skills_from_resume_profile
     ctx = MagicMock(spec=Context)
     ctx.lifespan_context = {"session": mock_session, "cache": cache}
 
-    with patch("job_mcp.main.fetch_user_resume_profile", new_callable=AsyncMock) as mock_profile:
+    with patch.dict(os.environ, {"DEFAULT_CV_PATH": ""}), \
+         patch("job_mcp.main.fetch_user_resume_profile", new_callable=AsyncMock) as mock_profile:
         mock_profile.return_value = {"technical_skills": ["Python", "FastAPI"]}
 
         res = await filter_jobs_by_preferences(ctx=ctx)
