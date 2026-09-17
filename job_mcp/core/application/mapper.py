@@ -177,18 +177,30 @@ class SemanticFormMapper:
             if env_val:
                 return env_val
         elif attr == "email":
+            for k in ("email", "candidate_email", "applicant_email"):
+                if profile_data.get(k):
+                    return profile_data[k]
             env_val = os.getenv("CANDIDATE_EMAIL")
             if env_val:
                 return env_val
         elif attr == "phone":
+            for k in ("phone", "candidate_phone", "applicant_phone", "phone_number"):
+                if profile_data.get(k):
+                    return profile_data[k]
             env_val = os.getenv("CANDIDATE_PHONE")
             if env_val:
                 return env_val
         elif attr == "linkedin":
+            for k in ("linkedin", "linkedin_url"):
+                if profile_data.get(k):
+                    return profile_data[k]
             env_val = os.getenv("CANDIDATE_LINKEDIN")
             if env_val:
                 return env_val
         elif attr == "github":
+            for k in ("github", "github_url"):
+                if profile_data.get(k):
+                    return profile_data[k]
             env_val = os.getenv("CANDIDATE_GITHUB")
             if env_val:
                 return env_val
@@ -201,13 +213,14 @@ class SemanticFormMapper:
                 return f"{seniority} Software Engineer"
         elif attr == "cv_path":
             for k in ("cv_path", "resume_path", "cv_file", "resume_file"):
-                if k in profile_data and profile_data[k]:
+                if profile_data.get(k):
                     return profile_data[k]
             env_val = os.getenv("DEFAULT_CV_PATH")
             if env_val:
                 return env_val
 
-        return profile_data.get(attr, default)
+        val = profile_data.get(attr)
+        return val if val is not None else default
 
     def _match_dropdown_option(
         self, options: Sequence[str], target_val: Any

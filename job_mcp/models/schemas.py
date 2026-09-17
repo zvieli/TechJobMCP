@@ -61,6 +61,13 @@ class CandidateProfile(BaseModel):
     target_roles: list[str] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list)
     suggested_exclusions: list[str] = Field(default_factory=list)
+    full_name: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    github_url: Optional[str] = None
 
 
 class JobPreferences(BaseModel):

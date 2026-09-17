@@ -966,6 +966,131 @@ def _derive_suggested_exclusions(seniority: Optional[str]) -> list[str]:
     return []
 
 
+def _extract_candidate_contact_info(
+    text_content: str, cv_source: Optional[Union[str, Path]] = None
+) -> dict[str, Optional[str]]:
+    """Parse candidate contact info (name, email, phone, links) from CV text or env fallbacks."""
+    # Email
+    email: Optional[str] = None
+    m_email = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text_content, re.IGNORECASE)
+    if m_email:
+        email = m_email.group(0).strip()
+    elif os.getenv("CANDIDATE_EMAIL"):
+        email = os.getenv("CANDIDATE_EMAIL")
+
+    # Phone
+    phone: Optional[str] = None
+    m_phone = re.search(r"(\+?\d{1,3}[-.\s]?)?\(?\d{2,3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", text_content)
+    if m_phone:
+        phone = m_phone.group(0).strip()
+    elif os.getenv("CANDIDATE_PHONE"):
+        phone = os.getenv("CANDIDATE_PHONE")
+
+    # Candidate Name
+    full_name: Optional[str] = None
+    lines = [line.strip() for line in text_content.splitlines() if line.strip()]
+    for line in lines[:5]:
+        lower_line = line.lower()
+        if lower_line in {"curriculum vitae", "resume", "cv", "profile", "contact", "summary", "professional summary"}:
+            continue
+        if "@" in line or "http" in line or "www." in line or re.search(r"\d", line):
+            continue
+        if "—" in line or "|" in line or ":" in line:
+            continue
+        words = line.split()
+        if 1 <= len(words) <= 4 and all(w.replace(".", "").replace("-", "").isalpha() for w in words):
+            full_name = line.strip()
+            break
+
+    if not full_name:
+        full_name = os.getenv("CANDIDATE_NAME")
+
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    if full_name:
+        parts = full_name.split(None, 1)
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else None
+    else:
+        first_name = os.getenv("CANDIDATE_FIRST_NAME")
+        last_name = os.getenv("CANDIDATE_LAST_NAME")
+        if first_name and last_name:
+            full_name = f"{first_name} {last_name}"
+        elif first_name:
+            full_name = first_name
+
+    # GitHub URL
+    github_url: Optional[str] = None
+    gh_match = re.search(r"github\.com/([a-zA-Z0-9_\-]+)", text_content, re.IGNORECASE)
+    if not gh_match:
+        gh_match = re.search(r"github\s*[:\(\[]\s*@?([a-zA-Z0-9_\-]+)", text_content, re.IGNORECASE)
+    if gh_match:
+        handle = gh_match.group(1).strip()
+        github_url = f"https://github.com/{handle}"
+    elif os.getenv("CANDIDATE_GITHUB"):
+        env_gh = os.getenv("CANDIDATE_GITHUB", "").strip()
+        if env_gh.startswith("http://") or env_gh.startswith("https://"):
+            github_url = env_gh
+        else:
+            github_url = f"https://github.com/{env_gh.lstrip('@')}"
+
+    # LinkedIn URL
+    linkedin_url: Optional[str] = None
+    li_match = re.search(r"linkedin\.com/in/([a-zA-Z0-9_\-]+)", text_content, re.IGNORECASE)
+    if li_match:
+        li_handle = li_match.group(1).strip()
+        linkedin_url = f"https://www.linkedin.com/in/{li_handle}"
+    else:
+        # Check if cv_source is a PDF with annotation links
+        pdf_path: Optional[Path] = None
+        if isinstance(cv_source, Path) and cv_source.is_file() and cv_source.suffix.lower() == ".pdf":
+            pdf_path = cv_source
+        elif isinstance(cv_source, str) and cv_source.lower().endswith(".pdf"):
+            resolved = resolve_cv_path(cv_source)
+            if resolved and resolved.is_file():
+                pdf_path = resolved
+        elif cv_source is None:
+            resolved = resolve_cv_path(None)
+            if resolved and resolved.is_file() and resolved.suffix.lower() == ".pdf":
+                pdf_path = resolved
+
+        if pdf_path:
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(str(pdf_path))
+                for page in reader.pages:
+                    if "/Annots" in page and page["/Annots"]:
+                        for annot in page["/Annots"]:
+                            obj = annot.get_object()
+                            if "/A" in obj and "/URI" in obj["/A"]:
+                                uri = str(obj["/A"]["/URI"])
+                                m = re.search(r"linkedin\.com/in/([a-zA-Z0-9_\-]+)", uri, re.IGNORECASE)
+                                if m:
+                                    linkedin_url = f"https://www.linkedin.com/in/{m.group(1).strip()}"
+                                    break
+                    if linkedin_url:
+                        break
+            except Exception:
+                pass
+
+        if not linkedin_url and os.getenv("CANDIDATE_LINKEDIN"):
+            env_li = os.getenv("CANDIDATE_LINKEDIN", "").strip()
+            if env_li.startswith("http://") or env_li.startswith("https://"):
+                linkedin_url = env_li
+            else:
+                linkedin_url = f"https://www.linkedin.com/in/{env_li.lstrip('@')}"
+
+    return {
+        "full_name": full_name,
+        "first_name": first_name,
+        "last_name": last_name,
+        "email": email,
+        "phone": phone,
+        "linkedin_url": linkedin_url,
+        "github_url": github_url,
+    }
+
+
 def extract_candidate_profile(cv_source: Optional[Union[str, Path]] = None) -> CandidateProfile:
     """Extract a structured candidate profile from a CV file path, Path object, or raw text.
 
@@ -987,6 +1112,7 @@ def extract_candidate_profile(cv_source: Optional[Union[str, Path]] = None) -> C
     target_roles = _derive_target_roles(skills, text_content, seniority_level)
     search_queries = _derive_search_queries(top_skills, target_roles)
     suggested_exclusions = _derive_suggested_exclusions(seniority_level)
+    contact_info = _extract_candidate_contact_info(text_content, cv_source)
 
     logger.info(
         "Candidate profile extracted: %d skills, %d top skills, %d primary stack, seniority: %s, %d target roles",
@@ -1005,6 +1131,13 @@ def extract_candidate_profile(cv_source: Optional[Union[str, Path]] = None) -> C
         target_roles=target_roles,
         search_queries=search_queries,
         suggested_exclusions=suggested_exclusions,
+        full_name=contact_info.get("full_name"),
+        first_name=contact_info.get("first_name"),
+        last_name=contact_info.get("last_name"),
+        email=contact_info.get("email"),
+        phone=contact_info.get("phone"),
+        linkedin_url=contact_info.get("linkedin_url"),
+        github_url=contact_info.get("github_url"),
     )
 
 
