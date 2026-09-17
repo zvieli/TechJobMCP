@@ -75,6 +75,9 @@ from job_mcp.sources.public import (
     DEFAULT_SEED_URLS,
     DEFAULT_TECH_CATEGORIES,
     EIGHTFOLD_COMPANIES,
+    GREENHOUSE_COMPANIES,
+    GreenhouseCompany,
+    GreenhouseSource,
     JOBIFY_BASE_URL,
     JOBIFY_HEADERS,
     AllJobsSource,
@@ -88,6 +91,7 @@ from job_mcp.sources.public import (
     parse_alljobs_position,
     parse_comeet_position,
     parse_eightfold_position,
+    parse_greenhouse_job,
     parse_jobify_position,
 )
 from job_mcp.sources.registry import (
@@ -168,6 +172,10 @@ __all__ = [
     "LINKEDIN_HEADERS",
     "LINKEDIN_HEALTH_TIMEOUT",
     "LINKEDIN_REQUEST_TIMEOUT",
+    "GreenhouseSource",
+    "GreenhouseCompany",
+    "GREENHOUSE_COMPANIES",
+    "parse_greenhouse_job",
     "JobifySource",
     "DEFAULT_SEED_URLS",
     "DEFAULT_JOBIFY_SEED_URLS",

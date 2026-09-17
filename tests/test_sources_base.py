@@ -586,22 +586,6 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.delenv("ENABLE_ALLJOBS", raising=False)
         reg = create_default_registry()
-        assert len(reg) == 7
-        assert "hiremetech" in reg
-        assert "comeet" in reg
-        assert "workday" in reg
-        assert "eightfold" in reg
-        assert "direct_tech" in reg
-        assert "linkedin" in reg
-        assert "jobify" in reg
-        assert "alljobs" not in reg
-
-    @pytest.mark.parametrize("env_val", ["true", "1", "yes", "TRUE", "True"])
-    def test_registration_with_enable_alljobs(self, monkeypatch: pytest.MonkeyPatch, env_val: str) -> None:
-        from job_mcp.sources import create_default_registry
-
-        monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
-        reg = create_default_registry()
         assert len(reg) == 8
         assert "hiremetech" in reg
         assert "comeet" in reg
@@ -610,6 +594,24 @@ class TestCreateDefaultRegistry:
         assert "direct_tech" in reg
         assert "linkedin" in reg
         assert "jobify" in reg
+        assert "greenhouse" in reg
+        assert "alljobs" not in reg
+
+    @pytest.mark.parametrize("env_val", ["true", "1", "yes", "TRUE", "True"])
+    def test_registration_with_enable_alljobs(self, monkeypatch: pytest.MonkeyPatch, env_val: str) -> None:
+        from job_mcp.sources import create_default_registry
+
+        monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
+        reg = create_default_registry()
+        assert len(reg) == 9
+        assert "hiremetech" in reg
+        assert "comeet" in reg
+        assert "workday" in reg
+        assert "eightfold" in reg
+        assert "direct_tech" in reg
+        assert "linkedin" in reg
+        assert "jobify" in reg
+        assert "greenhouse" in reg
         assert "alljobs" in reg
 
     @pytest.mark.parametrize("env_val", ["false", "0", "no", "", "invalid"])
@@ -618,10 +620,11 @@ class TestCreateDefaultRegistry:
 
         monkeypatch.setenv("ENABLE_ALLJOBS", env_val)
         reg = create_default_registry()
-        assert len(reg) == 7
+        assert len(reg) == 8
         assert "hiremetech" in reg
         assert "comeet" in reg
         assert "jobify" in reg
+        assert "greenhouse" in reg
         assert "alljobs" not in reg
 
     def test_passes_session_manager(self) -> None:
@@ -639,6 +642,7 @@ class TestCreateDefaultRegistry:
         ("ENABLE_DIRECT_TECH", "direct_tech"),
         ("ENABLE_LINKEDIN", "linkedin"),
         ("ENABLE_JOBIFY", "jobify"),
+        ("ENABLE_GREENHOUSE", "greenhouse"),
     ])
     def test_registration_with_disable_individual_flags(
         self, monkeypatch: pytest.MonkeyPatch, flag: str, source_id: str
@@ -659,9 +663,10 @@ class TestCreateDefaultRegistry:
             enable_direct_tech=True,
             enable_linkedin=True,
             enable_jobify=True,
+            enable_greenhouse=True,
         )
-        assert len(reg) == 8
-        for sid in ("hiremetech", "comeet", "alljobs", "workday", "eightfold", "direct_tech", "linkedin", "jobify"):
+        assert len(reg) == 9
+        for sid in ("hiremetech", "comeet", "alljobs", "workday", "eightfold", "direct_tech", "linkedin", "jobify", "greenhouse"):
             assert sid in reg
 
 
