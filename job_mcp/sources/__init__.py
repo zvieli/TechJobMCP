@@ -6,6 +6,13 @@ import os
 from typing import Any, Optional
 
 from job_mcp.sources.base import BaseJobSource, SourceMetadata
+from job_mcp.sources.contracts import (
+    IAuthenticatedSource,
+    IBookmarkable,
+    IConfigurableSource,
+    IJobSource,
+    SourceCategory,
+)
 from job_mcp.sources.dedup import (
     compute_dedup_key,
     deduplicate_jobs,
@@ -226,9 +233,14 @@ def create_default_registry(
 registry = create_default_registry()
 
 __all__ = [
-    # Metadata & Base
+    # Metadata & Base & Contracts
     "SourceMetadata",
     "BaseJobSource",
+    "SourceCategory",
+    "IJobSource",
+    "IBookmarkable",
+    "IAuthenticatedSource",
+    "IConfigurableSource",
     # Implementations
     "HireMeTechSource",
     "ComeetSource",

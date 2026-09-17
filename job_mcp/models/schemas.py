@@ -74,6 +74,11 @@ class JobPreferences(BaseModel):
     cv_path: Optional[str] = None
 
 
+# Alias for domain contracts & preferences compatibility
+UserPreferences = JobPreferences
+
+
+
 class ApplicationPreview(BaseModel):
     """Preview of job application details before submission."""
     job_id: str
