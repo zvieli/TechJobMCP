@@ -12,6 +12,7 @@ import httpx
 
 from job_mcp.core.llm.cache import LLMCache
 from job_mcp.core.llm.rate_limiter import TokenBucketRateLimiter
+from job_mcp.models.schemas import CandidateProfile
 
 logger = logging.getLogger(__name__)
 
@@ -402,3 +403,143 @@ class ResilientLLMGateway:
         raise LLMProviderError(
             f"All LLM providers in fallback chain failed. Last error: {last_error}"
         )
+
+    async def generate_personal_note(
+        self,
+        job_title: str,
+        company: str,
+        job_description: Optional[str] = None,
+        candidate_profile: Optional[CandidateProfile] = None,
+        cv_context: Optional[str] = None,
+    ) -> str:
+        """Generate a tailored, high-impact personal note / cover letter.
+
+        Cascade: Cache -> Gemini -> OpenRouter -> Ollama -> Offline Structured Template.
+
+        Args:
+            job_title: Target job title.
+            company: Target company name.
+            job_description: Optional description of the role.
+            candidate_profile: Optional CandidateProfile model instance.
+            cv_context: Optional raw CV/profile text summary.
+
+        Returns:
+            Concise, personalized note string.
+        """
+        # 1. Cache Check
+        clean_company = company.strip() if company else ""
+        clean_title = job_title.strip() if job_title else ""
+        cache_key = f"personal_note:{clean_company.lower()}:{clean_title.lower()}"
+
+        get_cached = getattr(self.cache, "get_answer", getattr(self.cache, "get_cached_answer", None))
+        if get_cached:
+            cached_val = get_cached(cache_key)
+            if cached_val:
+                logger.info("Cache HIT for personal note: %s", cache_key)
+                return cached_val
+
+        # 2. Candidate Details Extraction
+        candidate_name = "Lior Zvieli"
+        candidate_email = "liorzvieli@gmail.com"
+        candidate_phone = "+972-52-2276810"
+        candidate_github = "https://github.com/zvieli"
+
+        if candidate_profile is not None:
+            if candidate_profile.full_name and candidate_profile.full_name.strip():
+                candidate_name = candidate_profile.full_name.strip()
+            elif candidate_profile.first_name or candidate_profile.last_name:
+                parts = [
+                    p.strip()
+                    for p in (candidate_profile.first_name, candidate_profile.last_name)
+                    if p and p.strip()
+                ]
+                if parts:
+                    candidate_name = " ".join(parts)
+
+            if candidate_profile.email and candidate_profile.email.strip():
+                candidate_email = candidate_profile.email.strip()
+            if candidate_profile.phone and candidate_profile.phone.strip():
+                candidate_phone = candidate_profile.phone.strip()
+            if candidate_profile.github_url and candidate_profile.github_url.strip():
+                candidate_github = candidate_profile.github_url.strip()
+
+        # Offline Structured Template Fallback
+        offline_template = (
+            f"Dear Hiring Team at {clean_company},\n\n"
+            f"I am applying for the {clean_title} role with strong enthusiasm for {clean_company}'s work. "
+            "As a Computer Science B.Sc. graduate from HIT specializing in Applied AI and backend "
+            "engineering, I bring hands-on experience designing multi-agent LangGraph state machines, "
+            "serverless ingestion pipelines, and hybrid GraphRAG retrieval platforms "
+            "(integrating Azure Cosmos DB and Azure AI Search for IDF MAG Corps).\n\n"
+            "My background pairs rigorous statistical evaluation with production-grade "
+            "Python/FastAPI and Asyncio development. I am eager to apply this engineering mindset "
+            "to deliver immediate impact on your team's initiatives.\n\n"
+            "Best regards,\n"
+            f"{candidate_name} | {candidate_email} | {candidate_phone} | {candidate_github}"
+        )
+
+        # 3. Prompt Engineering
+        system_prompt = (
+            "You are an expert AI Career Strategist writing a concise, high-impact "
+            "personal note / cover letter for a junior AI Engineer applying for a tech role in Israel. "
+            'Write directly in the first person ("I am...").\n'
+            "Keep it concise (2-3 paragraphs, around 120-160 words), authentic, and laser-focused "
+            "on why the candidate's specific background creates immediate value for this specific role and company.\n"
+            "Connect candidate's hands-on GraphRAG, Agentic (LangGraph), and Python/FastAPI backend engineering to the role.\n"
+            "End with professional sign-off and candidate contact details."
+        )
+
+        achievements = cv_context or (
+            "Computer Science B.Sc. graduate from HIT specializing in Applied AI. "
+            "Production experience with multi-agent LangGraph state machines, "
+            "serverless ingestion pipelines, and hybrid GraphRAG retrieval platforms "
+            "(Azure Cosmos DB + Azure AI Search for IDF MAG Corps). "
+            "Proficient in Python, FastAPI, Asyncio, and modern ML/LLM engineering."
+        )
+
+        user_prompt = (
+            f"Company: {clean_company}\n"
+            f"Role: {clean_title}\n"
+            f"Job Description: {job_description or 'Not provided'}\n\n"
+            f"Candidate Name: {candidate_name}\n"
+            f"Contact: {candidate_email} | {candidate_phone} | {candidate_github}\n"
+            f"Candidate Background & Achievements:\n{achievements}\n\n"
+            "Write a concise, compelling, tailored personal note / cover letter for this application."
+        )
+
+        # 4. Multi-Provider Fallback Cascade
+        providers = self._get_provider_chain()
+        if providers:
+            await self.rate_limiter.wait_for_token()
+
+        set_cached = getattr(self.cache, "set_answer", getattr(self.cache, "cache_answer", None))
+
+        for provider_name, provider_fn in providers:
+            try:
+                note = await self._execute_with_retry(
+                    provider_name,
+                    lambda fn=provider_fn: fn(user_prompt, system_prompt),
+                )
+                if note and note.strip():
+                    clean_note = note.strip()
+                    if set_cached:
+                        set_cached(cache_key, clean_note)
+                    return clean_note
+            except Exception as err:
+                logger.warning(
+                    "Provider %s failed for personal note (%s, %s): %s",
+                    provider_name,
+                    clean_company,
+                    clean_title,
+                    err,
+                )
+
+        # 5. Offline Structured Template Fallback
+        logger.info(
+            "All LLM providers failed or unconfigured. Using offline template fallback for personal note: %s at %s",
+            clean_title,
+            clean_company,
+        )
+        if set_cached:
+            set_cached(cache_key, offline_template)
+        return offline_template

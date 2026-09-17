@@ -113,6 +113,10 @@ class LLMCache:
         logger.debug("Cache miss for question hash: %s", q_hash[:8])
         return None
 
+    def get_answer(self, key: str) -> Optional[str]:
+        """Fetch cached answer for key (alias for get_cached_answer)."""
+        return self.get_cached_answer(key)
+
     def cache_answer(self, question: str, answer: str) -> None:
         """Store or update question-answer pair in SQLite cache.
 
@@ -144,6 +148,10 @@ class LLMCache:
             finally:
                 if self._mem_conn is None:
                     conn.close()
+
+    def set_answer(self, key: str, answer: str) -> None:
+        """Store or update key-answer pair in cache (alias for cache_answer)."""
+        self.cache_answer(key, answer)
 
     def clear(self) -> None:
         """Clear all cached answers."""

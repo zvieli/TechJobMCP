@@ -6,14 +6,14 @@ import asyncio
 import os
 import time
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 import httpx
 
 from job_mcp.core.llm.cache import LLMCache
+from job_mcp.models.schemas import CandidateProfile
 from job_mcp.core.llm.gateway import (
-    LLMError,
     LLMProviderError,
     RateLimitOrUnavailableError,
     ResilientLLMGateway,
@@ -217,6 +217,98 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(gw.openrouter_model, "z-ai/glm-5.2:free")
             self.assertEqual(gw.openrouter_reasoning_model, "z-ai/glm-5.2:free")
             self.assertEqual(gw.openrouter_extraction_model, "google/gemma-4-26b-a4b-it:free")
+
+    async def test_generate_personal_note_gemini_success(self) -> None:
+        """Verify Gemini successfully generates personal note and caches it."""
+        note_content = "I am writing with great enthusiasm for the AI Engineer role at CyberTech..."
+        self.gateway.gemini_api_key = "fake_gemini_key"
+        self.gateway._call_gemini = AsyncMock(return_value=note_content)
+
+        result = await self.gateway.generate_personal_note(
+            job_title="AI Engineer",
+            company="CyberTech",
+            job_description="Build autonomous agents using LangGraph and FastAPI.",
+        )
+
+        self.assertEqual(result, note_content)
+        self.gateway._call_gemini.assert_called_once()
+        cache_key = "personal_note:cybertech:ai engineer"
+        cached = getattr(self.cache, "get_answer", self.cache.get_cached_answer)(cache_key)
+        self.assertEqual(cached, note_content)
+
+    async def test_generate_personal_note_ollama_fallback(self) -> None:
+        """Verify fallback to Ollama when Gemini fails or is unconfigured."""
+        self.gateway.gemini_api_key = None
+        self.gateway.openrouter_api_key = None
+        ollama_note = "Ollama-generated tailored personal note for DataCorp."
+        self.gateway._call_ollama = AsyncMock(return_value=ollama_note)
+
+        result = await self.gateway.generate_personal_note(
+            job_title="ML Engineer",
+            company="DataCorp",
+        )
+
+        self.assertEqual(result, ollama_note)
+        self.gateway._call_ollama.assert_called_once()
+
+    async def test_generate_personal_note_offline_fallback(self) -> None:
+        """Verify offline template fallback with candidate profile and company/title."""
+        self.gateway.gemini_api_key = None
+        self.gateway.openrouter_api_key = None
+        self.gateway._call_ollama = AsyncMock(side_effect=httpx.ConnectError("Ollama offline"))
+
+        profile = CandidateProfile(
+            full_name="Jane Doe",
+            email="jane@example.com",
+            phone="+972-50-1234567",
+            github_url="https://github.com/janedoe",
+        )
+
+        result = await self.gateway.generate_personal_note(
+            job_title="Backend Engineer",
+            company="Acme Corp",
+            candidate_profile=profile,
+        )
+
+        self.assertIn("Dear Hiring Team at Acme Corp,", result)
+        self.assertIn("Backend Engineer", result)
+        self.assertIn("Jane Doe | jane@example.com | +972-50-1234567 | https://github.com/janedoe", result)
+
+        # Also test with default profile (None)
+        default_result = await self.gateway.generate_personal_note(
+            job_title="Full Stack Lead",
+            company="BetaTech",
+            candidate_profile=None,
+        )
+        self.assertIn("Dear Hiring Team at BetaTech,", default_result)
+        self.assertIn("Full Stack Lead", default_result)
+        self.assertIn("Lior Zvieli | liorzvieli@gmail.com | +972-52-2276810 | https://github.com/zvieli", default_result)
+
+    async def test_generate_personal_note_cache_hit(self) -> None:
+        """Verify second call retrieves cached personal note without network invocation."""
+        first_note = "Generated note content for caching test."
+        self.gateway.gemini_api_key = "fake_gemini_key"
+        self.gateway._call_gemini = AsyncMock(return_value=first_note)
+
+        # First call: cache miss, calls Gemini
+        res1 = await self.gateway.generate_personal_note(
+            job_title="AI Engineer",
+            company="CacheCompany",
+        )
+        self.assertEqual(res1, first_note)
+        self.assertEqual(self.gateway._call_gemini.call_count, 1)
+
+        # Reset mock call count
+        self.gateway._call_gemini.reset_mock()
+
+        # Second call: cache hit, bypasses provider
+        res2 = await self.gateway.generate_personal_note(
+            job_title="AI Engineer",
+            company="CacheCompany",
+        )
+        self.assertEqual(res2, first_note)
+        self.gateway._call_gemini.assert_not_called()
+
 
 
 if __name__ == "__main__":
