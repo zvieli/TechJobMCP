@@ -149,7 +149,7 @@ class TestComeetSourceMetadataAndDirectory:
         assert "Comeet ATS" in source.description
         assert source.is_authenticated is False
         assert source.supports_bookmarks is False
-        assert source.supports_auto_apply is False
+        assert source.supports_auto_apply is True
 
         meta = source.get_metadata()
         assert meta.source_id == "comeet"

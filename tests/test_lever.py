@@ -154,7 +154,7 @@ class TestLeverSource:
         meta = source.get_metadata()
         assert meta.source_id == "lever"
         assert meta.category.value == "public"
-        assert meta.supports_auto_apply is False
+        assert meta.supports_auto_apply is True
 
     @pytest.mark.asyncio
     async def test_check_health_success(self):

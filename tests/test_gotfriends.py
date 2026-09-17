@@ -189,7 +189,7 @@ class TestGotFriendsSource:
         assert source.source_id == "gotfriends"
         assert source.display_name == "GotFriends"
         assert source.category == SourceCategory.PUBLIC
-        assert source.supports_auto_apply is False
+        assert source.supports_auto_apply is True
         assert source.supports_bookmarks is False
 
     @pytest.mark.asyncio

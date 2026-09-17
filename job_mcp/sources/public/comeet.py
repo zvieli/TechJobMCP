@@ -197,7 +197,7 @@ class ComeetSource(BasePublicSource):
     description: str = "Direct career listings from tech companies using Comeet ATS"
     is_authenticated: bool = False
     supports_bookmarks: bool = False
-    supports_auto_apply: bool = False
+    supports_auto_apply: bool = True
 
     def __init__(
         self,

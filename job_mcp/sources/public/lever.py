@@ -144,7 +144,7 @@ class LeverSource(BasePublicSource):
     source_id = "lever"
     display_name = "Lever"
     description = "Lever ATS aggregator for Israeli tech startups (DriveNets, Redis, Melio, HiBob, etc.)"
-    supports_auto_apply = False
+    supports_auto_apply = True
 
     def __init__(self, companies: Optional[dict[str, LeverCompany]] = None) -> None:
         self._companies = companies if companies is not None else LEVER_COMPANIES

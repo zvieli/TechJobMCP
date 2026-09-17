@@ -625,3 +625,123 @@ async def test_browser_playwright_strategy_success_with_receipt():
     assert "confirmation" in result["receipt"].lower() or "thank you" in result["receipt"].lower()
     assert result["screenshot_path"] is not None
 
+
+# ---------------------------------------------------------
+# New Source Routing & Flagging Tests (Task 4)
+# ---------------------------------------------------------
+
+def test_get_application_strategy_routes_new_sources():
+    """Verify that gotfriends, greenhouse, lever, and comeet route to BrowserPlaywrightStrategy."""
+    for src in ("gotfriends", "gotfriends_123", "greenhouse", "lever", "comeet", "comeet_ats"):
+        strategy = get_application_strategy(src)
+        assert isinstance(strategy, BrowserPlaywrightStrategy), f"Expected BrowserPlaywrightStrategy for source '{src}'"
+
+
+def test_sources_support_auto_apply_flags():
+    """Verify supports_auto_apply is True for GotFriends, Greenhouse, Lever, and Comeet sources."""
+    from job_mcp.sources.public.comeet import ComeetSource
+    from job_mcp.sources.public.gotfriends import GotFriendsSource
+    from job_mcp.sources.public.greenhouse import GreenhouseSource
+    from job_mcp.sources.public.lever import LeverSource
+
+    assert GotFriendsSource().supports_auto_apply is True
+    assert GreenhouseSource().supports_auto_apply is True
+    assert LeverSource().supports_auto_apply is True
+    assert ComeetSource().supports_auto_apply is True
+
+
+@pytest.mark.asyncio
+async def test_browser_strategy_preview_passes_job_to_mapper():
+    """Verify BrowserPlaywrightStrategy.preview passes job=job to form_mapper.map_form_fields."""
+    from job_mcp.core.application.dom_inspector import FormFieldSchema
+
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://jobs.example.com/apply"
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    mock_mapper = MagicMock()
+    mock_mapper.map_form_fields = AsyncMock(return_value={"email": "candidate@example.com"})
+    mock_mapper.llm_gateway = None
+
+    job = Job(
+        job_id="test-job-preview",
+        title="Senior AI Engineer",
+        company="AI Labs",
+        source="gotfriends",
+        apply_url="https://jobs.example.com/apply",
+    )
+    profile = CandidateProfile(skills=["Python", "PyTorch"])
+
+    strategy = BrowserPlaywrightStrategy(
+        session_manager=mock_session_manager,
+        form_mapper=mock_mapper,
+    )
+
+    schema = [
+        FormFieldSchema(field_id="email", name="email", field_type="email", selector="input[name='email']")
+    ]
+
+    with (
+        patch("job_mcp.core.application.strategies.browser.extract_form_schema", AsyncMock(return_value=schema)),
+        patch("job_mcp.core.application.strategies.browser.identify_submit_button", AsyncMock(return_value=None)),
+    ):
+        await strategy.preview(job, profile)
+
+    mock_mapper.map_form_fields.assert_awaited_once()
+    _, kwargs = mock_mapper.map_form_fields.call_args
+    assert kwargs.get("job") == job
+
+
+@pytest.mark.asyncio
+async def test_browser_strategy_apply_passes_job_to_mapper():
+    """Verify BrowserPlaywrightStrategy.apply passes job=job to form_mapper.map_form_fields."""
+    from job_mcp.core.application.dom_inspector import FormFieldSchema, SubmitButtonInfo
+
+    mock_session_manager = MagicMock()
+    mock_page = AsyncMock()
+    mock_page.url = "https://jobs.example.com/apply"
+    mock_page.title = AsyncMock(return_value="Careers Application")
+    mock_session_manager.get_page = AsyncMock(return_value=mock_page)
+
+    mock_loc = MagicMock()
+    mock_loc.count = AsyncMock(return_value=1)
+    mock_loc.first = mock_loc
+    mock_loc.fill = AsyncMock()
+    mock_loc.click = AsyncMock()
+    mock_page.locator = MagicMock(return_value=mock_loc)
+
+    mock_mapper = MagicMock()
+    mock_mapper.map_form_fields = AsyncMock(return_value={"email": "candidate@example.com"})
+    mock_mapper.llm_gateway = None
+
+    job = Job(
+        job_id="test-job-apply",
+        title="Staff ML Engineer",
+        company="TechCorp",
+        source="lever",
+        apply_url="https://jobs.example.com/apply",
+    )
+    profile = CandidateProfile(skills=["Python", "Deep Learning"])
+
+    strategy = BrowserPlaywrightStrategy(
+        session_manager=mock_session_manager,
+        form_mapper=mock_mapper,
+    )
+
+    schema = [
+        FormFieldSchema(field_id="email", name="email", field_type="email", selector="input[name='email']")
+    ]
+    mock_submit_info = SubmitButtonInfo(selector="button[type='submit']", text="Submit", confidence=0.95)
+
+    with (
+        patch("job_mcp.core.application.strategies.browser.extract_form_schema", AsyncMock(return_value=schema)),
+        patch("job_mcp.core.application.strategies.browser.identify_submit_button", AsyncMock(return_value=mock_submit_info)),
+    ):
+        await strategy.apply(job, profile)
+
+    mock_mapper.map_form_fields.assert_awaited_once()
+    _, kwargs = mock_mapper.map_form_fields.call_args
+    assert kwargs.get("job") == job
+
+

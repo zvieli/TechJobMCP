@@ -203,7 +203,7 @@ class GotFriendsSource(BasePublicSource):
     source_id = "gotfriends"
     display_name = "GotFriends"
     description = "Israel's top tech recruiter with dedicated AI, Machine Learning, and Algorithm job hubs"
-    supports_auto_apply = False
+    supports_auto_apply = True
 
     def __init__(
         self,

@@ -13,7 +13,6 @@ from unittest.mock import Mock
 
 from job_mcp.core.application.dom_inspector import (
     FormFieldSchema,
-    SubmitButtonInfo,
     extract_form_schema,
     identify_submit_button,
 )
@@ -84,7 +83,7 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                     if form_fields:
                         schema_dicts = [f.to_dict() for f in form_fields]
                         mapped_values = await self.form_mapper.map_form_fields(
-                            schema_dicts, profile=profile, cv_text=None
+                            schema_dicts, profile=profile, cv_text=None, job=job
                         )
 
                         fields_to_submit: dict[str, Any] = {}
@@ -466,7 +465,7 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
 
                     schema_dicts = [f.to_dict() for f in fields]
                     mapped_values = await self.form_mapper.map_form_fields(
-                        schema_dicts, profile=profile, cv_text=None
+                        schema_dicts, profile=profile, cv_text=None, job=job
                     )
 
                     for f in fields:

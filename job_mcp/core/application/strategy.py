@@ -122,15 +122,16 @@ def get_application_strategy(
     if any(s in src for s in easy_apply_sources):
         return EasyApplyStrategy(session_manager=session_manager)
 
-    # 2. Dynamic ATS / Web sources (hiremetech, jobify, comeet, workday, eightfold, greenhouse, lever, alljobs, browser, playwright)
+    # 2. Dynamic ATS / Web sources (gotfriends, comeet, greenhouse, lever, jobify, hiremetech, workday, eightfold, alljobs, browser, playwright)
     browser_sources = (
-        "hiremetech",
-        "jobify",
+        "gotfriends",
         "comeet",
-        "workday",
-        "eightfold",
         "greenhouse",
         "lever",
+        "jobify",
+        "hiremetech",
+        "workday",
+        "eightfold",
         "alljobs",
         "browser",
         "playwright",
