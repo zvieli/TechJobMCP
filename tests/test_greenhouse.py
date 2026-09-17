@@ -1,13 +1,12 @@
 """Tests for GreenhouseSource job source."""
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from job_mcp.models.schemas import Job, JobPreferences
+from job_mcp.models.schemas import JobPreferences
 from job_mcp.sources.contracts import SourceCategory
 from job_mcp.sources.public.greenhouse import (
     GREENHOUSE_COMPANIES,
@@ -55,6 +54,7 @@ class TestParseGreenhouseJob:
         assert job.source == "greenhouse"
         assert job.url == "https://boards.greenhouse.io/ai21labs/jobs/12345"
         assert job.department == "Engineering"
+        assert job.posted_date == "2026-09-15T10:00:00Z"
 
     def test_extracts_tech_stack(self):
         raw = {
@@ -79,6 +79,7 @@ class TestParseGreenhouseJob:
         }
         job = parse_greenhouse_job(raw, "TestCo")
         assert job.location == ""
+        assert job.posted_date is None
 
     def test_handles_remote_in_location(self):
         raw = {
@@ -91,6 +92,18 @@ class TestParseGreenhouseJob:
         }
         job = parse_greenhouse_job(raw, "TestCo")
         assert job.work_mode == "remote"
+
+    def test_handles_hybrid_in_location_or_description(self):
+        raw = {
+            "id": 103,
+            "title": "Full Stack Dev",
+            "location": {"name": "Tel Aviv (Hybrid)"},
+            "absolute_url": "https://boards.greenhouse.io/test/jobs/103",
+            "content": "<p>We offer hybrid work flexibility.</p>",
+            "departments": [],
+        }
+        job = parse_greenhouse_job(raw, "TestCo")
+        assert job.work_mode == "hybrid"
 
     def test_handles_string_location(self):
         raw = {
@@ -234,6 +247,13 @@ class TestGreenhouseSource:
         assert len(jobs) == 1
         assert jobs[0].title == "Python AI Engineer"
 
+    @pytest.mark.asyncio
+    async def test_fetch_jobs_handles_unexpected_exception(self):
+        source = GreenhouseSource(companies={"test": GreenhouseCompany("Test", "test", enabled=True)})
+        with patch.object(source, "_fetch_company_jobs", side_effect=RuntimeError("Unexpected board crash")):
+            jobs = await source.fetch_jobs(limit=10)
+        assert jobs == []
+
 
 class TestGreenhouseBackwardCompatAndRegistry:
     """Tests for backward-compat shim and registry integration."""
@@ -246,6 +266,9 @@ class TestGreenhouseBackwardCompatAndRegistry:
             parse_greenhouse_job,
         )
         assert GreenhouseSource.source_id == "greenhouse"
+        assert GREENHOUSE_COMPANIES is not None
+        assert GreenhouseCompany is not None
+        assert parse_greenhouse_job is not None
 
     def test_sources_public_init_exports(self):
         import job_mcp.sources.public as public_pkg

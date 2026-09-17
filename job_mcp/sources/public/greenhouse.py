@@ -101,6 +101,9 @@ def parse_greenhouse_job(raw: dict[str, Any], company_name: str) -> Job:
     # Work mode
     work_mode = _detect_work_mode(location_str, description)
 
+    # Posted date from updated_at timestamp
+    posted_date = str(raw["updated_at"]) if raw.get("updated_at") else None
+
     return Job(
         job_id=job_id,
         title=title,
@@ -113,6 +116,7 @@ def parse_greenhouse_job(raw: dict[str, Any], company_name: str) -> Job:
         source="greenhouse",
         work_mode=work_mode,
         department=department,
+        posted_date=posted_date,
     )
 
 
@@ -177,6 +181,8 @@ class GreenhouseSource(BasePublicSource):
         for result in results:
             if isinstance(result, list):
                 all_jobs.extend(result)
+            elif isinstance(result, Exception):
+                logger.error("Greenhouse board task failed unexpectedly: %s", result, exc_info=result)
 
         # Filter using candidate preferences if provided
         if preferences:
@@ -200,3 +206,12 @@ class GreenhouseSource(BasePublicSource):
                 return resp.status_code == 200
         except Exception:
             return False
+
+
+__all__ = [
+    "GREENHOUSE_COMPANIES",
+    "GreenhouseCompany",
+    "GreenhouseSource",
+    "parse_greenhouse_job",
+]
+
