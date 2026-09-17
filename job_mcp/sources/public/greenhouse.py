@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import html
 import re
 import time
 from typing import Any, Optional
@@ -56,20 +57,21 @@ GREENHOUSE_COMPANIES: dict[str, GreenhouseCompany] = {
 }
 
 
-def _strip_html(html: str) -> str:
-    """Remove HTML tags and collapse whitespace."""
-    text = re.sub(r"<[^>]+>", " ", html)
+def _strip_html(raw_html: str) -> str:
+    """Remove HTML tags, unescape HTML entities, and collapse whitespace."""
+    text = re.sub(r"<[^>]+>", " ", raw_html)
+    text = html.unescape(text)
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _detect_work_mode(location: str, description: str) -> str:
+def _detect_work_mode(location: str, description: str) -> WorkMode:
     """Detect work mode from location and description text."""
     combined = f"{location} {description}".lower()
     if "remote" in combined:
-        return WorkMode.REMOTE if hasattr(WorkMode, "REMOTE") else "remote"
+        return WorkMode.REMOTE
     if "hybrid" in combined:
-        return WorkMode.HYBRID if hasattr(WorkMode, "HYBRID") else "hybrid"
-    return WorkMode.ONSITE if hasattr(WorkMode, "ONSITE") else "onsite"
+        return WorkMode.HYBRID
+    return WorkMode.ONSITE
 
 
 def parse_greenhouse_job(raw: dict[str, Any], company_name: str) -> Job:
