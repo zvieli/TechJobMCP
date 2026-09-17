@@ -15,17 +15,14 @@ from job_mcp.models.schemas import ApplicationPreview, CandidateProfile, Job, Wo
 
 logger = logging.getLogger(__name__)
 
-# Regex pattern matching Israel, Israeli cities/regions, IL country code, and Remote (both English and Hebrew)
 ISRAEL_LOCATION_PATTERN = re.compile(
-    r"\b("
-    r"israel|il|remote|tel[\s\-_]*aviv|herzliya|haifa|jerusalem|rehovot|ramat[\s\-_]*gan|"
+    r"(?:\b(israel|il|remote|tel[\s\-_]*aviv|herzliya|haifa|jerusalem|rehovot|ramat[\s\-_]*gan|"
     r"raanana|ra'anana|petah[\s\-_]*tikva|petach[\s\-_]*tikva|beer[\s\-_]*sheva|beersheba|"
     r"yokneam|yokne'am|netanya|kfar[\s\-_]*saba|hod[\s\-_]*hasharon|holon|bat[\s\-_]*yam|"
-    r"modiin|modi'in|rishon[\s\-_]*lezion|givatayim|caesarea|ness[\s\-_]*ziona|bnei[\s\-_]*brak|glilot|"
-    r"ישראל|מרכז|גוש[\s\-_]*דן|שרון|תל[\s\-_]*אביב(?:[\s\-_]*יפו)?|חיפה|ירושלים|רמת[\s\-_]*גן|"
+    r"modiin|modi'in|rishon[\s\-_]*lezion|givatayim|caesarea|ness[\s\-_]*ziona|bnei[\s\-_]*brak|glilot)\b|"
+    r"(?:ישראל|מרכז|המרכז|גוש[\s\-_]*דן|שרון|השרון|ת[\"״\']?א|תל[\s\-_]*אביב(?:[\s\-_]*יפו)?|חיפה|ירושלים|רמת[\s\-_]*גן|"
     r"הרצליה|פתח[\s\-_]*תקו+ה|רעננה|נתניה|באר[\s\-_]*שבע|חולון|ראשון[\s\-_]*לציון|רחובות|"
-    r"כפר[\s\-_]*סבא|הוד[\s\-_]*השרון|בת[\s\-_]*ים|מודיעין|גבעתיים|קיסריה|נס[\s\-_]*ציונה|בני[\s\-_]*ברק|גלילות|יקנעם"
-    r")\b",
+    r"כפר[\s\-_]*סבא|הוד[\s\-_]*השרון|בת[\s\-_]*ים|מודיעין|גבעתיים|קיסריה|נס[\s\-_]*ציונה|בני[\s\-_]*ברק|גלילות|יקנעם|צפון|דרום|שפלה))",
     re.IGNORECASE,
 )
 
