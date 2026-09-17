@@ -99,6 +99,27 @@ _DOM_EXTRACTOR_JS = """
         return rect.width > 0 || rect.height > 0 || el.getClientRects().length > 0;
     }
 
+    function isHoneypot(el) {
+        if (!el) return false;
+        const name = (el.getAttribute('name') || '').toLowerCase();
+        if (name === 'website') return true;
+        const className = (el.className || '').toString().toLowerCase();
+        if (className.includes('honeypot')) return true;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        const computedLeft = parseInt(style.left, 10);
+        const inlineLeft = el.style && el.style.left ? parseInt(el.style.left, 10) : NaN;
+        const isAbsolute = style.position === 'absolute' || (el.style && el.style.position === 'absolute');
+        if (isAbsolute && ((!isNaN(computedLeft) && computedLeft < -1000) || (!isNaN(inlineLeft) && inlineLeft < -1000))) {
+            return true;
+        }
+        if (rect && rect.left < -1000) {
+            return true;
+        }
+        return false;
+    }
+
+
     function getElementLabel(el) {
         // 1. aria-label
         const ariaLabel = el.getAttribute('aria-label');
@@ -233,6 +254,7 @@ _DOM_EXTRACTOR_JS = """
     const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]):not([type="image"])');
     inputs.forEach((el, idx) => {
         if (!isElementVisible(el)) return;
+        if (isHoneypot(el)) return;
         const type = (el.getAttribute('type') || 'text').toLowerCase();
         const name = el.getAttribute('name') || '';
         const id = el.id || '';
@@ -287,6 +309,7 @@ _DOM_EXTRACTOR_JS = """
     const textareas = document.querySelectorAll('textarea');
     textareas.forEach((el, idx) => {
         if (!isElementVisible(el)) return;
+        if (isHoneypot(el)) return;
         const name = el.getAttribute('name') || '';
         const id = el.id || '';
         const label = getElementLabel(el);
@@ -313,6 +336,7 @@ _DOM_EXTRACTOR_JS = """
     const selects = document.querySelectorAll('select');
     selects.forEach((el, idx) => {
         if (!isElementVisible(el)) return;
+        if (isHoneypot(el)) return;
         const name = el.getAttribute('name') || '';
         const id = el.id || '';
         const label = getElementLabel(el);
@@ -417,12 +441,12 @@ _BUTTON_EXTRACTOR_JS = """
 # ---------------------------------------------------------------------------
 
 _EXACT_SUBMIT_PATTERNS = re.compile(
-    r"^(submit(\s+application)?|apply(\s+now)?|send(\s+application)?|complete\s+application|submit\s+resume|finish(\s+application)?|confirm\s+application|confirm|send|הגש|הגשת\s+מועמדות|הגש\s+מועמדות|שלח|שלח\s+מועמדות|שליחה|הגש\s+עכשיו)$",
+    r"^(submit(\s+application)?|apply(\s+now)?|send(\s+application)?|complete\s+application|submit\s+resume|finish(\s+application)?|confirm\s+application|confirm|send|הגש|הגשת\s+מועמדות|הגש\s+מועמדות|שלח|שלחו|שלחי|שלח\s+מועמדות|שליחה|שליחת\s+קורות\s+חיים|הגש\s+עכשיו)$",
     re.IGNORECASE,
 )
 
 _CONTAINS_SUBMIT_PATTERNS = re.compile(
-    r"\b(submit|apply|send\s+application|complete\s+application|submit\s+resume|הגש|הגשת\s+מועמדות|הגש\s+מועמדות|שלח|שלח\s+מועמדות|שליחה|הגש\s+עכשיו)\b",
+    r"\b(submit|apply|send\s+application|complete\s+application|submit\s+resume|הגש|הגשת\s+מועמדות|הגש\s+מועמדות|שלח|שלחו|שלחי|שלח\s+מועמדות|שליחה|שליחת\s+קורות\s+חיים|הגש\s+עכשיו)\b",
     re.IGNORECASE,
 )
 
@@ -476,6 +500,9 @@ def _score_button_candidate(candidate: dict[str, Any]) -> tuple[float, str]:
         score += 25.0
 
     if "submit" in el_id or "apply" in el_id:
+        score += 15.0
+
+    if "send" in el_id or "cv" in el_id or "send" in el_class:
         score += 15.0
 
     if any(k in el_class for k in ("submit", "apply", "btn-primary", "button-primary", "primary")):

@@ -8,7 +8,7 @@ import re
 from typing import Any, Optional, Sequence
 
 from job_mcp.core.llm.gateway import ResilientLLMGateway
-from job_mcp.models.schemas import CandidateProfile
+from job_mcp.models.schemas import CandidateProfile, Job
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,16 @@ CV_REGEX = re.compile(
 # ---------------------------------------------------------------------------
 # Deterministic Rule Regexes for Standard ATS Screening Questions
 # ---------------------------------------------------------------------------
+
+TERMS_CONSENT_REGEX = re.compile(
+    r"\b(agree|terms|consent|privacy|marketing|gdpr|condition(s)?|תקנון|תנאי\s+שימוש|אישור|מסכים|הסכמה)\b",
+    re.IGNORECASE,
+)
+
+NOTE_COVER_LETTER_REGEX = re.compile(
+    r"\b(cover[_\s\-]*letter|personal[_\s\-]*note|note|notes|comment|comments|additional[_\s\-]*info(rmation)?|why[_\s\-]*us|why[_\s\-]*join|message|tell[_\s\-]*us|מכתב\s+מקדים|הערות|מכתב\s+פניה|למה\s+אנחנו|פניה|הודעה)\b",
+    re.IGNORECASE,
+)
 
 SPONSORSHIP_REGEX = re.compile(
     r"\b(sponsor(ship)?|require\s+(visa|sponsorship)|need\s+(visa|sponsorship)|visa\s+status)\b",
@@ -389,6 +399,15 @@ class SemanticFormMapper:
         pdata = profile_data or {}
         is_bool_type = field_type.lower() in ("checkbox", "bool", "boolean")
 
+        # 0. Terms & Consent Checkbox Rule (e.g. "I agree to the terms", "Privacy Policy", etc.)
+        if TERMS_CONSENT_REGEX.search(identifier):
+            if is_bool_type:
+                return True
+            if options:
+                matched = self._match_dropdown_option(options, True)
+                return matched if matched is not None else options[0]
+            return "Yes"
+
         # 1. Visa Sponsorship Question (e.g. "Do you require sponsorship?")
         if SPONSORSHIP_REGEX.search(identifier):
             if is_bool_type:
@@ -486,6 +505,7 @@ class SemanticFormMapper:
         options: Optional[list[str]] = None,
         profile: Optional[dict[str, Any] | CandidateProfile] = None,
         cv_text: Optional[str] = None,
+        job: Optional[Job] = None,
     ) -> Any:
         """Resolve a single form field or screening question.
 
@@ -501,6 +521,7 @@ class SemanticFormMapper:
             options: List of available options for dropdown/radio fields.
             profile: Candidate profile dict or CandidateProfile model.
             cv_text: Raw text or summary from CV / resume for LLM context grounding.
+            job: Optional Job instance providing job title, company, and description.
 
         Returns:
             Resolved field value (string, boolean, integer, or matching option).
@@ -518,12 +539,61 @@ class SemanticFormMapper:
                 return matched_opt if matched_opt is not None else std_val
             return std_val
 
+        # Terms & Consent Checkbox Rule
+        if (
+            field_type.lower() in ("checkbox", "bool", "boolean")
+            and TERMS_CONSENT_REGEX.search(combined_text)
+        ):
+            return True
+
         # Step 2: Deterministic rule matching for standard ATS screening questions
         screen_val = self._resolve_screening_question_heuristic(
             combined_text, field_type, options, profile_data
         )
         if screen_val is not None:
             return screen_val
+
+        # Step 2.5: Personal note / Cover letter / Comments generation
+        if (
+            NOTE_COVER_LETTER_REGEX.search(combined_text)
+            and field_type.lower() in ("textarea", "text")
+            and not options
+        ):
+            target_roles = profile_data.get("target_roles")
+            default_role = (
+                target_roles[0]
+                if (isinstance(target_roles, list) and target_roles)
+                else "AI Engineer"
+            )
+            job_title = job.title if (job and getattr(job, "title", None)) else default_role
+            company = (
+                job.company
+                if (job and getattr(job, "company", None))
+                else "the hiring company"
+            )
+            job_desc = job.description if (job and getattr(job, "description", None)) else None
+
+            cand_profile = profile if isinstance(profile, CandidateProfile) else None
+            if cand_profile is None and isinstance(profile, dict):
+                try:
+                    cand_profile = CandidateProfile(
+                        **{
+                            k: v
+                            for k, v in profile.items()
+                            if k in CandidateProfile.model_fields
+                        }
+                    )
+                except Exception:
+                    cand_profile = None
+
+            note = await self.llm_gateway.generate_personal_note(
+                job_title=job_title,
+                company=company,
+                job_description=job_desc,
+                candidate_profile=cand_profile,
+                cv_context=cv_text,
+            )
+            return note
 
         # Step 3: Context-Aware LLM Gateway for open-ended or custom screening questions
         question_text = label.strip() if label.strip() else field_id.strip()
@@ -565,6 +635,7 @@ class SemanticFormMapper:
         fields_schema: list[dict[str, Any]],
         profile: Optional[dict[str, Any] | CandidateProfile] = None,
         cv_text: Optional[str] = None,
+        job: Optional[Job] = None,
     ) -> dict[str, Any]:
         """Resolve and map an entire schema of ATS form fields.
 
@@ -577,6 +648,7 @@ class SemanticFormMapper:
                 - 'required': Optional boolean.
             profile: Candidate profile dict or CandidateProfile model.
             cv_text: Optional raw CV text for context.
+            job: Optional Job instance providing job title, company, and description.
 
         Returns:
             dict[str, Any]: Mapping of {field_id: resolved_value}.
@@ -601,6 +673,7 @@ class SemanticFormMapper:
                 options=options,
                 profile=profile,
                 cv_text=cv_text,
+                job=job,
             )
             resolved[str(field_id)] = val
 

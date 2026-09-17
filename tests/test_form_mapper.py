@@ -354,7 +354,7 @@ async def test_ambiguous_question_caching_with_live_gateway(
 
     # First call - uses mock LLM fallback and caches result in SQLite
     res1 = await mapper.resolve_field(
-        field_id="why_us",
+        field_id="custom_q2",
         label=custom_q,
         field_type="textarea",
         cv_text=cv_text,
@@ -367,7 +367,7 @@ async def test_ambiguous_question_caching_with_live_gateway(
 
     # Second call - must return instant cache hit
     res2 = await mapper.resolve_field(
-        field_id="why_us",
+        field_id="custom_q2",
         label=custom_q,
         field_type="textarea",
         cv_text=cv_text,
@@ -603,4 +603,114 @@ async def test_hebrew_full_form_mapping(
     assert mapped["auth_heb"] is True
 
     mock_llm_gateway.ask_question.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_consent_and_terms_checkbox_resolves_true(mock_llm_gateway: MagicMock) -> None:
+    """Verify terms, consent, privacy, and agreement checkboxes resolve to True deterministically."""
+    mapper = SemanticFormMapper(llm_gateway=mock_llm_gateway)
+
+    test_cases = [
+        ("agree_terms", "I agree to the terms and conditions", "checkbox", True),
+        ("privacy_policy", "I accept the Privacy Policy", "checkbox", True),
+        ("consent", "Candidate Consent", "bool", True),
+        ("gdpr_consent", "GDPR agreement", "checkbox", True),
+        ("terms", "Terms of Service", "boolean", True),
+        ("marketing_opt_in", "Agree to receive marketing updates", "checkbox", True),
+        ("takanoon", "אישור תקנון ותנאי שימוש", "checkbox", True),
+        ("agree_hebrew", "אני מסכים לתנאים", "checkbox", True),
+    ]
+
+    for field_id, label, ftype, expected in test_cases:
+        res = await mapper.resolve_field(
+            field_id=field_id,
+            label=label,
+            field_type=ftype,
+        )
+        assert res is expected, f"Failed resolving {field_id} ({label})"
+
+    mock_llm_gateway.ask_question.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cover_letter_and_personal_note_generation(
+    mock_llm_gateway: MagicMock, sample_profile: CandidateProfile
+) -> None:
+    """Verify cover letter, personal note, and comments fields invoke generate_personal_note."""
+    mock_llm_gateway.generate_personal_note = AsyncMock(return_value="Tailored personal note for the role.")
+    mapper = SemanticFormMapper(llm_gateway=mock_llm_gateway)
+
+    job = Job(
+        job_id="job_123",
+        title="Staff ML Engineer",
+        company="CyberCorp",
+        description="Looking for Python and ML specialists.",
+        apply_url="https://cybercorp.com/apply",
+        source="career_page",
+    )
+
+    test_fields = [
+        ("cover_letter", "Cover Letter", "textarea"),
+        ("personal_note", "Personal Note to Hiring Manager", "text"),
+        ("comments", "Additional Comments / Info", "textarea"),
+        ("why_join", "Why do you want to join us?", "textarea"),
+        ("hebrew_note", "מכתב מקדים והערות", "textarea"),
+    ]
+
+    for field_id, label, ftype in test_fields:
+        res = await mapper.resolve_field(
+            field_id=field_id,
+            label=label,
+            field_type=ftype,
+            profile=sample_profile,
+            job=job,
+        )
+        assert res == "Tailored personal note for the role."
+
+    assert mock_llm_gateway.generate_personal_note.call_count == len(test_fields)
+    call_kwargs = mock_llm_gateway.generate_personal_note.call_args.kwargs
+    assert call_kwargs["job_title"] == "Staff ML Engineer"
+    assert call_kwargs["company"] == "CyberCorp"
+    assert call_kwargs["job_description"] == "Looking for Python and ML specialists."
+
+
+@pytest.mark.asyncio
+async def test_candidate_profile_direct_attributes(mock_llm_gateway: MagicMock) -> None:
+    """Verify CandidateProfile direct attributes (full_name, email, phone) are resolved."""
+    profile = CandidateProfile(
+        full_name="Gal Gadot",
+        first_name="Gal",
+        last_name="Gadot",
+        email="gal@gadot.com",
+        phone="+972-50-7654321",
+        skills=["Acting", "Python"],
+    )
+    mapper = SemanticFormMapper(llm_gateway=mock_llm_gateway)
+
+    name_res = await mapper.resolve_field(
+        field_id="applicant_name",
+        label="Full Name",
+        field_type="text",
+        profile=profile,
+    )
+    assert name_res == "Gal Gadot"
+
+    email_res = await mapper.resolve_field(
+        field_id="email",
+        label="Email Address",
+        field_type="email",
+        profile=profile,
+    )
+    assert email_res == "gal@gadot.com"
+
+    phone_res = await mapper.resolve_field(
+        field_id="phone_number",
+        label="Mobile Phone",
+        field_type="tel",
+        profile=profile,
+    )
+    assert phone_res == "+972-50-7654321"
+
+    mock_llm_gateway.ask_question.assert_not_called()
+
 

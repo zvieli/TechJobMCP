@@ -8,7 +8,6 @@ from playwright.async_api import async_playwright
 
 from job_mcp.core.application.dom_inspector import (
     FormFieldSchema,
-    SubmitButtonInfo,
     _disambiguate_submit_button_with_llm,
     _score_button_candidate,
     extract_form_schema,
@@ -48,14 +47,30 @@ class TestDOMInspectorHeuristics(unittest.TestCase):
             "הגשת מועמדות",
             "הגש מועמדות",
             "שלח",
+            "שלחו",
+            "שלחי",
             "שלח מועמדות",
             "שליחה",
+            "שליחת קורות חיים",
             "הגש עכשיו",
         ]
         for txt in hebrew_submit_texts:
             score, action = _score_button_candidate({"text": txt, "button_type": "submit"})
             self.assertGreaterEqual(score, 80, f"Failed score threshold for Hebrew submit: {txt}")
             self.assertEqual(action, "submit", f"Failed action_type for Hebrew submit: {txt}")
+
+    def test_score_button_gotfriends_hebrew(self):
+        """Test GotFriends button scores >= 100 as a submit button."""
+        candidate = {
+            "text": "שלחו",
+            "button_type": "submit",
+            "element_id": "sendSideCVButton",
+            "element_class": "btn submit",
+        }
+        score, action = _score_button_candidate(candidate)
+        self.assertGreaterEqual(score, 100.0)
+        self.assertEqual(action, "submit")
+
 
     def test_score_button_candidate_hebrew_next_step(self):
         """Test deterministic scoring for Hebrew next step buttons."""
@@ -488,4 +503,30 @@ class TestDOMInspectorAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(btn.action_type, "submit")
         self.assertEqual(btn.selector, "#btn_hebrew_submit")
         self.assertIn("הגשת מועמדות", btn.text)
+
+    async def test_extract_form_schema_honeypot_skipped(self):
+        """Test that honeypot fields are excluded during schema extraction."""
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <form>
+                <label for="real_email">Email</label>
+                <input type="email" id="real_email" name="email" />
+                <input type="text" name="Website" id="hp_website" style="position:absolute; left:-9999px;" />
+                <input type="text" name="phone_hp" class="honeypot" />
+                <label for="real_name">Full Name</label>
+                <input type="text" name="real_name" id="real_name" />
+            </form>
+        </body>
+        </html>
+        """
+        await self.page.set_content(html_content)
+        fields = await extract_form_schema(self.page)
+        field_names = [f.name for f in fields]
+        self.assertIn("email", field_names)
+        self.assertIn("real_name", field_names)
+        self.assertNotIn("Website", field_names)
+        self.assertNotIn("phone_hp", field_names)
+
 
