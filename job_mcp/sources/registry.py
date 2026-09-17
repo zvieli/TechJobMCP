@@ -364,14 +364,14 @@ def reset_builtin_providers() -> None:
     """Reset provider registry and re-register standard built-in providers."""
     clear_providers()
 
-    from job_mcp.sources.alljobs import AllJobsSource
-    from job_mcp.sources.comeet import ComeetSource
-    from job_mcp.sources.direct_tech import DirectTechSource
-    from job_mcp.sources.eightfold import EightfoldAISource
-    from job_mcp.sources.hiremetech import HireMeTechSource
-    from job_mcp.sources.jobify import JobifySource
-    from job_mcp.sources.linkedin import LinkedInSource
-    from job_mcp.sources.workday import WorkdaySource
+    from job_mcp.sources.authenticated.hiremetech import HireMeTechSource
+    from job_mcp.sources.authenticated.linkedin import LinkedInSource
+    from job_mcp.sources.enterprise.direct_tech import DirectTechSource
+    from job_mcp.sources.enterprise.workday import WorkdaySource
+    from job_mcp.sources.public.alljobs import AllJobsSource
+    from job_mcp.sources.public.comeet import ComeetSource
+    from job_mcp.sources.public.eightfold import EightfoldAISource
+    from job_mcp.sources.public.jobify import JobifySource
 
     register_provider(
         name="hiremetech",
@@ -385,7 +385,7 @@ def reset_builtin_providers() -> None:
         factory_or_cls=ComeetSource,
         default_enabled=True,
         env_var="ENABLE_COMEET",
-        category=SourceCategory.ENTERPRISE,
+        category=SourceCategory.PUBLIC,
     )
     register_provider(
         name="alljobs",
@@ -406,7 +406,7 @@ def reset_builtin_providers() -> None:
         factory_or_cls=EightfoldAISource,
         default_enabled=True,
         env_var="ENABLE_EIGHTFOLD",
-        category=SourceCategory.ENTERPRISE,
+        category=SourceCategory.PUBLIC,
     )
     register_provider(
         name="direct_tech",

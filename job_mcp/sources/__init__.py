@@ -5,6 +5,27 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
+from job_mcp.sources import authenticated, enterprise, public
+from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
+from job_mcp.sources.authenticated import (
+    LINKEDIN_DEFAULT_LOCATION,
+    LINKEDIN_DEFAULT_MAX_RETRIES,
+    LINKEDIN_DEFAULT_RATE_LIMIT_DELAY,
+    LINKEDIN_HEADERS,
+    LINKEDIN_HEALTH_TIMEOUT,
+    LINKEDIN_JOB_DETAIL_URL,
+    LINKEDIN_REQUEST_TIMEOUT,
+    LINKEDIN_SEARCH_API_URL,
+    HireMeTechSource,
+    LinkedInSource,
+    clean_html_text,
+    clean_linkedin_url,
+    extract_job_id_from_text,
+    parse_linkedin_job_card,
+    parse_linkedin_job_details,
+    parse_linkedin_search_results,
+    search_linkedin_jobs_api,
+)
 from job_mcp.sources.base import (
     BaseAuthenticatedSource,
     BaseEnterpriseSource,
@@ -26,38 +47,15 @@ from job_mcp.sources.dedup import (
     normalize_company,
     normalize_title,
 )
-from job_mcp.sources.alljobs import (
-    ALLJOBS_BASE_URL,
-    ALLJOBS_HEADERS,
-    DEFAULT_TECH_CATEGORIES,
-    AllJobsSource,
-    parse_alljobs_position,
-)
-from job_mcp.sources.comeet import (
-    DEFAULT_COMEET_COMPANIES,
-    ComeetCompany,
-    ComeetSource,
-    parse_comeet_position,
-)
-from job_mcp.sources.workday import (
-    DEFAULT_WORKDAY_COMPANIES,
-    WORKDAY_COMPANIES,
-    WorkdayCompany,
-    WorkdaySource,
-    parse_workday_position,
-)
-from job_mcp.sources.eightfold import (
-    DEFAULT_EIGHTFOLD_COMPANIES,
-    EIGHTFOLD_COMPANIES,
-    EightfoldAISource,
-    EightfoldCompany,
-    parse_eightfold_position,
-)
-from job_mcp.sources.direct_tech import (
+from job_mcp.sources.enterprise import (
     DEFAULT_DIRECT_TECH_COMPANIES,
+    DEFAULT_WORKDAY_COMPANIES,
     DIRECT_TECH_COMPANIES,
+    WORKDAY_COMPANIES,
     DirectTechCompany,
     DirectTechSource,
+    WorkdayCompany,
+    WorkdaySource,
     parse_amazon_position,
     parse_amazon_positions,
     parse_apple_position,
@@ -66,31 +64,32 @@ from job_mcp.sources.direct_tech import (
     parse_google_positions,
     parse_ibm_position,
     parse_ibm_positions,
+    parse_workday_position,
 )
-from job_mcp.sources.linkedin import (
-    LINKEDIN_HEADERS,
-    LINKEDIN_JOB_DETAIL_URL,
-    LINKEDIN_SEARCH_API_URL,
-    LinkedInSource,
-    parse_linkedin_job_card,
-    parse_linkedin_job_details,
-    parse_linkedin_search_results,
-    search_linkedin_jobs_api,
-)
-from job_mcp.sources.hiremetech import HireMeTechSource
-from job_mcp.sources.jobify import (
+from job_mcp.sources.public import (
+    ALLJOBS_BASE_URL,
+    ALLJOBS_HEADERS,
+    DEFAULT_COMEET_COMPANIES,
+    DEFAULT_EIGHTFOLD_COMPANIES,
     DEFAULT_JOBIFY_SEED_URLS,
     DEFAULT_SEED_URLS,
+    DEFAULT_TECH_CATEGORIES,
+    EIGHTFOLD_COMPANIES,
     JOBIFY_BASE_URL,
     JOBIFY_HEADERS,
+    AllJobsSource,
+    ComeetCompany,
+    ComeetSource,
+    EightfoldAISource,
+    EightfoldCompany,
     JobifySource,
     extract_jsonld_job_postings,
     extract_related_job_urls,
+    parse_alljobs_position,
+    parse_comeet_position,
+    parse_eightfold_position,
     parse_jobify_position,
 )
-from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
-
-
 from job_mcp.sources.registry import (
     SourceProvider,
     SourceRegistry,
@@ -105,6 +104,10 @@ from job_mcp.sources.registry import (
 )
 
 __all__ = [
+    # Subpackages
+    "public",
+    "enterprise",
+    "authenticated",
     # Metadata & Base & Contracts
     "SourceMetadata",
     "BaseJobSource",
@@ -150,13 +153,21 @@ __all__ = [
     "parse_ibm_position",
     "parse_ibm_positions",
     "LinkedInSource",
+    "clean_html_text",
+    "clean_linkedin_url",
+    "extract_job_id_from_text",
     "parse_linkedin_job_card",
     "parse_linkedin_search_results",
     "parse_linkedin_job_details",
     "search_linkedin_jobs_api",
+    "LINKEDIN_DEFAULT_LOCATION",
+    "LINKEDIN_DEFAULT_MAX_RETRIES",
+    "LINKEDIN_DEFAULT_RATE_LIMIT_DELAY",
     "LINKEDIN_SEARCH_API_URL",
     "LINKEDIN_JOB_DETAIL_URL",
     "LINKEDIN_HEADERS",
+    "LINKEDIN_HEALTH_TIMEOUT",
+    "LINKEDIN_REQUEST_TIMEOUT",
     "JobifySource",
     "DEFAULT_SEED_URLS",
     "DEFAULT_JOBIFY_SEED_URLS",
