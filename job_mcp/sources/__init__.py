@@ -5,7 +5,13 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from job_mcp.sources.base import BaseJobSource, SourceMetadata
+from job_mcp.sources.base import (
+    BaseAuthenticatedSource,
+    BaseEnterpriseSource,
+    BaseJobSource,
+    BasePublicSource,
+    SourceMetadata,
+)
 from job_mcp.sources.contracts import (
     IAuthenticatedSource,
     IBookmarkable,
@@ -236,6 +242,9 @@ __all__ = [
     # Metadata & Base & Contracts
     "SourceMetadata",
     "BaseJobSource",
+    "BasePublicSource",
+    "BaseEnterpriseSource",
+    "BaseAuthenticatedSource",
     "SourceCategory",
     "IJobSource",
     "IBookmarkable",

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import typing
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from job_mcp.models.schemas import Job, UserPreferences
-from job_mcp.sources.base import SourceMetadata
+
+if TYPE_CHECKING:
+    from job_mcp.sources.base import SourceMetadata
 
 
 class SourceCategory(str, Enum):
@@ -41,8 +44,22 @@ class IJobSource(Protocol):
         ...
 
 
+class _BookmarkableMeta(typing._ProtocolMeta):
+    """Metaclass ensuring IBookmarkable cleanly checks actual bookmark support."""
+
+    def __instancecheck__(cls, instance: Any) -> bool:
+        if not super().__instancecheck__(instance):
+            return False
+        if getattr(instance, "supports_bookmarks", True) is False:
+            return False
+        method = getattr(type(instance), "bookmark_job", None)
+        if getattr(method, "_is_base_job_source_default", False):
+            return False
+        return True
+
+
 @runtime_checkable
-class IBookmarkable(Protocol):
+class IBookmarkable(Protocol, metaclass=_BookmarkableMeta):
     """Protocol for sources supporting job bookmarking / saving."""
 
     async def bookmark_job(self, job_id: str) -> bool:

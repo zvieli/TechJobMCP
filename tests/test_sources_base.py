@@ -8,8 +8,15 @@ import pytest
 
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources import (
+    BaseAuthenticatedSource,
+    BaseEnterpriseSource,
     BaseJobSource,
+    BasePublicSource,
     HireMeTechSource,
+    IAuthenticatedSource,
+    IBookmarkable,
+    IJobSource,
+    SourceCategory,
     SourceMetadata,
     SourceRegistry,
 )
@@ -85,6 +92,7 @@ class TestSourceMetadata:
         assert meta.source_id == "test_src"
         assert meta.display_name == "Test Source"
         assert meta.description == ""
+        assert meta.category == SourceCategory.PUBLIC
         assert meta.is_authenticated is False
         assert meta.supports_bookmarks is False
         assert meta.supports_auto_apply is False
@@ -94,17 +102,35 @@ class TestSourceMetadata:
             source_id="hiremetech",
             display_name="HireMeTech",
             description="AI matching platform",
+            category=SourceCategory.AUTHENTICATED,
             is_authenticated=True,
             supports_bookmarks=True,
             supports_auto_apply=True,
         )
         assert meta.source_id == "hiremetech"
+        assert meta.category == SourceCategory.AUTHENTICATED
         assert meta.is_authenticated is True
         assert meta.supports_bookmarks is True
         assert meta.supports_auto_apply is True
         data = meta.model_dump()
         assert data["source_id"] == "hiremetech"
+        assert data["category"] == "authenticated"
         assert data["supports_bookmarks"] is True
+
+
+class ConcreteBookmarkableSource(BaseJobSource):
+    source_id = "bm_source"
+    display_name = "BM Source"
+    supports_bookmarks = True
+
+    async def fetch_jobs(self, preferences=None, limit=50):
+        return []
+
+    async def check_health(self):
+        return True
+
+    async def bookmark_job(self, job_id: str) -> bool:
+        return True
 
 
 class TestBaseJobSource:
@@ -121,9 +147,23 @@ class TestBaseJobSource:
         assert meta.source_id == "dummy_source"
         assert meta.display_name == "Dummy Source"
         assert meta.description == "A dummy source for testing"
+        assert meta.category == SourceCategory.PUBLIC
         assert meta.is_authenticated is True
         assert meta.supports_bookmarks is True
         assert meta.supports_auto_apply is False
+
+    def test_base_job_source_satisfies_ijobsource(self) -> None:
+        dummy = DummyJobSource()
+        assert isinstance(dummy, IJobSource)
+
+    def test_ibookmarkable_differentiation(self) -> None:
+        no_bm = NoBookmarkSource()
+        unimp = UnimplementedBookmarkSource()
+        concrete_bm = ConcreteBookmarkableSource()
+
+        assert not isinstance(no_bm, IBookmarkable)
+        assert not isinstance(unimp, IBookmarkable)
+        assert isinstance(concrete_bm, IBookmarkable)
 
     @pytest.mark.asyncio
     async def test_bookmark_job_when_unsupported_returns_false(self) -> None:
@@ -136,6 +176,128 @@ class TestBaseJobSource:
         source = UnimplementedBookmarkSource()
         with pytest.raises(NotImplementedError):
             await source.bookmark_job("job-123")
+
+
+class ConcretePublicSource(BasePublicSource):
+    source_id = "pub_source"
+    display_name = "Public Source"
+
+    async def fetch_jobs(self, preferences=None, limit=50):
+        return []
+
+    async def check_health(self):
+        return True
+
+
+class ConcreteEnterpriseSource(BaseEnterpriseSource):
+    source_id = "ent_source"
+    display_name = "Enterprise Source"
+
+    async def fetch_jobs(self, preferences=None, limit=50):
+        return []
+
+    async def check_health(self):
+        return True
+
+
+class ConcreteAuthenticatedSource(BaseAuthenticatedSource):
+    source_id = "auth_source"
+    display_name = "Authenticated Source"
+
+    async def fetch_jobs(self, preferences=None, limit=50):
+        return []
+
+    async def check_health(self):
+        return self.is_authenticated
+
+
+class TestBasePublicSource:
+    """Tests for BasePublicSource specialized base class."""
+
+    def test_cannot_instantiate_abstract(self) -> None:
+        with pytest.raises(TypeError):
+            BasePublicSource()  # type: ignore[abstract]
+
+    def test_public_source_defaults(self) -> None:
+        src = ConcretePublicSource()
+        assert src.category == SourceCategory.PUBLIC
+        assert src.is_authenticated is False
+        assert src.supports_auth is False
+        assert isinstance(src, IJobSource)
+        assert not isinstance(src, IAuthenticatedSource)
+
+        meta = src.get_metadata()
+        assert meta.category == SourceCategory.PUBLIC
+        assert meta.is_authenticated is False
+
+
+class TestBaseEnterpriseSource:
+    """Tests for BaseEnterpriseSource specialized base class."""
+
+    def test_cannot_instantiate_abstract(self) -> None:
+        with pytest.raises(TypeError):
+            BaseEnterpriseSource()  # type: ignore[abstract]
+
+    def test_enterprise_source_defaults(self) -> None:
+        src = ConcreteEnterpriseSource()
+        assert src.category == SourceCategory.ENTERPRISE
+        assert src.supports_auth is False
+        assert isinstance(src, IJobSource)
+
+        meta = src.get_metadata()
+        assert meta.category == SourceCategory.ENTERPRISE
+
+
+class TestBaseAuthenticatedSource:
+    """Tests for BaseAuthenticatedSource specialized base class."""
+
+    def test_cannot_instantiate_abstract(self) -> None:
+        with pytest.raises(TypeError):
+            BaseAuthenticatedSource()  # type: ignore[abstract]
+
+    def test_authenticated_source_defaults(self) -> None:
+        src = ConcreteAuthenticatedSource()
+        assert src.category == SourceCategory.AUTHENTICATED
+        assert src.supports_auth is True
+        assert src.session_manager is None
+        assert src.is_authenticated is False
+        assert isinstance(src, IJobSource)
+        assert isinstance(src, IAuthenticatedSource)
+
+        meta = src.get_metadata()
+        assert meta.category == SourceCategory.AUTHENTICATED
+
+    def test_authenticated_source_with_session_manager(self) -> None:
+        mock_sm = MagicMock()
+        mock_sm.is_authenticated = True
+        src = ConcreteAuthenticatedSource(session_manager=mock_sm)
+        assert src.session_manager is mock_sm
+        assert src.is_authenticated is True
+
+        # Setter override
+        src.is_authenticated = False
+        assert src.is_authenticated is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_authenticated_success(self) -> None:
+        mock_sm = MagicMock()
+        mock_sm.ensure_ready = AsyncMock(return_value=None)
+        src = ConcreteAuthenticatedSource(session_manager=mock_sm)
+
+        success = await src.ensure_authenticated()
+        assert success is True
+        assert src.is_authenticated is True
+        mock_sm.ensure_ready.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_authenticated_failure(self) -> None:
+        mock_sm = MagicMock()
+        mock_sm.ensure_ready = AsyncMock(side_effect=RuntimeError("Auth failed"))
+        src = ConcreteAuthenticatedSource(session_manager=mock_sm)
+
+        success = await src.ensure_authenticated()
+        assert success is False
+        assert src.is_authenticated is False
 
 
 class TestSourceRegistry:
