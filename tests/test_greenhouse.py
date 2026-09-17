@@ -129,6 +129,12 @@ class TestGreenhouseSource:
         assert meta.source_id == "greenhouse"
         assert meta.category.value == "public"
 
+    def test_request_headers_user_agent(self):
+        from job_mcp.sources.public.greenhouse import REQUEST_HEADERS, REPO_URL
+        assert "TechJobMCP/1.0" in REQUEST_HEADERS["User-Agent"]
+        assert REPO_URL in REQUEST_HEADERS["User-Agent"]
+        assert "zvieli" not in REQUEST_HEADERS["User-Agent"]
+
     @pytest.mark.asyncio
     async def test_check_health_success(self):
         source = GreenhouseSource()

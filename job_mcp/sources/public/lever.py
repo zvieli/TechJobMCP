@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import html
+import os
 import re
 import time
 from typing import Any, Optional
@@ -18,10 +19,11 @@ from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+REPO_URL = os.getenv("REPO_URL", "https://github.com/TechJobMCP/TechJobMCP")
 POSTINGS_API_BASE = "https://api.lever.co/v0/postings"
 REQUEST_HEADERS = {
     "Accept": "application/json",
-    "User-Agent": "TechJobMCP/1.0 (Job Aggregator; +https://github.com/zvieli/TechJobMCP)",
+    "User-Agent": f"TechJobMCP/1.0 (Job Aggregator; +{REPO_URL})",
     "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
 }
 MAX_CONCURRENT_REQUESTS = 4

@@ -36,7 +36,7 @@ def resolve_default_cv() -> Optional[str]:
     candidate_files = [
         "cv.pdf",
         "resume.pdf",
-        "lior_zvieli_cv.pdf",
+        "candidate_cv.pdf",
         "cv.docx",
         "resume.docx",
         "cv.txt",

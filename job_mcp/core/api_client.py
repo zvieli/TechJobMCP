@@ -325,8 +325,8 @@ def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
     2. If cv_path is provided but does not exist directly, search fallback candidate order:
        a. DEFAULT_CV_PATH environment variable if set.
        b. Candidate files matching basename or standard filenames:
-          - /app/<basename>, /app/cv.pdf, /app/resume.pdf, /app/lior_zvieli_cv.pdf
-          - cwd / <basename>, cwd / "cv.pdf", cwd / "resume.pdf", cwd / "lior_zvieli_cv.pdf"
+          - /app/<basename>, /app/cv.pdf, /app/resume.pdf
+          - cwd / <basename>, cwd / "cv.pdf", cwd / "resume.pdf"
        c. Glob matches in cwd (*cv*.pdf, *.pdf) and /app (*.pdf).
        If a candidate exists, log an info message and return candidate.resolve().
     3. If cv_path is None or empty:
@@ -380,12 +380,10 @@ def resolve_cv_path(cv_path: Optional[str] = None) -> Optional[Path]:
     # 4. Local workspace paths (cwd)
     add_candidate(cwd / "cv.pdf")
     add_candidate(cwd / "resume.pdf")
-    add_candidate(cwd / "lior_zvieli_cv.pdf")
 
     # 5. Standard container paths (/app)
     add_candidate(app_dir / "cv.pdf")
     add_candidate(app_dir / "resume.pdf")
-    add_candidate(app_dir / "lior_zvieli_cv.pdf")
 
     # 6. Any .pdf in working directory matching *cv*.pdf or *.pdf
     try:

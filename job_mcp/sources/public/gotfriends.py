@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import os
 import random
 import re
 import time
@@ -19,6 +20,7 @@ from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+REPO_URL = os.getenv("REPO_URL", "https://github.com/TechJobMCP/TechJobMCP")
 GOTFRIENDS_BASE_URL: str = "https://www.gotfriends.co.il"
 
 # Key Israeli tech categories to crawl
@@ -37,7 +39,7 @@ GOTFRIENDS_CATEGORIES: dict[str, str] = {
 
 REQUEST_HEADERS: dict[str, str] = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "User-Agent": "TechJobMCP/1.0 (Job Aggregator; +https://github.com/zvieli/TechJobMCP)",
+    "User-Agent": f"TechJobMCP/1.0 (Job Aggregator; +{REPO_URL})",
     "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
 }
 

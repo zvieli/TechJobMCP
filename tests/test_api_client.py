@@ -9,6 +9,7 @@ from job_mcp.core.api_client import (
     _derive_search_queries,
     _derive_target_roles,
     extract_candidate_profile,
+    resolve_cv_path,
 )
 from job_mcp.models.schemas import CandidateProfile
 
@@ -147,5 +148,53 @@ liam@example.com | +972-50-9998877
     assert profile.full_name == "Liam O'Connor"
     assert profile.first_name == "Liam"
     assert profile.last_name == "O'Connor"
+
+
+def test_resolve_cv_path_generic(tmp_path, monkeypatch):
+    """Verify resolve_cv_path discovers DEFAULT_CV_PATH or cv.pdf and does not require or mention personal filenames."""
+    import inspect
+
+    # Verify no personal filenames are mentioned in implementation or docstring
+    source = inspect.getsource(resolve_cv_path)
+    assert "lior_zvieli" not in source, "Personal filename found in resolve_cv_path source"
+
+    # Test discovery via DEFAULT_CV_PATH environment variable
+    custom_cv = tmp_path / "custom_candidate_resume.pdf"
+    custom_cv.write_text("candidate resume content")
+    monkeypatch.setenv("DEFAULT_CV_PATH", str(custom_cv))
+
+    resolved = resolve_cv_path()
+    assert resolved == custom_cv.resolve()
+
+    # Test discovery via standard cv.pdf in cwd
+    monkeypatch.delenv("DEFAULT_CV_PATH", raising=False)
+    sub_dir = tmp_path / "workspace"
+    sub_dir.mkdir()
+    monkeypatch.chdir(sub_dir)
+    std_cv = sub_dir / "cv.pdf"
+    std_cv.write_text("standard cv content")
+
+    resolved_std = resolve_cv_path()
+    assert resolved_std == std_cv.resolve()
+
+
+def test_resolve_default_cv_generic(tmp_path, monkeypatch):
+    """Verify scripts/run_mock_llm_pipeline.py resolve_default_cv has no personal filenames."""
+    import inspect
+    from scripts.run_mock_llm_pipeline import resolve_default_cv
+
+    source = inspect.getsource(resolve_default_cv)
+    assert "lior_zvieli" not in source, "Personal filename found in resolve_default_cv source"
+    assert "candidate_cv.pdf" in source
+
+    # Verify discovery via candidate_cv.pdf when in cwd
+    monkeypatch.delenv("DEFAULT_CV_PATH", raising=False)
+    monkeypatch.delenv("CV_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+    cand_cv = tmp_path / "candidate_cv.pdf"
+    cand_cv.write_text("candidate cv content")
+
+    resolved = resolve_default_cv()
+    assert resolved == "candidate_cv.pdf"
 
 
