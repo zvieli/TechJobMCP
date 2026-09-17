@@ -594,7 +594,7 @@ class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(health_map["linkedin"])
 
     def test_create_default_registry_all_flags(self) -> None:
-        """Test create_default_registry supports enabling all 9 sources."""
+        """Test create_default_registry supports enabling all 10 sources."""
         # 1. Default (only HireMeTech + Comeet)
         reg_default = create_default_registry(
             enable_alljobs=False,
@@ -604,12 +604,13 @@ class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
             enable_linkedin=False,
             enable_jobify=False,
             enable_greenhouse=False,
+            enable_lever=False,
         )
         self.assertEqual(len(reg_default), 2)
         self.assertIn("hiremetech", reg_default)
         self.assertIn("comeet", reg_default)
 
-        # 2. All 9 enabled
+        # 2. All 10 enabled
         reg_all = create_default_registry(
             enable_alljobs=True,
             enable_workday=True,
@@ -618,8 +619,9 @@ class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
             enable_linkedin=True,
             enable_jobify=True,
             enable_greenhouse=True,
+            enable_lever=True,
         )
-        self.assertEqual(len(reg_all), 9)
+        self.assertEqual(len(reg_all), 10)
         self.assertIn("hiremetech", reg_all)
         self.assertIn("comeet", reg_all)
         self.assertIn("alljobs", reg_all)
@@ -629,6 +631,7 @@ class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertIn("linkedin", reg_all)
         self.assertIn("jobify", reg_all)
         self.assertIn("greenhouse", reg_all)
+        self.assertIn("lever", reg_all)
 
 
 class CaptureMockSource(BaseJobSource):
