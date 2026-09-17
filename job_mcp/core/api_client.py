@@ -46,11 +46,13 @@ CURATED_TECH_KEYWORDS = [
     "Jenkins", "CircleCI", "Linux", "Git", "Nginx", "Prometheus", "Grafana",
     # AI / LLM / Agentic / ML / Data
     "PyTorch", "TensorFlow", "Keras", "Scikit-Learn", "Pandas", "NumPy",
-    "OpenAI", "LLM", "LangChain", "LlamaIndex", "Hugging Face", "NLP", "OCR",
-    "GraphRAG", "LangGraph", "RAG", "Agentic", "Vector DB", "ChromaDB", "Chroma",
-    "Pinecone", "Qdrant", "Weaviate", "CrewAI", "Autogen", "vLLM", "Ollama",
-    "LangSmith", "Semantic Kernel", "Transformers", "Fine-Tuning", "Embeddings",
-    "FastMCP", "Playwright", "Selenium", "Airflow", "Spark", "Hadoop",
+    "OpenAI", "Gemini", "Anthropic", "Claude", "GPT", "LLM", "LangChain", "LlamaIndex",
+    "Hugging Face", "NLP", "OCR", "GraphRAG", "LangGraph", "RAG", "Agentic",
+    "Vector DB", "ChromaDB", "Chroma", "Pinecone", "Qdrant", "Weaviate", "Milvus",
+    "Faiss", "LanceDB", "CrewAI", "Autogen", "vLLM", "Ollama", "LangSmith",
+    "Semantic Kernel", "Transformers", "Fine-Tuning", "Embeddings",
+    "FastMCP", "MLOps", "Triton", "ONNX", "Wandb", "MLflow",
+    "Playwright", "Selenium", "Airflow", "Spark", "Hadoop",
     "Azure AI Search", "Azure Document Intelligence", "Azure AI Document Intelligence",
     "Document Intelligence", "ClinicalBERT", "NetworkX", "Cytoscape", "Leiden",
     "Machine Learning", "Operating Systems", "Data Structures",
@@ -100,6 +102,8 @@ SPECIALIZED_COMPETENCIES: set[str] = {
     "tensorflow", "scikit-learn", "pandas", "numpy", "ollama", "vllm", "vector db",
     "chromadb", "chroma", "pinecone", "qdrant", "weaviate", "crewai", "autogen",
     "langsmith", "semantic kernel", "transformers", "fine-tuning", "embeddings", "llm", "nlp",
+    "openai", "gemini", "anthropic", "claude", "gpt", "fastmcp", "mlops", "triton", "onnx",
+    "wandb", "mlflow", "milvus", "faiss", "lancedb",
     "docker", "kubernetes", "k8s", "aws", "amazon web services", "gcp", "google cloud",
     "azure", "azure ai search", "azure container apps", "container apps", "terraform",
     "ci/cd", "postgresql", "postgres", "redis", "mongodb", "solidity", "noir", "web3",
@@ -795,6 +799,21 @@ def _derive_target_roles(skills: list[str], text: str, seniority: Optional[str] 
         if any(s in skills_lower for s in ["pytorch", "tensorflow", "scikit-learn", "machine learning", "clinicalbert"]):
             roles.append("Machine Learning Engineer")
 
+        genai_indicators = {
+            "langchain", "llamaindex", "langgraph", "rag", "graphrag",
+            "llm", "vllm", "ollama", "agentic", "semantic kernel",
+            "crewai", "autogen", "fine-tuning", "embeddings",
+        }
+        if len(skills_lower & genai_indicators) >= 2 or "rag" in skills_lower or "langgraph" in skills_lower or "agentic" in skills_lower:
+            roles.append("GenAI Engineer")
+            roles.append("LLM Engineer")
+
+        if "AI Engineer" in roles:
+            roles.append("Algorithm Developer")  # Israeli market convention
+            roles.append("Applied AI Engineer")
+            if "Backend Engineer" in roles or "Python Developer" in roles or "python" in skills_lower:
+                roles.append("AI Backend Developer")
+
     # Web3 / Blockchain
     web3_indicators = {
         "solidity", "noir", "web3", "smart contracts", "smart contract development",
@@ -873,6 +892,9 @@ def _derive_target_roles(skills: list[str], text: str, seniority: Optional[str] 
         if "Backend Engineer" not in roles:
             roles.append("Backend Engineer")
 
+    if "AI Engineer" in roles and ("Backend Engineer" in roles or "Python Developer" in roles):
+        roles.append("AI Backend Developer")
+
     # Default fallback
     if not roles and skills:
         roles.append("Software Engineer")
@@ -916,6 +938,15 @@ def _derive_search_queries(top_skills: list[str], target_roles: list[str]) -> li
         if skill.lower() not in seen:
             seen.add(skill.lower())
             queries.append(skill)
+
+    # After English queries, add Hebrew variants if AI roles detected
+    ai_role_set = {"ai engineer", "genai engineer", "llm engineer", "machine learning engineer", "algorithm developer"}
+    if any(r.lower() in ai_role_set for r in target_roles):
+        hebrew_queries = ["מהנדס בינה מלאכותית", "מפתח אלגוריתמים"]
+        for hq in hebrew_queries:
+            if hq.lower() not in seen:
+                seen.add(hq.lower())
+                queries.append(hq)
 
     return queries
 
