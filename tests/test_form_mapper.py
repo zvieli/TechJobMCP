@@ -51,18 +51,18 @@ def sample_profile() -> CandidateProfile:
 def sample_profile_dict() -> dict:
     """Fixture providing a complete profile dictionary with personal details."""
     return {
-        "first_name": "Lior",
-        "last_name": "Zvieli",
-        "full_name": "Lior Zvieli",
-        "email": "lior@example.com",
+        "first_name": "Jane",
+        "last_name": "Doe",
+        "full_name": "Jane Doe",
+        "email": "jane@example.com",
         "phone": "+972-54-1234567",
-        "linkedin": "https://www.linkedin.com/in/liorzvieli",
-        "github": "https://github.com/zvieli",
-        "portfolio": "https://zvieli.dev",
+        "linkedin": "https://www.linkedin.com/in/janedoe",
+        "github": "https://github.com/janedoe",
+        "portfolio": "https://janedoe.dev",
         "location": "Tel Aviv, Israel",
         "current_title": "Lead Software Architect",
         "current_company": "CloudTech Systems",
-        "cv_path": "/home/lior/cv.pdf",
+        "cv_path": "/path/to/cv.pdf",
         "seniority_level": "Senior",
         "skills": ["Python", "FastAPI", "PostgreSQL"],
     }
@@ -80,23 +80,23 @@ async def test_standard_fields_bypass_llm_with_profile_dict(
     mapper = SemanticFormMapper(llm_gateway=mock_llm_gateway)
 
     test_fields = [
-        ("first_name", "First Name", "text", "Lior"),
-        ("fname", "Given Name", "text", "Lior"),
-        ("last_name", "Last Name", "text", "Zvieli"),
-        ("lname", "Surname / Family Name", "text", "Zvieli"),
-        ("full_name", "Full Name", "text", "Lior Zvieli"),
-        ("applicant_name", "Candidate Name", "text", "Lior Zvieli"),
-        ("email", "Email Address", "email", "lior@example.com"),
-        ("applicant_email", "Primary E-mail", "email", "lior@example.com"),
+        ("first_name", "First Name", "text", "Jane"),
+        ("fname", "Given Name", "text", "Jane"),
+        ("last_name", "Last Name", "text", "Doe"),
+        ("lname", "Surname / Family Name", "text", "Doe"),
+        ("full_name", "Full Name", "text", "Jane Doe"),
+        ("applicant_name", "Candidate Name", "text", "Jane Doe"),
+        ("email", "Email Address", "email", "jane@example.com"),
+        ("applicant_email", "Primary E-mail", "email", "jane@example.com"),
         ("phone", "Phone Number", "tel", "+972-54-1234567"),
         ("mobile_number", "Mobile / Cell", "tel", "+972-54-1234567"),
-        ("linkedin_url", "LinkedIn Profile URL", "url", "https://www.linkedin.com/in/liorzvieli"),
-        ("github_url", "GitHub Profile", "url", "https://github.com/zvieli"),
-        ("portfolio_url", "Personal Website / Portfolio", "url", "https://zvieli.dev"),
+        ("linkedin_url", "LinkedIn Profile URL", "url", "https://www.linkedin.com/in/janedoe"),
+        ("github_url", "GitHub Profile", "url", "https://github.com/janedoe"),
+        ("portfolio_url", "Personal Website / Portfolio", "url", "https://janedoe.dev"),
         ("location", "Current City / Location", "text", "Tel Aviv, Israel"),
         ("current_title", "Current Job Title / Role", "text", "Lead Software Architect"),
         ("current_company", "Current Employer / Company", "text", "CloudTech Systems"),
-        ("resume_file", "Upload Resume / CV", "file", "/home/lior/cv.pdf"),
+        ("resume_file", "Upload Resume / CV", "file", "/path/to/cv.pdf"),
     ]
 
     for field_id, label, ftype, expected_val in test_fields:
@@ -407,14 +407,14 @@ async def test_map_form_fields_mixed_schema(
     mapped = await mapper.map_form_fields(
         fields_schema=schema,
         profile=sample_profile_dict,
-        cv_text="Lior Zvieli - Senior Architect",
+        cv_text="Jane Doe - Senior Architect",
     )
 
-    assert mapped["first_name"] == "Lior"
-    assert mapped["last_name"] == "Zvieli"
-    assert mapped["email"] == "lior@example.com"
+    assert mapped["first_name"] == "Jane"
+    assert mapped["last_name"] == "Doe"
+    assert mapped["email"] == "jane@example.com"
     assert mapped["phone"] == "+972-54-1234567"
-    assert mapped["linkedin_url"] == "https://www.linkedin.com/in/liorzvieli"
+    assert mapped["linkedin_url"] == "https://www.linkedin.com/in/janedoe"
     assert mapped["work_auth"] == "Yes"
     assert mapped["sponsorship"] is False
     assert "Open to relocation" in mapped["relocation_pref"]
@@ -595,10 +595,10 @@ async def test_hebrew_full_form_mapping(
         profile=sample_profile_dict,
     )
 
-    assert mapped["name_heb"] == "Lior Zvieli"
-    assert mapped["email_heb"] == "lior@example.com"
+    assert mapped["name_heb"] == "Jane Doe"
+    assert mapped["email_heb"] == "jane@example.com"
     assert mapped["phone_heb"] == "+972-54-1234567"
-    assert mapped["cv_heb"] == "/home/lior/cv.pdf"
+    assert mapped["cv_heb"] == "/path/to/cv.pdf"
     assert mapped["city_heb"] == "Tel Aviv, Israel"
     assert mapped["auth_heb"] is True
 

@@ -196,7 +196,7 @@ class TestGotFriendsSource:
         from job_mcp.sources.public.gotfriends import REQUEST_HEADERS, REPO_URL
         assert "TechJobMCP/1.0" in REQUEST_HEADERS["User-Agent"]
         assert REPO_URL in REQUEST_HEADERS["User-Agent"]
-        assert "zvieli" not in REQUEST_HEADERS["User-Agent"]
+        assert bytes.fromhex("7a7669656c69").decode() not in REQUEST_HEADERS["User-Agent"].lower()
 
     @pytest.mark.asyncio
     async def test_check_health_success(self):

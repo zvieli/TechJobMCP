@@ -1074,7 +1074,11 @@ def _extract_candidate_contact_info(
         if not linkedin_url and os.getenv("CANDIDATE_LINKEDIN"):
             env_li = os.getenv("CANDIDATE_LINKEDIN", "").strip()
             if env_li.startswith("http://") or env_li.startswith("https://"):
-                linkedin_url = env_li
+                m_li = re.search(r"linkedin\.com/in/([a-zA-Z0-9_\-]+)", env_li, re.IGNORECASE)
+                if m_li:
+                    linkedin_url = f"https://www.linkedin.com/in/{m_li.group(1).strip()}"
+                else:
+                    linkedin_url = env_li
             else:
                 linkedin_url = f"https://www.linkedin.com/in/{env_li.lstrip('@')}"
 
@@ -1101,7 +1105,16 @@ def extract_candidate_profile(cv_source: Optional[Union[str, Path]] = None) -> C
     text_content = _extract_text_from_source(cv_source)
     if not text_content or not text_content.strip():
         logger.warning("No readable text content found for candidate profile extraction.")
-        return CandidateProfile()
+        contact_info = _extract_candidate_contact_info("", cv_source)
+        return CandidateProfile(
+            full_name=contact_info.get("full_name"),
+            first_name=contact_info.get("first_name"),
+            last_name=contact_info.get("last_name"),
+            email=contact_info.get("email"),
+            phone=contact_info.get("phone"),
+            linkedin_url=contact_info.get("linkedin_url"),
+            github_url=contact_info.get("github_url"),
+        )
 
     skills = extract_dynamic_cv_skills(text_content)
     seniority_level = _detect_cv_seniority(text_content)

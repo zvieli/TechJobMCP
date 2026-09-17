@@ -40,12 +40,12 @@ def sample_profile() -> CandidateProfile:
 def sample_profile_dict() -> dict:
     """Detailed profile dictionary."""
     return {
-        "first_name": "Lior",
-        "last_name": "Zvieli",
-        "full_name": "Lior Zvieli",
-        "email": "lior@example.com",
+        "first_name": "Alex",
+        "last_name": "Rivera",
+        "full_name": "Alex Rivera",
+        "email": "alex@example.com",
         "phone": "+972-50-1234567",
-        "linkedin": "https://www.linkedin.com/in/liorzvieli",
+        "linkedin": "https://www.linkedin.com/in/alexrivera",
         "location": "Tel Aviv, Israel",
         "seniority_level": "Senior",
         "skills": ["Python", "FastAPI"],
@@ -55,7 +55,7 @@ def sample_profile_dict() -> dict:
 @pytest.fixture
 def dummy_cv_file(tmp_path: Path) -> Path:
     """Create a temporary dummy CV file."""
-    cv_file = tmp_path / "lior_resume.pdf"
+    cv_file = tmp_path / "resume.pdf"
     cv_file.write_text("%PDF-1.4 mock cv binary content")
     return cv_file
 
