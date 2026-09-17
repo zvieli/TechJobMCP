@@ -998,7 +998,7 @@ def _extract_candidate_contact_info(
         if "—" in line or "|" in line or ":" in line:
             continue
         words = line.split()
-        if 1 <= len(words) <= 4 and all(w.replace(".", "").replace("-", "").isalpha() for w in words):
+        if 1 <= len(words) <= 4 and all(w.replace(".", "").replace("-", "").replace("'", "").replace("’", "").isalpha() for w in words):
             full_name = line.strip()
             break
 

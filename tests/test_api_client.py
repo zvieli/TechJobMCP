@@ -133,3 +133,19 @@ Skills: Python, Go, Docker
     assert profile.linkedin_url == "https://www.linkedin.com/in/johnsmith"
     assert profile.github_url == "https://github.com/johnsmith"
 
+
+def test_extract_candidate_name_with_apostrophe(monkeypatch):
+    """Verify names with apostrophes (e.g. O'Connor, D'Angelo) are recognized."""
+    for var in ("CANDIDATE_NAME", "CANDIDATE_EMAIL", "CANDIDATE_PHONE", "CANDIDATE_LINKEDIN", "CANDIDATE_GITHUB"):
+        monkeypatch.delenv(var, raising=False)
+
+    raw_text = """Liam O'Connor
+Senior AI Engineer
+liam@example.com | +972-50-9998877
+"""
+    profile = extract_candidate_profile(raw_text)
+    assert profile.full_name == "Liam O'Connor"
+    assert profile.first_name == "Liam"
+    assert profile.last_name == "O'Connor"
+
+

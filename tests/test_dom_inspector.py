@@ -515,6 +515,8 @@ class TestDOMInspectorAsync(unittest.IsolatedAsyncioTestCase):
                 <input type="email" id="real_email" name="email" />
                 <input type="text" name="Website" id="hp_website" style="position:absolute; left:-9999px;" />
                 <input type="text" name="phone_hp" class="honeypot" />
+                <label for="real_website">Personal Website</label>
+                <input type="url" name="real_website" id="real_website" />
                 <label for="real_name">Full Name</label>
                 <input type="text" name="real_name" id="real_name" />
             </form>
@@ -526,6 +528,7 @@ class TestDOMInspectorAsync(unittest.IsolatedAsyncioTestCase):
         field_names = [f.name for f in fields]
         self.assertIn("email", field_names)
         self.assertIn("real_name", field_names)
+        self.assertIn("real_website", field_names)
         self.assertNotIn("Website", field_names)
         self.assertNotIn("phone_hp", field_names)
 

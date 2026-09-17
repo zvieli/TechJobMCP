@@ -427,9 +427,9 @@ class ResilientLLMGateway:
             Concise, personalized note string.
         """
         # 1. Cache Check
-        clean_company = company.strip() if company else ""
-        clean_title = job_title.strip() if job_title else ""
-        cache_key = f"personal_note:{clean_company.lower()}:{clean_title.lower()}"
+        raw_company = company.strip() if company else ""
+        raw_title = job_title.strip() if job_title else ""
+        cache_key = f"personal_note:{raw_company.lower()}:{raw_title.lower()}"
 
         get_cached = getattr(self.cache, "get_answer", getattr(self.cache, "get_cached_answer", None))
         if get_cached:
@@ -463,9 +463,13 @@ class ResilientLLMGateway:
             if candidate_profile.github_url and candidate_profile.github_url.strip():
                 candidate_github = candidate_profile.github_url.strip()
 
+        clean_company = raw_company if raw_company else "your team"
+        clean_title = raw_title if raw_title else "AI Engineer"
+
         # Offline Structured Template Fallback
+        company_greeting = f" at {clean_company}" if clean_company != "your team" else ""
         offline_template = (
-            f"Dear Hiring Team at {clean_company},\n\n"
+            f"Dear Hiring Team{company_greeting},\n\n"
             f"I am applying for the {clean_title} role with strong enthusiasm for {clean_company}'s work. "
             "As a Computer Science B.Sc. graduate from HIT specializing in Applied AI and backend "
             "engineering, I bring hands-on experience designing multi-agent LangGraph state machines, "

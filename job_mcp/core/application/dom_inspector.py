@@ -101,8 +101,6 @@ _DOM_EXTRACTOR_JS = """
 
     function isHoneypot(el) {
         if (!el) return false;
-        const name = (el.getAttribute('name') || '').toLowerCase();
-        if (name === 'website') return true;
         const className = (el.className || '').toString().toLowerCase();
         if (className.includes('honeypot')) return true;
         const style = window.getComputedStyle(el);
@@ -110,10 +108,12 @@ _DOM_EXTRACTOR_JS = """
         const computedLeft = parseInt(style.left, 10);
         const inlineLeft = el.style && el.style.left ? parseInt(el.style.left, 10) : NaN;
         const isAbsolute = style.position === 'absolute' || (el.style && el.style.position === 'absolute');
-        if (isAbsolute && ((!isNaN(computedLeft) && computedLeft < -1000) || (!isNaN(inlineLeft) && inlineLeft < -1000))) {
+        const isOffscreen = (isAbsolute && ((!isNaN(computedLeft) && computedLeft < -1000) || (!isNaN(inlineLeft) && inlineLeft < -1000))) || (rect && rect.left < -1000);
+        if (isOffscreen) {
             return true;
         }
-        if (rect && rect.left < -1000) {
+        const name = (el.getAttribute('name') || '').toLowerCase();
+        if (name === 'website' && (isOffscreen || !isElementVisible(el))) {
             return true;
         }
         return false;

@@ -309,6 +309,20 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res2, first_note)
         self.gateway._call_gemini.assert_not_called()
 
+    async def test_generate_personal_note_empty_company_fallback(self) -> None:
+        """Verify offline template gracefully handles missing or empty company and title."""
+        self.gateway.gemini_api_key = None
+        self.gateway.openrouter_api_key = None
+        self.gateway._call_ollama = AsyncMock(side_effect=httpx.ConnectError("Ollama offline"))
+
+        result = await self.gateway.generate_personal_note(
+            job_title="",
+            company="",
+            candidate_profile=None,
+        )
+        self.assertIn("Dear Hiring Team,\n\n", result)
+        self.assertIn("enthusiasm for your team's work", result)
+        self.assertIn("AI Engineer role", result)
 
 
 if __name__ == "__main__":

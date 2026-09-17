@@ -586,12 +586,32 @@ class SemanticFormMapper:
                 except Exception:
                     cand_profile = None
 
+            effective_cv_context = cv_text or ""
+            if not effective_cv_context and cand_profile:
+                skills = cand_profile.skills or cand_profile.top_skills or []
+                roles = cand_profile.target_roles or []
+                seniority = cand_profile.seniority_level or ""
+                effective_cv_context = (
+                    f"Candidate Seniority: {seniority}\n"
+                    f"Target Roles: {', '.join(roles)}\n"
+                    f"Skills: {', '.join(skills)}"
+                )
+            elif not effective_cv_context and profile_data:
+                skills = profile_data.get("skills") or profile_data.get("top_skills") or []
+                roles = profile_data.get("target_roles") or []
+                seniority = profile_data.get("seniority_level", "")
+                effective_cv_context = (
+                    f"Candidate Seniority: {seniority}\n"
+                    f"Target Roles: {', '.join(roles)}\n"
+                    f"Skills: {', '.join(skills)}"
+                )
+
             note = await self.llm_gateway.generate_personal_note(
                 job_title=job_title,
                 company=company,
                 job_description=job_desc,
                 candidate_profile=cand_profile,
-                cv_context=cv_text,
+                cv_context=effective_cv_context or None,
             )
             return note
 

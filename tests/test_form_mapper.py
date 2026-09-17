@@ -672,6 +672,8 @@ async def test_cover_letter_and_personal_note_generation(
     assert call_kwargs["job_title"] == "Staff ML Engineer"
     assert call_kwargs["company"] == "CyberCorp"
     assert call_kwargs["job_description"] == "Looking for Python and ML specialists."
+    assert "Candidate Seniority" in call_kwargs["cv_context"]
+    assert "Python" in call_kwargs["cv_context"]
 
 
 @pytest.mark.asyncio
