@@ -42,6 +42,10 @@ class Job(BaseModel):
     match_reasons: list[str] = Field(default_factory=list)
     description_summary: Optional[str] = None
     seniority_level: Optional[str] = None
+    requirements: Optional[str] = None
+    responsibilities: Optional[str] = None
+    company_overview: Optional[str] = None
+    semantic_score: Optional[float] = None
 
     @model_validator(mode="after")
     def _sync_sources(self) -> "Job":
