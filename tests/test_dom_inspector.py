@@ -532,4 +532,42 @@ class TestDOMInspectorAsync(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Website", field_names)
         self.assertNotIn("phone_hp", field_names)
 
+    async def test_identify_submit_button_iframe_classes_without_id(self):
+        """Test locating submit button in iframe when button has classes and text but no ID (e.g. Comeet style)."""
+        main_html = """
+        <!DOCTYPE html>
+        <html>
+        <body>
+            <iframe srcdoc='
+                <html>
+                <body>
+                    <div>
+                        <button type="button" class="iti__selected-country">Israel +972</button>
+                    </div>
+                    <div>
+                        <button type="submit" class="applyButton brandColoredButton">
+                            Submit application
+                        </button>
+                    </div>
+                </body>
+                </html>
+            '></iframe>
+        </body>
+        </html>
+        """
+        await self.page.set_content(main_html)
+        await self.page.wait_for_timeout(300)
+
+        btn = await identify_submit_button(self.page)
+        self.assertIsNotNone(btn)
+        self.assertGreater(btn.frame_index, 0)
+        self.assertIn("Submit application", btn.text)
+
+        locator = btn.get_locator(self.page)
+        self.assertIsNotNone(locator)
+        count = await locator.count()
+        self.assertEqual(count, 1)
+        self.assertTrue(await locator.first.is_visible())
+
+
 

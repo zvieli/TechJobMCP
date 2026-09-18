@@ -398,12 +398,37 @@ _BUTTON_EXTRACTOR_JS = """
                 return `${el.tagName.toLowerCase()}[name="${CSS.escape(el.name)}"]`;
             } catch (e) {}
         }
+        // Meaningful class selector if unique
+        if (el.className && typeof el.className === 'string') {
+            const classes = el.className.trim().split(/\\s+/).filter(c => c && !/^(ng-|v-|c-|is-|has-|hover|focus|active)/i.test(c));
+            if (classes.length > 0) {
+                const classSel = classes.map(c => {
+                    try { return '.' + CSS.escape(c); } catch(e) { return '.' + c; }
+                }).join('');
+                try {
+                    if (document.querySelectorAll(el.tagName.toLowerCase() + classSel).length === 1) {
+                        return el.tagName.toLowerCase() + classSel;
+                    }
+                    if (document.querySelectorAll(classSel).length === 1) {
+                        return classSel;
+                    }
+                } catch (e) {}
+            }
+        }
         const tag = el.tagName.toLowerCase();
+        let siblingIndex = 1;
+        if (el.parentElement) {
+            const siblings = Array.from(el.parentElement.children).filter(c => c.tagName.toLowerCase() === tag);
+            const foundIdx = siblings.indexOf(el);
+            if (foundIdx >= 0) {
+                siblingIndex = foundIdx + 1;
+            }
+        }
         const type = el.getAttribute('type');
         if (type) {
-            return `${tag}[type="${type}"]:nth-of-type(${index + 1})`;
+            return `${tag}[type="${type}"]:nth-of-type(${siblingIndex})`;
         }
-        return `${tag}:nth-of-type(${index + 1})`;
+        return `${tag}:nth-of-type(${siblingIndex})`;
     }
 
     const candidates = [];

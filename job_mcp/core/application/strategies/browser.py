@@ -372,6 +372,8 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                             "a:has-text('Apply')",
                             "button:has-text('Easy Apply')",
                             "button.apply",
+                            "#showApplyForm",
+                            "[data-qa='applyButton']",
                             "a.apply",
                             "[data-automation-id='applyButton']",
                             "[data-testid='apply-button']",
@@ -536,18 +538,59 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                     submit_info = await identify_submit_button(page, llm_gateway=self.form_mapper.llm_gateway)
                     submit_clicked = False
                     if submit_info is not None:
+                        target_ctx = page.frames[submit_info.frame_index] if (hasattr(page, "frames") and 0 <= submit_info.frame_index < len(page.frames)) else page
                         submit_locator = submit_info.get_locator(page)
                         cnt_res = submit_locator.count()
                         count = await cnt_res if (hasattr(cnt_res, "__await__") or asyncio.iscoroutine(cnt_res)) else cnt_res
+
+                        if count == 0:
+                            # Fallback locator discovery on target context
+                            candidate_fallbacks = []
+                            if submit_info.text and len(submit_info.text.strip()) < 50:
+                                candidate_fallbacks.append(f"button:has-text({repr(submit_info.text.strip())})")
+                                candidate_fallbacks.append(f"[role='button']:has-text({repr(submit_info.text.strip())})")
+                            if submit_info.element_class:
+                                first_class = submit_info.element_class.strip().split()[0]
+                                if first_class and not first_class.startswith("ng-"):
+                                    candidate_fallbacks.append(f"button.{first_class}")
+                                    candidate_fallbacks.append(f".{first_class}")
+                            candidate_fallbacks.extend([
+                                "button.applyButton",
+                                "[data-qa='applyButton']",
+                                "[data-qa='apply-button']",
+                                "button[type='submit']",
+                                "input[type='submit']",
+                            ])
+                            for fb_sel in candidate_fallbacks:
+                                try:
+                                    fb_loc = target_ctx.locator(fb_sel)
+                                    fb_cnt = fb_loc.count()
+                                    cnt = await fb_cnt if (hasattr(fb_cnt, "__await__") or asyncio.iscoroutine(fb_cnt)) else fb_cnt
+                                    if cnt > 0:
+                                        submit_locator = fb_loc
+                                        count = cnt
+                                        logger.info("Resolved submit button via fallback selector '%s' (count=%d)", fb_sel, count)
+                                        break
+                                except Exception:
+                                    continue
+
                         if count > 0:
-                            click_res = submit_locator.first.click()
-                            if hasattr(click_res, "__await__") or asyncio.iscoroutine(click_res):
-                                await click_res
-                            submit_clicked = True
-                            if hasattr(page, "wait_for_timeout"):
-                                tout_res = page.wait_for_timeout(1500)
-                                if hasattr(tout_res, "__await__") or asyncio.iscoroutine(tout_res):
-                                    await tout_res
+                            try:
+                                first_btn = submit_locator.first
+                                if hasattr(first_btn, "scroll_into_view_if_needed"):
+                                    s_res = first_btn.scroll_into_view_if_needed()
+                                    if hasattr(s_res, "__await__") or asyncio.iscoroutine(s_res):
+                                        await s_res
+                                click_res = first_btn.click()
+                                if hasattr(click_res, "__await__") or asyncio.iscoroutine(click_res):
+                                    await click_res
+                                submit_clicked = True
+                                if hasattr(page, "wait_for_timeout"):
+                                    tout_res = page.wait_for_timeout(1500)
+                                    if hasattr(tout_res, "__await__") or asyncio.iscoroutine(tout_res):
+                                        await tout_res
+                            except Exception as click_err:
+                                logger.warning("Failed to click submit button: %s", click_err)
 
                     if not submit_clicked:
                         screenshot_path = await self._capture_screenshot(page, job.job_id, suffix="unsubmitted")

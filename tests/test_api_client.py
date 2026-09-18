@@ -217,3 +217,99 @@ def test_resolve_default_cv_generic(tmp_path, monkeypatch):
     assert resolved == "candidate_cv.pdf"
 
 
+def test_non_technical_roles_heavily_penalized_for_engineers():
+    """Verify non-technical roles (Social Media, SDR, Recruiter) are disqualified (score <= 15) even if description has tech keywords."""
+    from job_mcp.core.api_client import calculate_match_score
+    from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
+
+    profile = CandidateProfile(
+        target_roles=["Junior AI Engineer", "Backend Developer", "Software Engineer"],
+        skills=["Python", "FastAPI", "SQL", "Docker", "Agentic", "C"],
+        primary_stack=["Python", "FastAPI", "SQL"],
+        top_skills=["Python", "FastAPI", "SQL"],
+    )
+    prefs = JobPreferences(tech_stack=["Python", "SQL"])
+
+    # 1. Social Media Manager with boilerplate buzzwords (Port style)
+    job_sm = Job(
+        job_id="sm-1",
+        title="Social Media Manager",
+        company="Port",
+        description="Port is the Agentic SDLC Platform. AI agents operating across the SDLC. C and Python developers.",
+        tech_stack=["C", "Agentic", "Python"],
+    )
+    score_sm = calculate_match_score(job_sm, prefs, profile=profile)
+    assert score_sm <= 15.0, f"Expected Social Media Manager score <= 15.0, got {score_sm}"
+
+    # 2. Sales Development Representative (Incredibuild style)
+    job_sdr = Job(
+        job_id="sdr-1",
+        title="Sales Development Representative",
+        company="Incredibuild",
+        description="Reach out to high volume outbound leads. Supporting agentic AI development needs.",
+        tech_stack=["Agentic"],
+    )
+    score_sdr = calculate_match_score(job_sdr, prefs, profile=profile)
+    assert score_sdr <= 15.0, f"Expected SDR score <= 15.0, got {score_sdr}"
+
+    # 3. Talent Acquisition / Recruiter
+    job_recruiter = Job(
+        job_id="rec-1",
+        title="Technical Talent Acquisition Specialist",
+        company="TechTalent",
+        description="Source and recruit top Python, Docker, and SQL engineers.",
+        tech_stack=["Python", "Docker"],
+    )
+    score_rec = calculate_match_score(job_recruiter, prefs, profile=profile)
+    assert score_rec <= 15.0, f"Expected Recruiter score <= 15.0, got {score_rec}"
+
+
+def test_engineering_role_achieves_top_tier_score():
+    """Verify genuine AI and backend engineering roles score >= 85 (Top-Tier)."""
+    from job_mcp.core.api_client import calculate_match_score
+    from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
+
+    profile = CandidateProfile(
+        target_roles=["AI Engineer", "Backend Developer", "Software Engineer"],
+        skills=["Python", "FastAPI", "SQL", "Docker", "LLM", "RAG"],
+        primary_stack=["Python", "FastAPI", "LLM"],
+        top_skills=["Python", "FastAPI", "LLM"],
+    )
+    prefs = JobPreferences(tech_stack=["Python", "FastAPI", "LLM"])
+
+    job_ai = Job(
+        job_id="ai-1",
+        title="Junior AI Engineer",
+        company="Claroty",
+        description="Develop production AI systems using Python, FastAPI, Docker, and LLM RAG pipelines.",
+        tech_stack=["Python", "FastAPI", "Docker", "LLM", "RAG"],
+    )
+    score_ai = calculate_match_score(job_ai, prefs, profile=profile)
+    assert score_ai >= 85.0, f"Expected AI Engineer score >= 85.0, got {score_ai}"
+
+
+def test_unmatched_target_role_capped_at_strong_match():
+    """Verify tech jobs without matching target role (e.g. Escalation Engineer) do not exceed 75.0 (never 88.0)."""
+    from job_mcp.core.api_client import calculate_match_score
+    from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
+
+    profile = CandidateProfile(
+        target_roles=["Junior AI Engineer", "Backend Developer"],
+        skills=["Python", "SQL", "REST"],
+        primary_stack=["Python"],
+        top_skills=["Python"],
+    )
+    prefs = JobPreferences(tech_stack=["Python"])
+
+    job_esc = Job(
+        job_id="esc-1",
+        title="Escalation Engineer",
+        company="Rapyd",
+        description="Fintech platform operations with SQL and REST APIs.",
+        tech_stack=["SQL", "REST"],
+    )
+    score_esc = calculate_match_score(job_esc, prefs, profile=profile)
+    assert score_esc <= 75.0, f"Expected unmatched target role score <= 75.0, got {score_esc}"
+
+
+

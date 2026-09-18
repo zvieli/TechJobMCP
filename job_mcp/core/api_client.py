@@ -1182,6 +1182,49 @@ SENIORITY_EXCLUDE_TERMS = {
     "senior", "sr", "sr.", "lead", "principal", "staff", "architect", "director", "vp", "head"
 }
 
+NON_TECH_ROLE_TERMS: tuple[str, ...] = (
+    "social media",
+    "sales development",
+    "account executive",
+    "sdr",
+    "bdr",
+    "talent acquisition",
+    "recruiter",
+    "recruitment",
+    "sourcer",
+    "human resources",
+    "hr coordinator",
+    "hr specialist",
+    "hr manager",
+    "hr generalist",
+    "people operations",
+    "office manager",
+    "executive assistant",
+    "administrative assistant",
+    "copywriter",
+    "content writer",
+    "content marketing",
+    "marketing specialist",
+    "marketing manager",
+    "performance marketing",
+    "digital marketing",
+    "growth marketing",
+    "sales manager",
+    "sales representative",
+    "inside sales",
+    "business development representative",
+    "customer success manager",
+    "customer success representative",
+    "community manager",
+    "public relations",
+    "pr specialist",
+    "telemarketing",
+    "bookkeeper",
+    "accountant",
+    "billing specialist",
+)
+
+
 
 def detect_seniority_level(title: str, text: str = "") -> Optional[str]:
     """Detect seniority level from job title and description.
@@ -1428,8 +1471,19 @@ def calculate_match_score(
     title_lower = job.title.lower()
     
     is_admin_title = any(x in title_lower for x in ["מנתח מערכות", "מנהל פרויקטים", "data annotator", "qa", "project manager", "system analyst", "scrum master", "product manager", "help desk", "support"])
+    is_non_tech_title = any(
+        re.search(r"\b" + re.escape(term) + r"\b", title_lower) for term in NON_TECH_ROLE_TERMS
+    )
 
-    if not is_admin_title:
+    is_explicitly_targeted = any(
+        re.search(r"(?<![a-zA-Z0-9_])" + re.escape(role) + r"(?![a-zA-Z0-9_])", title_lower)
+        for role in target_roles
+    ) or any(
+        re.search(r"(?<![a-zA-Z0-9_])" + re.escape(kw) + r"(?![a-zA-Z0-9_])", title_lower)
+        for kw in explicit_keywords
+    )
+
+    if not is_admin_title and not (is_non_tech_title and not is_explicitly_targeted):
         for role in target_roles:
             pattern = r"(?<![a-zA-Z0-9_])" + re.escape(role) + r"(?![a-zA-Z0-9_])"
             if re.search(pattern, title_lower):
@@ -1443,6 +1497,14 @@ def calculate_match_score(
                 if re.search(pattern, title_lower):
                     b_role = 12.0
                     break
+
+    is_dev_role = (
+        any(x in title_lower for x in [
+            "dev", "developer", "engineer", "software", "ai", "backend",
+            "frontend", "full stack", "fullstack", "data engineer", "mlops", "architect"
+        ])
+        or bool(matched_target_role)
+    ) and not (is_non_tech_title and not is_explicitly_targeted)
 
     # 4. Explicit Tech Stack Alignment
     if explicit_tech:
@@ -1484,9 +1546,11 @@ def calculate_match_score(
 
             raw_score = volume_score + coverage_score + a_top + b_role
             if (c_req >= 0.85 or (tech_coverage == 1.0 and len(all_matched_tokens) >= 3 and c_req >= 0.65)) and len(all_matched_tokens) >= 3:
-                raw_score = max(raw_score, 88.0)
+                if not (is_non_tech_title and not is_explicitly_targeted) and not is_admin_title:
+                    raw_score = max(raw_score, 88.0)
             elif c_req >= 0.65 and len(all_matched_tokens) >= 3:
-                raw_score = max(raw_score, 75.0)
+                if not (is_non_tech_title and not is_explicitly_targeted) and not is_admin_title:
+                    raw_score = max(raw_score, 75.0)
         else:
             # Pure explicit search (no CV)
             kw_matched = _match_terms_in_job(explicit_keywords, job_full_text, job_tech_tokens)
@@ -1511,16 +1575,17 @@ def calculate_match_score(
             for t in explicit_tech | profile_skills | explicit_keywords:
                 pattern = r"(?<![a-zA-Z0-9_])" + re.escape(t) + r"(?![a-zA-Z0-9_])"
                 if re.search(pattern, title_lower):
-                    if not is_admin_title and has_cv_profile:
+                    if not is_admin_title and not (is_non_tech_title and not is_explicitly_targeted) and has_cv_profile:
                         raw_score += 5.0
                     break
                     
-        is_dev_role = any(x in title_lower for x in ["developer", "engineer", "software", "ai", "backend", "frontend", "full stack", "data engineer", "mlops"]) or matched_target_role
         has_primary_match = any(s in all_matched_tokens for s in primary_skills)
-        if is_dev_role and has_primary_match:
+        if is_dev_role and has_primary_match and not (is_non_tech_title and not is_explicitly_targeted):
             raw_score = max(raw_score, 75.0)
         
-        if is_admin_title:
+        if is_non_tech_title and not is_explicitly_targeted:
+            raw_score = min(raw_score, 15.0)
+        elif is_admin_title:
             raw_score = min(raw_score, 65.0)
 
         if job.work_mode == WorkMode.ONSITE and "eilat" in job.location.lower():
