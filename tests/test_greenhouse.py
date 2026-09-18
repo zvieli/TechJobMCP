@@ -68,6 +68,33 @@ class TestParseGreenhouseJob:
         job = parse_greenhouse_job(raw, "TestCo")
         assert any("python" in s.lower() for s in job.tech_stack)
 
+    def test_greenhouse_sections_and_tech_stack_isolation(self):
+        raw = {
+            "id": 88,
+            "title": "React Frontend Engineer",
+            "location": {"name": "Tel Aviv"},
+            "absolute_url": "https://boards.greenhouse.io/test/jobs/88",
+            "content": """
+                <h2>About the Company</h2>
+                <p>Acme Corp is an AI cloud infrastructure company built with Rust, Go, and Kubernetes.</p>
+                <h2>Responsibilities</h2>
+                <p>You will build modern web applications using React and Next.js.</p>
+                <h2>Qualifications</h2>
+                <p>3+ years experience with TypeScript and CSS.</p>
+            """,
+            "departments": [{"name": "Frontend"}],
+        }
+        job = parse_greenhouse_job(raw, "TestCo")
+        assert job.company_overview is not None and "AI cloud infrastructure" in job.company_overview
+        assert job.responsibilities is not None and "React and Next.js" in job.responsibilities
+        assert job.requirements is not None and "TypeScript" in job.requirements
+        assert "React" in job.tech_stack
+        assert "TypeScript" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "Rust" not in job.tech_stack
+        assert "Go" not in job.tech_stack
+        assert "Kubernetes" not in job.tech_stack
+
     def test_handles_missing_location(self):
         raw = {
             "id": 100,

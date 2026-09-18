@@ -12,7 +12,8 @@ from typing import Any, Optional
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
 from job_mcp.utils.logger import get_logger
@@ -92,6 +93,7 @@ def parse_greenhouse_job(raw: dict[str, Any], company_name: str) -> Job:
 
     # Description — strip HTML for tech stack extraction
     content_html = str(raw.get("content") or "")
+    sections = parse_job_sections(content_html)
     description = _strip_html(content_html)
 
     # Department
@@ -100,7 +102,12 @@ def parse_greenhouse_job(raw: dict[str, Any], company_name: str) -> Job:
     department = ", ".join(dept_names) if dept_names else None
 
     # Tech stack extraction
-    tech_stack = _extract_text_tech_keywords(f"{title} {description}")
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=description,
+    )
 
     # Work mode
     work_mode = _detect_work_mode(location_str, description)
@@ -121,6 +128,9 @@ def parse_greenhouse_job(raw: dict[str, Any], company_name: str) -> Job:
         work_mode=work_mode,
         department=department,
         posted_date=posted_date,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
     )
 
 

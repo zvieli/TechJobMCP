@@ -13,7 +13,8 @@ from urllib.parse import urljoin
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
 from job_mcp.utils.logger import get_logger
@@ -171,8 +172,14 @@ def parse_gotfriends_job_item(
     # Work mode
     work_mode = _detect_work_mode(location, description)
 
-    # Tech stack
-    tech_stack = _extract_text_tech_keywords(f"{title} {description}")
+    # Section parsing & clean tech stack extraction
+    sections = parse_job_sections(desc_inner or description)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=category,
+        fallback_text=description,
+    )
 
     return Job(
         job_id=job_id,
@@ -186,6 +193,9 @@ def parse_gotfriends_job_item(
         source="gotfriends",
         work_mode=work_mode,
         department=category,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
     )
 
 

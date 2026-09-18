@@ -150,6 +150,25 @@ class TestAllJobsPositionParser:
         assert "Terraform" in job.tech_stack
         assert "AWS" in job.tech_stack
 
+    def test_alljobs_sections_and_tech_stack_isolation(self) -> None:
+        raw = {
+            "JobID": 444555,
+            "JobTitle": "React Web Developer",
+            "CompanyName": "Digital Agency",
+            "JobCity": "Tel Aviv",
+            "JobDescription": "תיאור התפקיד:\nפיתוח אפליקציות web עשירות ב-React ו-Redux.\n\nאודות החברה:\nחברת שיווק דיגיטלי מתקדמת המשתמשת ב-Go, C++ ו-Kubernetes.",
+            "JobRequirements": "דרישות:\nניסיון של 3 שנים לפחות ב-React, TypeScript ו-CSS.",
+        }
+        job = parse_alljobs_position(raw)
+        assert job.responsibilities is not None and "פיתוח אפליקציות" in job.responsibilities
+        assert job.requirements is not None and "TypeScript" in job.requirements
+        assert "React" in job.tech_stack
+        assert "TypeScript" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "Go" not in job.tech_stack
+        assert "C++" not in job.tech_stack
+        assert "Kubernetes" not in job.tech_stack
+
 
 class TestAllJobsCategories:
     """Tests for category retrieval, parsing, and caching."""

@@ -1864,6 +1864,28 @@ def parse_api_job_dict(raw: dict) -> Job:
     # Description and requirements combination
     desc = str(raw.get("description") or "").strip()
     reqs = str(raw.get("requirements") or "").strip()
+
+    desc_blocks: list[str] = []
+    if desc:
+        if any(h in desc for h in ("About", "אודות", "Responsibilities", "תפקיד", "Qualifications", "דרישות")):
+            desc_blocks.append(desc)
+        else:
+            desc_blocks.append(f"About the position:\n{desc}")
+    if reqs and reqs not in desc:
+        if any(h in reqs for h in ("Requirements", "Qualifications", "דרישות", "כישורים")):
+            desc_blocks.append(reqs)
+        else:
+            desc_blocks.append(f"Requirements:\n{reqs}")
+
+    combined_for_sections = "\n\n".join(desc_blocks) if desc_blocks else (desc or reqs)
+
+    # Section parsing & clean tech stack extraction
+    from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
+
+    sections = parse_job_sections(combined_for_sections)
+    if reqs and not sections.requirements:
+        sections.requirements = reqs
+
     if desc and reqs and reqs not in desc:
         combined_desc = f"{desc}\n\n{reqs}"
     else:
@@ -1882,9 +1904,12 @@ def parse_api_job_dict(raw: dict) -> Job:
                     if name and isinstance(name, str) and name.strip():
                         tech_candidates.append(name.strip())
 
-    # Heuristic tech keyword extraction from title & description
-    text_tech = _extract_text_tech_keywords(f"{title} {combined_desc}")
-    tech_candidates.extend(text_tech)
+    clean_tech = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        fallback_text=combined_desc,
+    )
+    tech_candidates.extend(clean_tech)
 
     # Normalize & deduplicate preserving order/casing
     seen_lower = set()
@@ -1945,6 +1970,9 @@ def parse_api_job_dict(raw: dict) -> Job:
         match_score=match_score,
         seniority_level=seniority_level,
         description_summary=description_summary,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
     )
 
 

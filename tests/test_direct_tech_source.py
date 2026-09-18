@@ -155,7 +155,32 @@ class TestDirectTechPositionParsers:
         assert "AWS" in job.tech_stack
         assert "Docker" in job.tech_stack
         assert job.department == "Software Development"
-        assert job.posted_date == "October 15, 2025"
+        assert job.postedDate == "October 15, 2025" if hasattr(job, "postedDate") else job.posted_date == "October 15, 2025"
+        assert job.requirements is not None and "Python" in job.requirements
+        assert job.responsibilities is not None and "Java" in job.responsibilities
+
+    def test_direct_tech_sections_and_tech_stack_isolation(self) -> None:
+        raw_amazon = {
+            "fields": {
+                "icimsJobId": ["AMZ-776655"],
+                "title": ["Frontend React Engineer"],
+                "description": ["About Amazon: Amazon is a global cloud pioneer built on C++, Go, and Kubernetes.\n\nResponsibilities:\nDevelop customer-facing web applications using React."],
+                "basicQualifications": ["3+ years experience with React and TypeScript."],
+                "preferredQualifications": ["Experience with GraphQL."],
+                "location": ["Tel Aviv, Israel"],
+            }
+        }
+        job = parse_amazon_position(raw_amazon)
+        assert job.company_overview is not None and "global cloud pioneer" in job.company_overview
+        assert job.responsibilities is not None and "React" in job.responsibilities
+        assert job.requirements is not None and "TypeScript" in job.requirements
+        assert "React" in job.tech_stack
+        assert "TypeScript" in job.tech_stack
+        assert "GraphQL" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "C++" not in job.tech_stack
+        assert "Go" not in job.tech_stack
+        assert "Kubernetes" not in job.tech_stack
 
     def test_parse_amazon_positions_list(self) -> None:
         jobs = parse_amazon_positions(SAMPLE_AMAZON_RESPONSE)

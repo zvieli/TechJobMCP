@@ -12,7 +12,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
 from job_mcp.utils.logger import get_logger
@@ -255,9 +256,13 @@ def parse_jobify_position(jsonld: dict[str, Any], url: str = "") -> Job:
     date_posted = jsonld.get("datePosted")
     posted_date = str(date_posted).strip() if date_posted else None
 
-    # 9. Tech stack extraction
-    search_text = f"{title} {clean_desc}"
-    tech_stack = _extract_text_tech_keywords(search_text)
+    # 9. Section parsing & Tech stack extraction
+    sections = parse_job_sections(raw_desc or clean_desc)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        fallback_text=clean_desc,
+    )
 
     # 10. URL and apply URL
     resolved_url = url or (str(jsonld.get("url")) if jsonld.get("url") else None)
@@ -275,6 +280,9 @@ def parse_jobify_position(jsonld: dict[str, Any], url: str = "") -> Job:
         posted_date=posted_date,
         url=resolved_url,
         apply_url=apply_url,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="jobify",
         sources=["jobify"],
     )

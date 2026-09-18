@@ -12,7 +12,8 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
 from job_mcp.utils.logger import get_logger
@@ -257,14 +258,25 @@ def parse_eightfold_position(raw: dict[str, Any], company: EightfoldCompany | st
 
     apply_url = str(raw.get("apply_url") or raw.get("applyUrl") or "").strip() or url
 
-    # Tech stack extraction
+    # Tech stack extraction & section parsing
     skills_raw = raw.get("skills") or raw.get("standard_skills") or raw.get("tags") or []
     skills_text = ""
     if isinstance(skills_raw, list):
         skills_text = " ".join(str(s) for s in skills_raw if s)
 
-    search_text = f"{title} {clean_desc} {department or ''} {skills_text}".strip()
-    tech_stack = _extract_text_tech_keywords(search_text)
+    sections = parse_job_sections(raw_desc or clean_desc)
+    if skills_text:
+        if sections.requirements:
+            sections.requirements = f"{sections.requirements}\n{skills_text}".strip()
+        else:
+            sections.requirements = skills_text
+
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=f"{clean_desc} {skills_text}".strip(),
+    )
 
     return Job(
         job_id=job_id,
@@ -278,6 +290,9 @@ def parse_eightfold_position(raw: dict[str, Any], company: EightfoldCompany | st
         url=url,
         apply_url=apply_url,
         department=department,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="eightfold",
         sources=["eightfold"],
     )

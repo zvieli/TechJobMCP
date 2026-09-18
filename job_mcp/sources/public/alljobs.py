@@ -11,7 +11,8 @@ from typing import Any, Optional
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
 from job_mcp.utils.logger import get_logger
@@ -95,16 +96,33 @@ def parse_alljobs_position(raw: dict[str, Any]) -> Job:
         numeric_id = hash_val
 
     # Description parsing & cleaning
-    desc_raw = (
-        raw.get("JobDescription")
-        or raw.get("description")
-        or raw.get("Description")
-        or raw.get("JobRequirements")
-        or raw.get("requirements")
-        or ""
-    )
-    clean_desc = re.sub(r"<[^>]+>", " ", str(desc_raw))
+    desc_part = str(raw.get("JobDescription") or raw.get("description") or raw.get("Description") or "").strip()
+    req_part = str(raw.get("JobRequirements") or raw.get("requirements") or "").strip()
+
+    desc_blocks: list[str] = []
+    if desc_part:
+        desc_blocks.append(desc_part)
+    if req_part and req_part not in desc_part:
+        if any(h in req_part for h in ("דרישות", "דרישות התפקיד", "Requirements", "qualifications")):
+            desc_blocks.append(req_part)
+        else:
+            desc_blocks.append(f"דרישות:\n{req_part}")
+
+    raw_combined = "\n\n".join(desc_blocks) if desc_blocks else str(raw.get("JobDescription") or "")
+    clean_desc = re.sub(r"<[^>]+>", " ", str(raw_combined))
     clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+    # Section parsing & Tech stack extraction
+    sections = parse_job_sections(raw_combined)
+    department_raw = raw.get("Department") or raw.get("department") or raw.get("CategoryName")
+    department = str(department_raw).strip() if department_raw else None
+
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=clean_desc,
+    )
 
     # Work mode determination
     is_remote = bool(raw.get("IsRemote") or raw.get("is_remote") or False)
@@ -156,13 +174,6 @@ def parse_alljobs_position(raw: dict[str, Any]) -> Job:
     posted_date_raw = raw.get("Date") or raw.get("JobDate") or raw.get("posted_date") or raw.get("CreateDate")
     posted_date = str(posted_date_raw).strip() if posted_date_raw else None
 
-    department_raw = raw.get("Department") or raw.get("department") or raw.get("CategoryName")
-    department = str(department_raw).strip() if department_raw else None
-
-    # Tech stack extraction
-    search_keywords_text = f"{title} {clean_desc} {department or ''}"
-    tech_stack = _extract_text_tech_keywords(search_keywords_text)
-
     return Job(
         job_id=job_id,
         title=title,
@@ -176,6 +187,9 @@ def parse_alljobs_position(raw: dict[str, Any]) -> Job:
         url=url,
         apply_url=apply_url,
         department=department,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="alljobs",
         sources=["alljobs"],
     )

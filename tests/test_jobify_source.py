@@ -142,6 +142,33 @@ class TestJobifyPositionParser:
         assert "PostgreSQL" in job.tech_stack
         assert job.work_mode == WorkMode.ONSITE
 
+    def test_jobify_sections_and_tech_stack_isolation(self) -> None:
+        payload = {
+            "@type": "JobPosting",
+            "title": "React Frontend Engineer",
+            "hiringOrganization": {"name": "SaaS Platform"},
+            "jobLocation": {"address": {"addressLocality": "Tel Aviv"}},
+            "description": """
+                <h2>About the Company</h2>
+                <p>We are a high-scale data platform utilizing Kubernetes, Go, and Kafka.</p>
+                <h2>Responsibilities</h2>
+                <p>Build and maintain responsive client-side apps with React.</p>
+                <h2>Requirements</h2>
+                <p>Strong experience in TypeScript, React, and GraphQL.</p>
+            """,
+        }
+        job = parse_jobify_position(payload, url="https://jobify360.co.il/jobs/112233")
+        assert job.company_overview is not None and "high-scale data platform" in job.company_overview
+        assert job.responsibilities is not None and "client-side apps" in job.responsibilities
+        assert job.requirements is not None and "TypeScript" in job.requirements
+        assert "React" in job.tech_stack
+        assert "TypeScript" in job.tech_stack
+        assert "GraphQL" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "Go" not in job.tech_stack
+        assert "Kubernetes" not in job.tech_stack
+        assert "Kafka" not in job.tech_stack
+
     def test_parse_remote_and_unescape(self) -> None:
         url = "https://jobify360.co.il/jobs/8821105-aj"
         job = parse_jobify_position(SAMPLE_JSONLD_REMOTE, url=url)

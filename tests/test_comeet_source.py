@@ -92,6 +92,39 @@ class TestComeetPositionParser:
         assert "Kubernetes" in job.tech_stack
         assert "PostgreSQL" in job.tech_stack
         assert "FastAPI" in job.description or "Python" in job.description
+        assert job.requirements is not None and "Python" in job.requirements
+        assert job.responsibilities is not None and "FastAPI" in job.responsibilities
+
+    def test_comeet_sections_and_tech_stack_isolation(self) -> None:
+        raw = {
+            "uid": "POS.303",
+            "name": "Frontend React Developer",
+            "department": "Engineering",
+            "details": [
+                {
+                    "name": "About the company",
+                    "value": "<p>Acme Corp is pioneering autonomous platforms built with Python, Docker, and Kubernetes.</p>",
+                },
+                {
+                    "name": "Responsibilities",
+                    "value": "<p>You will architect and build responsive UI components in React and TypeScript.</p>",
+                },
+                {
+                    "name": "Requirements",
+                    "value": "<p>At least 3 years of React experience and solid HTML/CSS skills.</p>",
+                },
+            ],
+        }
+        job = parse_comeet_position(raw, company_name="Acme Tech")
+        assert job.company_overview is not None and "autonomous platforms" in job.company_overview
+        assert job.responsibilities is not None and "responsive UI components" in job.responsibilities
+        assert job.requirements is not None and "React experience" in job.requirements
+        assert "React" in job.tech_stack
+        assert "TypeScript" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "Python" not in job.tech_stack
+        assert "Docker" not in job.tech_stack
+        assert "Kubernetes" not in job.tech_stack
 
     def test_parse_remote_position(self) -> None:
         job = parse_comeet_position(SAMPLE_COMEET_POSITION_REMOTE, company_name="Cloud Corp")

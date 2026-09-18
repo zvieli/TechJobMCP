@@ -12,7 +12,8 @@ from typing import Any, Optional
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BaseEnterpriseSource
 from job_mcp.utils.logger import get_logger
@@ -120,23 +121,35 @@ def parse_google_job(obj: list[Any], company: DirectTechCompany | str = "Google"
                 location_parts.append(loc.strip())
     location_str = "; ".join(location_parts)
 
-    # Description
+    # Description & section parsing
     desc_chunks: list[str] = []
+    desc_labeled: list[str] = []
     if len(obj) > 3 and isinstance(obj[3], list) and len(obj[3]) > 1 and obj[3][1]:
-        desc_chunks.append(str(obj[3][1]))
+        chunk = str(obj[3][1]).strip()
+        desc_chunks.append(chunk)
+        desc_labeled.append(f"Responsibilities:\n{chunk}")
     if len(obj) > 4 and isinstance(obj[4], list) and len(obj[4]) > 1 and obj[4][1]:
-        desc_chunks.append(str(obj[4][1]))
+        chunk = str(obj[4][1]).strip()
+        desc_chunks.append(chunk)
+        desc_labeled.append(f"Minimum Qualifications:\n{chunk}")
     if len(obj) > 10 and isinstance(obj[10], list) and len(obj[10]) > 1 and obj[10][1]:
-        desc_chunks.append(str(obj[10][1]))
+        chunk = str(obj[10][1]).strip()
+        desc_chunks.append(chunk)
+        desc_labeled.append(f"Preferred Qualifications:\n{chunk}")
 
     raw_desc = " ".join(desc_chunks)
     clean_desc = re.sub(r"<[^>]+>", " ", raw_desc)
     clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
+    sections = parse_job_sections("\n\n".join(desc_labeled) if desc_labeled else raw_desc)
+
     # Work mode & tech stack
     work_mode = _determine_work_mode(title, location_str, clean_desc)
-    search_text = f"{title} {clean_desc}"
-    tech_stack = _extract_text_tech_keywords(search_text)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        fallback_text=clean_desc,
+    )
 
     return Job(
         job_id=job_id,
@@ -148,6 +161,9 @@ def parse_google_job(obj: list[Any], company: DirectTechCompany | str = "Google"
         description=clean_desc,
         url=url,
         apply_url=apply_url,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="direct_tech",
         sources=["direct_tech"],
     )
@@ -271,18 +287,29 @@ def parse_amazon_position(raw: dict[str, Any], company: DirectTechCompany | str 
     elif isinstance(date_raw, str) and date_raw.strip():
         posted_date = date_raw.strip()
 
-    # Description
+    # Description & section parsing
     desc_chunks: list[str] = []
-    for k in ("description", "basicQualifications", "preferredQualifications"):
+    desc_blocks: list[str] = []
+    for k, heading in (
+        ("description", "Responsibilities"),
+        ("basicQualifications", "Basic Qualifications"),
+        ("preferredQualifications", "Preferred Qualifications"),
+    ):
         v = fields.get(k)
+        chunk_text = ""
         if isinstance(v, list):
-            desc_chunks.extend([str(item) for item in v if item])
+            chunk_text = " ".join(str(item) for item in v if item).strip()
         elif isinstance(v, str) and v.strip():
-            desc_chunks.append(v.strip())
+            chunk_text = v.strip()
+        if chunk_text:
+            desc_chunks.append(chunk_text)
+            desc_blocks.append(f"{heading}:\n{chunk_text}")
 
     raw_desc = " ".join(desc_chunks) or str(raw.get("description") or "")
     clean_desc = re.sub(r"<[^>]+>", " ", raw_desc)
     clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
+
+    sections = parse_job_sections("\n\n".join(desc_blocks) if desc_blocks else raw_desc)
 
     # URLs
     url = f"https://amazon.jobs/jobs/{raw_id}" if raw_id else "https://amazon.jobs"
@@ -290,8 +317,12 @@ def parse_amazon_position(raw: dict[str, Any], company: DirectTechCompany | str 
 
     # Work mode & tech stack
     work_mode = _determine_work_mode(title, location_str, clean_desc)
-    search_text = f"{title} {clean_desc} {department or ''}"
-    tech_stack = _extract_text_tech_keywords(search_text)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=clean_desc,
+    )
 
     return Job(
         job_id=job_id,
@@ -305,6 +336,9 @@ def parse_amazon_position(raw: dict[str, Any], company: DirectTechCompany | str 
         url=url,
         apply_url=apply_url,
         department=department,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="direct_tech",
         sources=["direct_tech"],
     )
@@ -393,15 +427,21 @@ def parse_apple_position(raw: dict[str, Any], company: DirectTechCompany | str =
         raw.get("postDateInFormat") or raw.get("postingDate") or raw.get("postDate") or ""
     ).strip() or None
 
-    # Description
+    # Description & section parsing
     raw_desc = str(raw.get("jobSummary") or raw.get("description") or "")
     clean_desc = re.sub(r"<[^>]+>", " ", raw_desc)
     clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
+    sections = parse_job_sections(raw_desc or clean_desc)
+
     # Work mode & tech stack
     work_mode = _determine_work_mode(title, location_str, clean_desc)
-    search_text = f"{title} {clean_desc} {department or ''}"
-    tech_stack = _extract_text_tech_keywords(search_text)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=clean_desc,
+    )
 
     return Job(
         job_id=job_id,
@@ -415,6 +455,9 @@ def parse_apple_position(raw: dict[str, Any], company: DirectTechCompany | str =
         url=url,
         apply_url=apply_url,
         department=department,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="direct_tech",
         sources=["direct_tech"],
     )
@@ -483,15 +526,20 @@ def parse_ibm_position(raw: dict[str, Any], company: DirectTechCompany | str = "
     loc_parts = [str(p).strip() for p in (loc2, loc1) if p and str(p).strip()]
     location_str = ", ".join(loc_parts) if loc_parts else str(raw.get("location") or "").strip()
 
-    # Description
+    # Description & section parsing
     raw_desc = str(source_data.get("description") or raw.get("description") or "")
     clean_desc = re.sub(r"<[^>]+>", " ", raw_desc)
     clean_desc = re.sub(r"\s+", " ", clean_desc).strip()
 
+    sections = parse_job_sections(raw_desc or clean_desc)
+
     # Work mode & tech stack
     work_mode = _determine_work_mode(title, location_str, clean_desc)
-    search_text = f"{title} {clean_desc}"
-    tech_stack = _extract_text_tech_keywords(search_text)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        fallback_text=clean_desc,
+    )
 
     return Job(
         job_id=job_id,
@@ -503,6 +551,9 @@ def parse_ibm_position(raw: dict[str, Any], company: DirectTechCompany | str = "
         description=clean_desc,
         url=url or None,
         apply_url=url or None,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="direct_tech",
         sources=["direct_tech"],
     )

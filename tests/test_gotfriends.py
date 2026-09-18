@@ -146,6 +146,38 @@ class TestParseGotFriendsJobItem:
         assert job.job_id == "gotfriends_155033"
         assert job.work_mode == WorkMode.HYBRID
 
+    def test_gotfriends_sections_and_tech_stack_isolation(self):
+        html_content = """
+        <div class="item">
+            <a href="/jobslobby/software/fullstack/155099/" class="position p-27099">
+                <h2 class="title">Full Stack Developer</h2>
+            </a>
+            <div class="item_content">
+                <div class="desc">
+                    <p><strong>אודות החברה:</strong></p>
+                    <p>חברת פינטק מובילה המפתחת פלטפורמות מבוססות Go, Kubernetes ו-AWS.</p>
+                    <p><strong>תיאור התפקיד:</strong></p>
+                    <p>פיתוח ממשקי משתמש מתקדמים ב-React ו-TypeScript.</p>
+                    <p><strong>דרישות:</strong></p>
+                    <p>ניסיון מעמיק ב-React, Node.js ו-PostgreSQL.</p>
+                </div>
+            </div>
+        </div>
+        """
+        job = parse_gotfriends_job_item(html_content)
+        assert job is not None
+        assert job.company_overview is not None and "חברת פינטק" in job.company_overview
+        assert job.responsibilities is not None and "ממשקי משתמש" in job.responsibilities
+        assert job.requirements is not None and "ניסיון מעמיק" in job.requirements
+        assert "React" in job.tech_stack
+        assert "TypeScript" in job.tech_stack
+        assert "Node.js" in job.tech_stack
+        assert "PostgreSQL" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "Go" not in job.tech_stack
+        assert "Kubernetes" not in job.tech_stack
+        assert "AWS" not in job.tech_stack
+
     def test_handles_missing_location(self):
         html_without_loc = """
         <div class="item">

@@ -51,7 +51,7 @@ _RESPONSIBILITIES_PATTERNS: tuple[str, ...] = (
 
 _REQUIREMENTS_PATTERNS: tuple[str, ...] = (
     # English
-    r"(?:job\s+)?requirements\b",
+    r"(?:job\s+|key\s+|core\s+)?requirements\b",
     r"basic\s+qualifications\b",
     r"preferred\s+qualifications\b",
     r"minimum\s+qualifications\b",

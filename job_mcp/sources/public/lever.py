@@ -12,7 +12,8 @@ from typing import Any, Optional
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
 from job_mcp.utils.logger import get_logger
@@ -97,12 +98,52 @@ def parse_lever_job(raw: dict[str, Any], company_name: str) -> Job:
     team = str(categories.get("team") or "")
     department = team if team else (str(categories.get("department") or "") if categories.get("department") else None)
 
-    # Description
+    # Description and structured sections
+    parts_for_parsing: list[str] = []
     description_plain = raw.get("descriptionPlain")
+    description_html = raw.get("description")
+
+    if description_html:
+        parts_for_parsing.append(str(description_html))
+    elif description_plain:
+        parts_for_parsing.append(str(description_plain))
+
+    lists = raw.get("lists")
+    list_clean_texts: list[str] = []
+    if isinstance(lists, list):
+        for lst in lists:
+            if isinstance(lst, dict):
+                heading = str(lst.get("text") or "").strip()
+                content = str(lst.get("content") or "").strip()
+                if heading and content:
+                    parts_for_parsing.append(f"<h3>{heading}</h3>\n{content}")
+                    list_clean_texts.append(f"{heading}:\n{_strip_html(content)}")
+                elif content:
+                    parts_for_parsing.append(content)
+                    list_clean_texts.append(_strip_html(content))
+
+    add_html = raw.get("additional")
+    add_plain = raw.get("additionalPlain")
+    if add_html:
+        parts_for_parsing.append(str(add_html))
+    elif add_plain:
+        parts_for_parsing.append(str(add_plain))
+
+    combined_for_sections = "\n\n".join(parts_for_parsing)
+    sections = parse_job_sections(combined_for_sections)
+
     if description_plain:
         description = str(description_plain)
     else:
-        description = _strip_html(str(raw.get("description") or ""))
+        description = _strip_html(str(description_html or ""))
+
+    if list_clean_texts:
+        description = f"{description}\n\n" + "\n\n".join(list_clean_texts)
+        description = description.strip()
+    if add_plain or add_html:
+        add_text = str(add_plain) if add_plain else _strip_html(str(add_html))
+        if add_text:
+            description = f"{description}\n\n{add_text}".strip()
 
     # URLs
     hosted_url = str(raw.get("hostedUrl") or "")
@@ -118,7 +159,12 @@ def parse_lever_job(raw: dict[str, Any], company_name: str) -> Job:
     posted_date = str(raw["createdAt"]) if raw.get("createdAt") is not None else None
 
     # Tech stack extraction
-    tech_stack = _extract_text_tech_keywords(f"{title} {description}")
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=description,
+    )
 
     return Job(
         job_id=job_id,
@@ -133,6 +179,9 @@ def parse_lever_job(raw: dict[str, Any], company_name: str) -> Job:
         work_mode=work_mode,
         department=department,
         posted_date=posted_date,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
     )
 
 

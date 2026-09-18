@@ -8,11 +8,12 @@ import html
 import re
 import time
 from typing import Any, Optional
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BaseAuthenticatedSource
 from job_mcp.utils.logger import get_logger
@@ -192,9 +193,13 @@ def parse_linkedin_job_card(card_html: str) -> Optional[Job]:
     else:
         work_mode = None
 
-    # Tech stack extraction
-    search_keywords_text = f"{title} {location_str} {snippet}"
-    tech_stack = _extract_text_tech_keywords(search_keywords_text)
+    # Tech stack extraction & section parsing
+    sections = parse_job_sections(snippet)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        fallback_text=snippet,
+    )
 
     return Job(
         job_id=job_id,
@@ -207,6 +212,9 @@ def parse_linkedin_job_card(card_html: str) -> Optional[Job]:
         posted_date=posted_date,
         url=canonical_url,
         apply_url=apply_url,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="linkedin",
         sources=["linkedin"],
     )
@@ -344,9 +352,15 @@ def parse_linkedin_job_details(html_text: str) -> dict[str, Any]:
     else:
         work_mode = None
 
-    # Tech stack extraction
-    tech_text = f"{title} {description} {department or ''}"
-    tech_stack = _extract_text_tech_keywords(tech_text)
+    # Section parsing & tech stack extraction
+    desc_html = desc_match.group(1) if desc_match else ""
+    sections = parse_job_sections(desc_html or description)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=description,
+    )
 
     return {
         "title": title,
@@ -361,6 +375,9 @@ def parse_linkedin_job_details(html_text: str) -> dict[str, Any]:
         "industries": industries,
         "work_mode": work_mode,
         "tech_stack": tech_stack,
+        "requirements": sections.requirements or None,
+        "responsibilities": sections.responsibilities or None,
+        "company_overview": sections.company_overview or None,
     }
 
 

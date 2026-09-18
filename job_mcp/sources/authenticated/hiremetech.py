@@ -11,6 +11,7 @@ from job_mcp.core.browser import (
     bookmark_job as browser_bookmark_job,
     extract_jobs as browser_extract_jobs,
 )
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences
 from job_mcp.sources.base import BaseAuthenticatedSource
 from job_mcp.utils.logger import get_logger
@@ -121,12 +122,25 @@ class HireMeTechSource(BaseAuthenticatedSource):
                 logger.warning("DOM extraction fallback failed: %s", exc)
                 jobs = []
 
-        # Ensure source tagging
+        # Ensure source tagging and section parsing
         tagged_jobs: list[Job] = []
         for j in jobs:
             j.source = "hiremetech"
             if "hiremetech" not in j.sources:
                 j.sources.insert(0, "hiremetech")
+            if not j.requirements and not j.responsibilities and not j.company_overview:
+                sections = parse_job_sections(j.description)
+                j.requirements = sections.requirements or None
+                j.responsibilities = sections.responsibilities or None
+                j.company_overview = sections.company_overview or None
+                clean_tech = extract_clean_job_tech_stack(
+                    title=j.title,
+                    sections=sections,
+                    department=j.department,
+                    fallback_text=j.description,
+                )
+                if clean_tech:
+                    j.tech_stack = clean_tech
             tagged_jobs.append(j)
 
         # Apply preferences filtering if provided

@@ -77,6 +77,40 @@ class TestEightfoldPositionParser:
         assert "CUDA, PyTorch" in job.description or "Python, CUDA" in job.description
         assert job.department == "Engineering & Architecture"
 
+    def test_eightfold_sections_and_tech_stack_isolation(self) -> None:
+        company = EightfoldCompany(
+            name="NVIDIA",
+            hostname="nvidia.eightfold.ai",
+            domain="nvidia.com",
+            locations=["Tel Aviv"],
+        )
+        raw = {
+            "id": "700999",
+            "name": "Backend Python Engineer",
+            "positionUrl": "/careers?pid=700999",
+            "department": "Platform",
+            "job_description": """
+                <h2>Company Overview</h2>
+                <p>NVIDIA is the global leader in accelerated computing using CUDA, C++, and GPU architectures.</p>
+                <h2>Core Responsibilities</h2>
+                <p>Develop REST APIs in FastAPI and maintain backend services.</p>
+                <h2>Basic Qualifications</h2>
+                <p>Strong experience with Python and PostgreSQL.</p>
+            """,
+            "skills": ["Python", "FastAPI"],
+        }
+        job = parse_eightfold_position(raw, company=company)
+        assert job.company_overview is not None and "accelerated computing" in job.company_overview
+        assert job.responsibilities is not None and "FastAPI" in job.responsibilities
+        assert job.requirements is not None and "PostgreSQL" in job.requirements
+        assert "Python" in job.tech_stack
+        assert "FastAPI" in job.tech_stack
+        assert "PostgreSQL" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "CUDA" not in job.tech_stack
+        assert "C++" not in job.tech_stack
+        assert "GPU" not in job.tech_stack
+
     def test_parse_remote_position(self) -> None:
         company = EightfoldCompany(
             name="Intel",

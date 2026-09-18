@@ -208,6 +208,37 @@ class TestLinkedInParsers:
         assert "Python" in details["tech_stack"]
         assert "Go" in details["tech_stack"]
         assert "CloudScale is hiring a Staff Cloud Architect" in details["description"]
+        assert "requirements" in details and details["requirements"] is not None
+
+    def test_linkedin_sections_and_tech_stack_isolation(self) -> None:
+        html_details = """
+        <div class="decorated-job-posting__details">
+          <section class="top-card-layout">
+            <h1 class="top-card-layout__title font-sans text-lg">Frontend React Developer</h1>
+            <a class="topcard__org-name-link" href="#">Fintech Global</a>
+            <span class="topcard__flavor topcard__flavor--bullet">Tel Aviv, Israel</span>
+          </section>
+          <div class="show-more-less-html__markup">
+            <h2>About the Company</h2>
+            <p>Fintech Global provides automated ledger solutions built with C++, Go, and Kubernetes.</p>
+            <h2>Responsibilities</h2>
+            <p>Develop web application UI using React and TypeScript.</p>
+            <h2>Requirements</h2>
+            <p>3+ years experience in React and GraphQL.</p>
+          </div>
+        </div>
+        """
+        details = parse_linkedin_job_details(html_details)
+        assert details.get("company_overview") is not None and "automated ledger solutions" in details["company_overview"]
+        assert details.get("responsibilities") is not None and "React and TypeScript" in details["responsibilities"]
+        assert details.get("requirements") is not None and "GraphQL" in details["requirements"]
+        assert "React" in details["tech_stack"]
+        assert "TypeScript" in details["tech_stack"]
+        assert "GraphQL" in details["tech_stack"]
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "C++" not in details["tech_stack"]
+        assert "Go" not in details["tech_stack"]
+        assert "Kubernetes" not in details["tech_stack"]
 
 
 class TestLinkedInSearchApi:

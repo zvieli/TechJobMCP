@@ -85,6 +85,37 @@ class TestWorkdayPositionParser:
         assert "Python, Docker, Kubernetes, and AWS" in job.description
         assert job.department == "Software Engineering"
 
+    def test_workday_sections_and_tech_stack_isolation(self) -> None:
+        company = WorkdayCompany(name="Salesforce", wd_company="salesforce")
+        raw = {
+            "title": "Backend Python Developer",
+            "externalPath": "/job/Backend_REQ-8888",
+            "jobPostingInfo": {
+                "jobReqId": "REQ-8888",
+                "location": "Petah Tikva",
+                "jobDescription": """
+                    <h2>About Us</h2>
+                    <p>Salesforce is the global CRM leader built on Java, Oracle, and Kubernetes.</p>
+                    <h2>Key Responsibilities</h2>
+                    <p>Design and develop microservices with Python and FastAPI.</p>
+                    <h2>Minimum Qualifications</h2>
+                    <p>4+ years with PostgreSQL and Redis.</p>
+                """,
+            },
+        }
+        job = parse_workday_position(raw, company=company)
+        assert job.company_overview is not None and "global CRM leader" in job.company_overview
+        assert job.responsibilities is not None and "FastAPI" in job.responsibilities
+        assert job.requirements is not None and "PostgreSQL" in job.requirements
+        assert "Python" in job.tech_stack
+        assert "FastAPI" in job.tech_stack
+        assert "PostgreSQL" in job.tech_stack
+        assert "Redis" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "Java" not in job.tech_stack
+        assert "Oracle" not in job.tech_stack
+        assert "Kubernetes" not in job.tech_stack
+
     def test_parse_remote_position(self) -> None:
         company = WorkdayCompany(
             name="Philips",

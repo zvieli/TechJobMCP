@@ -10,7 +10,12 @@ from typing import Any, Optional
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import (
+    JobSections,
+    extract_clean_job_tech_stack,
+    parse_job_sections,
+)
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
 from job_mcp.utils.logger import get_logger
@@ -149,18 +154,77 @@ def parse_comeet_position(raw: dict[str, Any], company_name: str) -> Job:
     # Details / Description parsing
     details = raw.get("details")
     desc_parts: list[str] = []
-    if isinstance(details, dict):
-        for k in ("description", "requirements", "about", "value"):
-            if k in details and details[k]:
-                desc_parts.append(str(details[k]))
-    elif isinstance(details, list):
+    sections = JobSections()
+
+    if isinstance(details, list) and any(isinstance(item, dict) and item.get("name") for item in details):
+        sec_buckets: dict[str, list[str]] = {
+            "requirements": [],
+            "responsibilities": [],
+            "company_overview": [],
+            "benefits": [],
+            "raw_other": [],
+        }
         for item in details:
-            if isinstance(item, dict) and item.get("value"):
-                desc_parts.append(str(item["value"]))
-            elif isinstance(item, str) and item:
-                desc_parts.append(item)
-    elif isinstance(details, str) and details:
-        desc_parts.append(details)
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            val = str(item.get("value") or "").strip()
+            if not val:
+                continue
+            desc_parts.append(val)
+            name_low = name.lower()
+            if any(k in name_low for k in ("requirement", "qualification", "skills", "who you are", "דרישות", "כישורים")):
+                sec_buckets["requirements"].append(val)
+            elif any(k in name_low for k in ("responsibilit", "description", "about the position", "about the role", "the role", "תפקיד", "אחריות")):
+                sec_buckets["responsibilities"].append(val)
+            elif any(k in name_low for k in ("about the company", "about us", "company", "who we are", "אודות")):
+                sec_buckets["company_overview"].append(val)
+            elif any(k in name_low for k in ("benefit", "perk", "offer", "תנאים", "הטבות")):
+                sec_buckets["benefits"].append(val)
+            else:
+                sec_buckets["raw_other"].append(val)
+
+        formatted_blocks: list[str] = []
+        if sec_buckets["company_overview"]:
+            formatted_blocks.append("About the Company:\n" + "\n".join(sec_buckets["company_overview"]))
+        if sec_buckets["responsibilities"]:
+            formatted_blocks.append("Responsibilities:\n" + "\n".join(sec_buckets["responsibilities"]))
+        if sec_buckets["requirements"]:
+            formatted_blocks.append("Requirements:\n" + "\n".join(sec_buckets["requirements"]))
+        if sec_buckets["benefits"]:
+            formatted_blocks.append("Benefits:\n" + "\n".join(sec_buckets["benefits"]))
+        if sec_buckets["raw_other"]:
+            formatted_blocks.append("\n".join(sec_buckets["raw_other"]))
+
+        sections = parse_job_sections("\n\n".join(formatted_blocks))
+    elif isinstance(details, dict):
+        formatted_blocks = []
+        for k, v in details.items():
+            if not v:
+                continue
+            val_str = str(v).strip()
+            desc_parts.append(val_str)
+            k_low = k.lower()
+            if "req" in k_low or "qual" in k_low:
+                formatted_blocks.append(f"Requirements:\n{val_str}")
+            elif "desc" in k_low or "resp" in k_low:
+                formatted_blocks.append(f"Responsibilities:\n{val_str}")
+            elif "about" in k_low or "comp" in k_low:
+                formatted_blocks.append(f"About the company:\n{val_str}")
+            elif "benefit" in k_low or "perk" in k_low:
+                formatted_blocks.append(f"Benefits:\n{val_str}")
+            else:
+                formatted_blocks.append(val_str)
+        sections = parse_job_sections("\n\n".join(formatted_blocks))
+    else:
+        if isinstance(details, list):
+            for item in details:
+                if isinstance(item, dict) and item.get("value"):
+                    desc_parts.append(str(item["value"]))
+                elif isinstance(item, str) and item:
+                    desc_parts.append(item)
+        elif isinstance(details, str) and details:
+            desc_parts.append(details)
 
     if not desc_parts and raw.get("description"):
         desc_parts.append(str(raw["description"]))
@@ -169,9 +233,16 @@ def parse_comeet_position(raw: dict[str, Any], company_name: str) -> Job:
     clean_description = re.sub(r"<[^>]+>", " ", raw_description)
     clean_description = re.sub(r"\s+", " ", clean_description).strip()
 
+    if not sections.requirements and not sections.responsibilities and not sections.company_overview:
+        sections = parse_job_sections(raw_description)
+
     # Tech stack extraction
-    search_text = f"{title} {clean_description} {department or ''}"
-    tech_stack = _extract_text_tech_keywords(search_text)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=clean_description,
+    )
 
     return Job(
         job_id=job_id,
@@ -184,6 +255,9 @@ def parse_comeet_position(raw: dict[str, Any], company_name: str) -> Job:
         url=url or None,
         apply_url=apply_url or None,
         department=department,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="comeet",
         sources=["comeet"],
     )

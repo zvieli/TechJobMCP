@@ -73,6 +73,27 @@ def test_parse_api_job_dict_full_payload():
 
     assert "experienced Fullstack Engineer" in job.description
     assert "Kubernetes and AWS" in job.description
+    assert job.requirements is not None and "Kubernetes" in job.requirements
+
+def test_parse_api_job_dict_boilerplate_isolation():
+    """Test that company boilerplate does not bleed into tech_stack in HireMeTech parser."""
+    raw = {
+        "id": 99881122,
+        "title": "Frontend React Developer",
+        "company_name": "WebScale Inc",
+        "description": "About Us:\nWebScale provides financial ledger infrastructure built on C++, Go, and Kubernetes.\n\nResponsibilities:\nDevelop user interface components in React.",
+        "requirements": "Requirements:\n3+ years of React and TypeScript.",
+    }
+    job = parse_api_job_dict(raw)
+    assert job.company_overview is not None and "financial ledger infrastructure" in job.company_overview
+    assert job.responsibilities is not None and "React" in job.responsibilities
+    assert job.requirements is not None and "TypeScript" in job.requirements
+    assert "React" in job.tech_stack
+    assert "TypeScript" in job.tech_stack
+    # Company overview boilerplate keywords MUST NOT bleed into tech stack
+    assert "C++" not in job.tech_stack
+    assert "Go" not in job.tech_stack
+    assert "Kubernetes" not in job.tech_stack
 
 
 def test_parse_api_job_dict_work_mode_variations():

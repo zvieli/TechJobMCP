@@ -11,7 +11,8 @@ from typing import Any, Optional
 
 import httpx
 
-from job_mcp.core.api_client import _extract_text_tech_keywords, filter_jobs
+from job_mcp.core.api_client import filter_jobs
+from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BaseEnterpriseSource
 from job_mcp.utils.logger import get_logger
@@ -200,11 +201,6 @@ def parse_workday_position(raw: dict[str, Any], company: WorkdayCompany | str) -
         or posting_info.get("workplaceType")
         or ""
     ).strip().lower()
-    time_type = str(
-        raw.get("timeType")
-        or posting_info.get("timeType")
-        or ""
-    ).strip().lower()
     title_lower = title.lower()
     loc_lower = location_str.lower()
 
@@ -260,9 +256,14 @@ def parse_workday_position(raw: dict[str, Any], company: WorkdayCompany | str) -
 
     apply_url = url
 
-    # Tech stack extraction
-    search_text = f"{title} {clean_desc} {department or ''}"
-    tech_stack = _extract_text_tech_keywords(search_text)
+    # Tech stack extraction & section parsing
+    sections = parse_job_sections(raw_desc or clean_desc)
+    tech_stack = extract_clean_job_tech_stack(
+        title=title,
+        sections=sections,
+        department=department,
+        fallback_text=clean_desc,
+    )
 
     return Job(
         job_id=job_id,
@@ -276,6 +277,9 @@ def parse_workday_position(raw: dict[str, Any], company: WorkdayCompany | str) -
         url=url,
         apply_url=apply_url,
         department=department or None,
+        requirements=sections.requirements or None,
+        responsibilities=sections.responsibilities or None,
+        company_overview=sections.company_overview or None,
         source="workday",
         sources=["workday"],
     )

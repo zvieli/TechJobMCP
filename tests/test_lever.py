@@ -78,6 +78,35 @@ class TestParseLeverJob:
         job = parse_lever_job(raw, "TestCo")
         assert any("python" in s.lower() for s in job.tech_stack)
 
+    def test_lever_sections_and_tech_stack_isolation(self):
+        raw = {
+            "id": "lev-sec-1",
+            "text": "Frontend Developer",
+            "categories": {"location": "Tel Aviv", "team": "Frontend"},
+            "description": "<h3>About Us</h3><p>We are a high-scale data platform using Go, Spark, and Cassandra.</p>",
+            "lists": [
+                {
+                    "text": "The Role",
+                    "content": "<ul><li>Develop web interfaces with Vue and JavaScript</li></ul>",
+                },
+                {
+                    "text": "Requirements",
+                    "content": "<ul><li>3+ years Vue experience and HTML/CSS</li></ul>",
+                },
+            ],
+            "hostedUrl": "https://jobs.lever.co/test/lev-sec-1",
+        }
+        job = parse_lever_job(raw, "TestCo")
+        assert job.company_overview is not None and "high-scale data platform" in job.company_overview
+        assert job.responsibilities is not None and "Vue and JavaScript" in job.responsibilities
+        assert job.requirements is not None and "Vue experience" in job.requirements
+        assert "Vue" in job.tech_stack
+        assert "JavaScript" in job.tech_stack
+        # Company overview boilerplate keywords MUST NOT bleed into tech stack
+        assert "Go" not in job.tech_stack
+        assert "Spark" not in job.tech_stack
+        assert "Cassandra" not in job.tech_stack
+
     def test_handles_missing_categories_and_location(self):
         raw = {
             "id": "no-cat-1",
