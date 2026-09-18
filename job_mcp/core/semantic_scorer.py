@@ -6,8 +6,6 @@ import logging
 import threading
 from typing import Any, ClassVar, Optional
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
@@ -32,10 +30,11 @@ class SemanticScorer:
 
     @classmethod
     def is_available(cls) -> bool:
-        """Dynamically check if fastembed is available in the environment (cached)."""
+        """Dynamically check if fastembed and numpy are available in the environment (cached)."""
         if cls._available is None:
             try:
                 import fastembed  # noqa: F401
+                import numpy  # noqa: F401
 
                 cls._available = True
             except ImportError:
@@ -56,6 +55,7 @@ class SemanticScorer:
         """Reset the singleton instance (primarily for testing)."""
         with cls._lock:
             cls._instance = None
+            cls._available = None
 
     def _get_model(self) -> Any:
         """Lazy load the fastembed TextEmbedding model under a lock."""
@@ -89,6 +89,8 @@ class SemanticScorer:
             return [0.0] * len(documents)
 
         try:
+            import numpy as np
+
             model = self._get_model()
             valid_docs = [documents[i] for i in valid_indices]
             all_texts = [query] + valid_docs

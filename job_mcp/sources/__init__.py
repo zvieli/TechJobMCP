@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import os
-from typing import Any, Optional
-
 from job_mcp.sources import authenticated, enterprise, public
 from job_mcp.sources.aggregator import DEFAULT_SOURCE_TIMEOUT, JobAggregator
 from job_mcp.sources.authenticated import (

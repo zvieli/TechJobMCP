@@ -5,13 +5,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from job_mcp.models.schemas import Job, JobPreferences, UserPreferences
+from job_mcp.models.schemas import Job, JobPreferences
 from job_mcp.sources.contracts import (
-    IAuthenticatedSource,
-    IBookmarkable,
-    IJobSource,
     SourceCategory,
 )
 

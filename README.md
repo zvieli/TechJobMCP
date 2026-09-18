@@ -163,7 +163,7 @@ Connect the generated `https://<tunnel-id>.trycloudflare.com/mcp` URL to your AI
 
 ## 🧪 Running Tests
 
-Run the full automated test suite (**856 unit and integration tests**):
+Run the full automated test suite (**896 unit and integration tests**):
 
 ```bash
 .venv/bin/pytest
