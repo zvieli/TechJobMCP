@@ -41,22 +41,25 @@ class GreenhouseCompany:
 
 # Curated directory of Israeli AI/tech companies using Greenhouse
 GREENHOUSE_COMPANIES: dict[str, GreenhouseCompany] = {
-    "ai21labs": GreenhouseCompany(name="AI21 Labs", board_token="ai21labs"),
-    "lightricks": GreenhouseCompany(name="Lightricks", board_token="lightricks"),
-    "tabnine": GreenhouseCompany(name="Tabnine", board_token="tabnine"),
-    "bria": GreenhouseCompany(name="Bria AI", board_token="baborstudio"),
-    "gong": GreenhouseCompany(name="Gong", board_token="gong"),
-    "wiz": GreenhouseCompany(name="Wiz", board_token="wiz"),
-    "appsflyer": GreenhouseCompany(name="AppsFlyer", board_token="appsflyer"),
-    "orcaai": GreenhouseCompany(name="Orca AI", board_token="orcaai"),
-    "lemonade": GreenhouseCompany(name="Lemonade", board_token="lemonade"),
-    "monday": GreenhouseCompany(name="monday.com", board_token="mondaydotcom"),
-    "fiverr": GreenhouseCompany(name="Fiverr", board_token="fiverr"),
-    "deepchecks": GreenhouseCompany(name="Deepchecks", board_token="deepchecks"),
-    "datadog": GreenhouseCompany(name="Datadog Israel", board_token="datadog"),
-    "snyk": GreenhouseCompany(name="Snyk", board_token="snyk"),
-    "jfrog": GreenhouseCompany(name="JFrog", board_token="jfrog"),
-    "orca_security": GreenhouseCompany(name="Orca Security", board_token="orcasecurity"),
+    "lightricks": GreenhouseCompany(name="Lightricks", board_token="lightricks", enabled=True),
+    "appsflyer": GreenhouseCompany(name="AppsFlyer", board_token="appsflyer", enabled=True),
+    "datadog": GreenhouseCompany(name="Datadog Israel", board_token="datadog", enabled=True),
+    "jfrog": GreenhouseCompany(name="JFrog", board_token="jfrog", enabled=True),
+    "orca_security": GreenhouseCompany(name="Orca Security", board_token="orcasecurity", enabled=True),
+    "yotpo": GreenhouseCompany(name="Yotpo", board_token="yotpo", enabled=True),
+    "riskified": GreenhouseCompany(name="Riskified", board_token="riskified", enabled=True),
+    # Companies that migrated off public Greenhouse API (kept for test compatibility)
+    "ai21labs": GreenhouseCompany(name="AI21 Labs", board_token="ai21labs", enabled=False),
+    "tabnine": GreenhouseCompany(name="Tabnine", board_token="tabnine", enabled=False),
+    "bria": GreenhouseCompany(name="Bria AI", board_token="baborstudio", enabled=False),
+    "gong": GreenhouseCompany(name="Gong", board_token="gong", enabled=False),
+    "wiz": GreenhouseCompany(name="Wiz", board_token="wiz", enabled=False),
+    "orcaai": GreenhouseCompany(name="Orca AI", board_token="orcaai", enabled=False),
+    "lemonade": GreenhouseCompany(name="Lemonade", board_token="lemonade", enabled=False),
+    "monday": GreenhouseCompany(name="monday.com", board_token="mondaydotcom", enabled=False),
+    "fiverr": GreenhouseCompany(name="Fiverr", board_token="fiverr", enabled=False),
+    "deepchecks": GreenhouseCompany(name="Deepchecks", board_token="deepchecks", enabled=False),
+    "snyk": GreenhouseCompany(name="Snyk", board_token="snyk", enabled=False),
 }
 
 
@@ -166,10 +169,13 @@ class GreenhouseSource(BasePublicSource):
                 raw_jobs = data.get("jobs") or []
                 return [parse_greenhouse_job(j, company.name) for j in raw_jobs]
             except httpx.HTTPStatusError as e:
-                logger.warning("Greenhouse %s HTTP error: %s", company.name, e.response.status_code)
+                if e.response.status_code == 404:
+                    logger.debug("Greenhouse %s HTTP 404 (board inactive or migrated)", company.name)
+                else:
+                    logger.warning("Greenhouse %s HTTP error: %s", company.name, e.response.status_code)
                 return []
             except Exception as e:
-                logger.warning("Greenhouse %s fetch error: %s", company.name, e)
+                logger.debug("Greenhouse %s fetch error: %s", company.name, e)
                 return []
 
     async def fetch_jobs(

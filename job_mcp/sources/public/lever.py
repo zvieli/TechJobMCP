@@ -41,20 +41,20 @@ class LeverCompany:
 
 # Curated directory of Israeli tech companies and startups using Lever
 LEVER_COMPANIES: dict[str, LeverCompany] = {
-    "drivenets": LeverCompany(name="DriveNets", slug="drivenets"),
-    "here": LeverCompany(name="HERE Technologies", slug="here"),
-    "yotpo": LeverCompany(name="Yotpo", slug="yotpo"),
-    "redis": LeverCompany(name="Redis", slug="redis"),
-    "melio": LeverCompany(name="Melio", slug="melio"),
-    "papaya_global": LeverCompany(name="Papaya Global", slug="papayaglobal"),
-    "hibob": LeverCompany(name="HiBob", slug="hibob"),
-    "palo_alto_networks": LeverCompany(name="Palo Alto Networks Israel", slug="paloaltonetworks"),
-    "riskified": LeverCompany(name="Riskified", slug="riskified"),
-    "k_health": LeverCompany(name="K Health", slug="khealth"),
-    "tipalti": LeverCompany(name="Tipalti", slug="tipalti"),
-    "deel": LeverCompany(name="Deel Israel", slug="deel"),
-    "run_ai": LeverCompany(name="Run:ai", slug="runai"),
-    "deci": LeverCompany(name="Deci AI", slug="deci"),
+    "drivenets": LeverCompany(name="DriveNets", slug="drivenets", enabled=True),
+    "here": LeverCompany(name="HERE Technologies", slug="here", enabled=True),
+    "yotpo": LeverCompany(name="Yotpo", slug="yotpo", enabled=True),
+    "redis": LeverCompany(name="Redis", slug="redis", enabled=True),
+    "melio": LeverCompany(name="Melio", slug="melio", enabled=True),
+    "papaya_global": LeverCompany(name="Papaya Global", slug="papayaglobal", enabled=True),
+    "hibob": LeverCompany(name="HiBob", slug="hibob", enabled=True),
+    "palo_alto_networks": LeverCompany(name="Palo Alto Networks Israel", slug="paloaltonetworks", enabled=True),
+    "riskified": LeverCompany(name="Riskified", slug="riskified", enabled=True),
+    "k_health": LeverCompany(name="K Health", slug="khealth", enabled=True),
+    "tipalti": LeverCompany(name="Tipalti", slug="tipalti", enabled=True),
+    "deel": LeverCompany(name="Deel Israel", slug="deel", enabled=True),
+    "run_ai": LeverCompany(name="Run:ai", slug="runai", enabled=True),
+    "deci": LeverCompany(name="Deci AI", slug="deci", enabled=True),
 }
 
 
@@ -219,10 +219,13 @@ class LeverSource(BasePublicSource):
                     return []
                 return [parse_lever_job(j, company.name) for j in data if isinstance(j, dict)]
             except httpx.HTTPStatusError as e:
-                logger.warning("Lever %s HTTP error: %s", company.name, e.response.status_code)
+                if e.response.status_code == 404:
+                    logger.debug("Lever %s HTTP 404 (board inactive or migrated)", company.name)
+                else:
+                    logger.warning("Lever %s HTTP error: %s", company.name, e.response.status_code)
                 return []
             except Exception as e:
-                logger.warning("Lever %s fetch error: %s", company.name, e)
+                logger.debug("Lever %s fetch error: %s", company.name, e)
                 return []
 
     async def fetch_jobs(

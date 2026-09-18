@@ -29,6 +29,12 @@ services:
       - OLLAMA_URL=http://ollama:11434/api/generate
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    depends_on:
+      ollama:
+        condition: service_healthy
 
   ollama:
     image: ollama/ollama:latest
@@ -38,6 +44,40 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep -q $${OLLAMA_MODEL:-llama3.2} || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 5s
+
+  ollama-model-pull:
+    image: ollama/ollama:latest
+    container_name: techjob-ollama-pull
+    restart: "no"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+    volumes:
+      - ollama_data:/root/.ollama
+    depends_on:
+      ollama:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for Ollama daemon to respond..."
+        while ! ollama list > /dev/null 2>&1; do
+          sleep 1
+        done
+        TARGET_MODEL="$${OLLAMA_MODEL:-llama3.2}"
+        if ollama list | grep -q "$$TARGET_MODEL"; then
+          echo "Model $$TARGET_MODEL already exists."
+        else
+          echo "Pulling model $$TARGET_MODEL..."
+          ollama pull "$$TARGET_MODEL"
+        fi
+        echo "Model $$TARGET_MODEL is ready."
 
 volumes:
   ollama_data:

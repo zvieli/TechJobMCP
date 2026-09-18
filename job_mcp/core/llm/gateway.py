@@ -241,6 +241,15 @@ class ResilientLLMGateway:
                 raise RateLimitOrUnavailableError(
                     f"Ollama returned HTTP {resp.status_code}: {resp.text}"
                 )
+            if resp.status_code == 404:
+                if "model" in resp.text and "not found" in resp.text:
+                    raise LLMProviderError(
+                        f"Ollama model '{self.ollama_model}' not found on server. "
+                        f"Run 'docker exec techjob-ollama ollama pull {self.ollama_model}'."
+                    )
+                raise LLMProviderError(
+                    f"Ollama API endpoint not found at {self.ollama_url}: {resp.text}"
+                )
             if resp.status_code != 200:
                 raise LLMProviderError(
                     f"Ollama returned HTTP {resp.status_code}: {resp.text}"

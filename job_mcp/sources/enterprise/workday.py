@@ -95,7 +95,7 @@ WORKDAY_COMPANIES: dict[str, WorkdayCompany] = {
         wd_version=1,
         wd_suffix="External",
         wd_locations=[],
-        enabled=True,
+        enabled=False,  # Dell manages careers via custom portal (jobs.dell.com)
     ),
     "autodesk": WorkdayCompany(
         name="Autodesk",
@@ -402,7 +402,7 @@ class WorkdaySource(BaseEnterpriseSource):
 
             payload: dict[str, Any] = {
                 "appliedFacets": applied_facets,
-                "limit": min(limit, 50),
+                "limit": min(limit, 20),
                 "offset": 0,
                 "searchText": search_text,
             }
