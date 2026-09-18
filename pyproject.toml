@@ -25,6 +25,9 @@ dev = [
     "pytest-asyncio>=0.23",
     "rich>=13.0",
 ]
+ml = [
+    "fastembed>=0.4.0",
+]
 
 [project.scripts]
 job-mcp-setup = "job_mcp.setup:main"
