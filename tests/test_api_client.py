@@ -312,4 +312,152 @@ def test_unmatched_target_role_capped_at_strong_match():
     assert score_esc <= 75.0, f"Expected unmatched target role score <= 75.0, got {score_esc}"
 
 
+def test_calculate_match_score_with_semantic_scoring(monkeypatch):
+    """Verify calculate_match_score blends lexical score with semantic score when enabled."""
+    from job_mcp.core.api_client import calculate_match_score
+    from job_mcp.core.semantic_scorer import SemanticScorer
+    from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
+
+    profile = CandidateProfile(
+        target_roles=["Backend Developer", "Software Engineer"],
+        skills=["Python", "FastAPI", "SQL", "Docker", "PostgreSQL"],
+        primary_stack=["Python", "FastAPI"],
+        top_skills=["Python", "FastAPI"],
+    )
+    prefs = JobPreferences(tech_stack=["Python", "FastAPI"])
+
+    job = Job(
+        job_id="sem-1",
+        title="Backend Developer",
+        company="TechCorp",
+        description="We are seeking an experienced Backend Developer to design robust REST microservices using Python and Docker.",
+        tech_stack=["Python", "Docker"],
+    )
+
+    # Mock SemanticScorer to return 0.85 similarity
+    scorer = SemanticScorer.get_instance()
+    monkeypatch.setattr(scorer, "is_available", lambda: True)
+    monkeypatch.setattr(scorer, "score_single", lambda q, d: 0.85)
+
+    # First calculate with enable_semantic=False to get pure lexical score
+    job_lexical = Job(
+        job_id="sem-lex",
+        title=job.title,
+        company=job.company,
+        description=job.description,
+        tech_stack=list(job.tech_stack),
+    )
+    lexical_score = calculate_match_score(job_lexical, prefs, profile=profile, enable_semantic=False)
+    assert job_lexical.semantic_score is None
+
+    # Now calculate with semantic scoring enabled
+    hybrid_score = calculate_match_score(job, prefs, profile=profile, enable_semantic=True)
+
+    assert job.semantic_score == 85.0
+    expected_hybrid = round((lexical_score * 0.70) + (85.0 * 0.30), 1)
+    assert hybrid_score == expected_hybrid
+    assert job.match_score == expected_hybrid
+    assert any("Semantic similarity match: 85.0%" in r for r in job.match_reasons)
+
+
+def test_calculate_match_score_semantic_disabled_fallback():
+    """Verify enable_semantic=False disables semantic scoring and keeps job.semantic_score as None."""
+    from job_mcp.core.api_client import calculate_match_score
+    from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
+
+    profile = CandidateProfile(
+        target_roles=["Backend Developer"],
+        skills=["Python", "FastAPI", "SQL"],
+        primary_stack=["Python"],
+        top_skills=["Python"],
+    )
+    prefs = JobPreferences(tech_stack=["Python"])
+
+    job = Job(
+        job_id="sem-dis",
+        title="Backend Developer",
+        company="TechCorp",
+        description="Backend Developer position building APIs with Python and SQL database.",
+        tech_stack=["Python", "SQL"],
+    )
+
+    score = calculate_match_score(job, prefs, profile=profile, enable_semantic=False)
+    assert job.semantic_score is None
+    assert job.match_score == score
+    assert not any("Semantic similarity match:" in r for r in job.match_reasons)
+
+
+def test_calculate_match_score_semantic_short_or_empty_description(monkeypatch):
+    """Verify jobs with empty or short descriptions (<15 chars) fallback to lexical without error."""
+    from job_mcp.core.api_client import calculate_match_score
+    from job_mcp.core.semantic_scorer import SemanticScorer
+    from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
+
+    profile = CandidateProfile(
+        target_roles=["Backend Developer"],
+        skills=["Python", "FastAPI"],
+        primary_stack=["Python"],
+        top_skills=["Python"],
+    )
+    prefs = JobPreferences(tech_stack=["Python"])
+
+    scorer = SemanticScorer.get_instance()
+    monkeypatch.setattr(scorer, "is_available", lambda: True)
+
+    # 1. Empty description
+    job_empty = Job(
+        job_id="sem-empty",
+        title="Backend Developer",
+        company="TechCorp",
+        description="",
+        tech_stack=["Python"],
+    )
+    score_empty = calculate_match_score(job_empty, prefs, profile=profile, enable_semantic=True)
+    assert job_empty.semantic_score is None
+    assert score_empty > 0.0
+
+    # 2. Short description (< 15 chars)
+    job_short = Job(
+        job_id="sem-short",
+        title="Backend Developer",
+        company="TechCorp",
+        description="Python dev",
+        tech_stack=["Python"],
+    )
+    score_short = calculate_match_score(job_short, prefs, profile=profile, enable_semantic=True)
+    assert job_short.semantic_score is None
+    assert score_short > 0.0
+
+
+def test_calculate_match_score_semantic_non_tech_role_capped(monkeypatch):
+    """Verify non-technical roles remain strictly capped at <= 15.0 even if semantic scoring gives high similarity."""
+    from job_mcp.core.api_client import calculate_match_score
+    from job_mcp.core.semantic_scorer import SemanticScorer
+    from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
+
+    profile = CandidateProfile(
+        target_roles=["AI Engineer", "Backend Developer"],
+        skills=["Python", "Docker", "SQL"],
+        primary_stack=["Python"],
+        top_skills=["Python"],
+    )
+    prefs = JobPreferences(tech_stack=["Python"])
+
+    scorer = SemanticScorer.get_instance()
+    monkeypatch.setattr(scorer, "is_available", lambda: True)
+    monkeypatch.setattr(scorer, "score_single", lambda q, d: 0.99)
+
+    job_sdr = Job(
+        job_id="sem-sdr",
+        title="Sales Development Representative",
+        company="SalesCo",
+        description="We are looking for a Sales Development Representative to reach out to Python and Docker engineering leads.",
+        tech_stack=["Python", "Docker"],
+    )
+    score_sdr = calculate_match_score(job_sdr, prefs, profile=profile, enable_semantic=True)
+    assert score_sdr <= 15.0, f"Expected non-tech role <= 15.0, got {score_sdr}"
+    assert job_sdr.semantic_score is None or score_sdr <= 15.0
+
+
+
 

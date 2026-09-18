@@ -14,6 +14,7 @@ from typing import Any, Optional, Union
 import httpx
 
 from job_mcp.core.auth import BASE_URL
+from job_mcp.core.semantic_scorer import SemanticScorer
 from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences, WorkMode
 from job_mcp.utils.logger import get_logger
 
@@ -1347,6 +1348,7 @@ def calculate_match_score(
     prefs: JobPreferences,
     profile: Optional[CandidateProfile] = None,
     display_map: Optional[dict[str, str]] = None,
+    enable_semantic: bool = True,
 ) -> float:
     """Calculate dynamic requirement-based fit score (0.0 - 100.0) and populate explainability fields on Job.
 
@@ -1355,12 +1357,14 @@ def calculate_match_score(
     2. Primary Skill Affinity (A_top): Bonus for matching candidate's top primary competencies.
     3. Target Role Match (B_role): Bonus for matching candidate's target job titles or explicit keywords in job title.
     4. User Preference Weighting: Explicit prefs.tech_stack is integrated and weighted alongside CV requirements.
+    5. Semantic Similarity: Dense vector semantic similarity between candidate profile and job description when enabled.
 
     Args:
         job: Job instance to score and update with explainability fields.
         prefs: User JobPreferences configuration.
         profile: Optional pre-extracted CandidateProfile. If None, resolved dynamically.
         display_map: Optional dictionary mapping lowercase terms to canonical display strings.
+        enable_semantic: Whether to compute dense semantic similarity using SemanticScorer (defaults to True).
 
     Returns:
         float: Calculated match score between 0.0 and 100.0 rounded to 1 decimal place.
@@ -1435,6 +1439,7 @@ def calculate_match_score(
     else:
         missing_tokens = all_desired_tokens - all_matched_tokens
     job.missing_skills = sorted([display_map.get(s, s.title()) for s in missing_tokens], key=lambda s: s.lower())
+    job.semantic_score = None
 
     if not job.seniority_level:
         job.seniority_level = detect_seniority_level(job.title, job.description)
@@ -1582,7 +1587,26 @@ def calculate_match_score(
         has_primary_match = any(s in all_matched_tokens for s in primary_skills)
         if is_dev_role and has_primary_match and not (is_non_tech_title and not is_explicitly_targeted):
             raw_score = max(raw_score, 75.0)
-        
+
+        scorer = SemanticScorer.get_instance()
+        target_doc = (job.requirements or job.responsibilities or job.description or "").strip()
+        if (
+            enable_semantic
+            and scorer.is_available()
+            and has_cv_profile
+            and len(target_doc) >= 15
+            and not (is_non_tech_title and not is_explicitly_targeted)
+            and not is_admin_title
+        ):
+            candidate_query = f"{' '.join(target_roles)} {' '.join(primary_skills)} {' '.join(top_skills)}".strip()
+            if not candidate_query:
+                candidate_query = " ".join(profile.skills[:10])
+            if candidate_query:
+                sem_sim = scorer.score_single(candidate_query, target_doc)
+                job.semantic_score = round(sem_sim * 100.0, 1)
+                if raw_score > 15.0:
+                    raw_score = (raw_score * 0.70) + (job.semantic_score * 0.30)
+
         if is_non_tech_title and not is_explicitly_targeted:
             raw_score = min(raw_score, 15.0)
         elif is_admin_title:
@@ -1623,6 +1647,9 @@ def calculate_match_score(
     if matched_target_role:
         reasons.append(f"Target role matched: {matched_target_role.title()}")
 
+    if job.semantic_score is not None and job.semantic_score >= 60.0:
+        reasons.append(f"Semantic similarity match: {job.semantic_score}%")
+
     if prefs.work_mode:
         pref_wm = prefs.work_mode.value if isinstance(prefs.work_mode, WorkMode) else str(prefs.work_mode)
         reasons.append(f"{pref_wm.capitalize()} work mode aligned with preference")
@@ -1647,6 +1674,7 @@ def filter_jobs(
     jobs: list[Job],
     prefs: JobPreferences,
     profile: Optional[CandidateProfile] = None,
+    enable_semantic: bool = False,
 ) -> list[Job]:
     """Filter and score job listings according to user preferences and candidate profile.
 
@@ -1654,6 +1682,7 @@ def filter_jobs(
         jobs: List of Job instances.
         prefs: JobPreferences configuration.
         profile: Optional CandidateProfile instance. If omitted, resolved dynamically from prefs.cv_path or preferences.
+        enable_semantic: Whether to compute dense semantic similarity during scoring (defaults to True).
 
     Returns:
         list[Job]: Filtered and ranked list of Job instances sorted by match_score descending.
@@ -1769,7 +1798,9 @@ def filter_jobs(
                 continue
 
         # 5. Calculate match score and enrich job fields
-        calculate_match_score(job, prefs, profile=profile, display_map=display_map)
+        calculate_match_score(
+            job, prefs, profile=profile, display_map=display_map, enable_semantic=enable_semantic
+        )
         filtered.append(job)
 
     # Sort descending by match_score
