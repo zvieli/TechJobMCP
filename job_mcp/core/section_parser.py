@@ -111,7 +111,7 @@ _COMPANY_OVERVIEW_PATTERNS: tuple[str, ...] = (
     r"life\s+at\s+[\w\s.-]+",
     r"working\s+at\s+[\w\s.-]+",
     r"join\s+our\s+team\b",
-    r"about\s+(?!the\s+(?:role|job|position)\b)[\w\s&.'-]{1,35}",
+    r"about\s+(?!the\s+(?:role|job|position)\b)(?!\d|\w+\s+years?\b)[A-Za-z][\w\s&'-]{1,35}",
     # Hebrew
     r"אודות\s+החברה",
     r"אודות",
@@ -136,8 +136,8 @@ _COMPILED_SECTION_PATTERNS: list[tuple[str, list[re.Pattern[str], re.Pattern[str
         [
             # pattern_with_remainder: Header: Remainder content
             re.compile(rf"^(?:{pat})\s*[:\-–—]\s*(.*)$", re.IGNORECASE),
-            # pattern_standalone: Header alone on line (optional separator)
-            re.compile(rf"^(?:{pat})\s*[:\-–—\.]?$", re.IGNORECASE),
+            # pattern_standalone: Header alone on line (optional separator without period to avoid sentence matches)
+            re.compile(rf"^(?:{pat})\s*[:\-–—]?$", re.IGNORECASE),
         ],
     )
     for sec_name, patterns in _SECTION_SPECS

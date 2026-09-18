@@ -1589,7 +1589,8 @@ def calculate_match_score(
             raw_score = max(raw_score, 75.0)
 
         scorer = SemanticScorer.get_instance()
-        target_doc = (job.requirements or job.responsibilities or job.description or "").strip()
+        structured_target = f"{job.requirements or ''}\n{job.responsibilities or ''}".strip()
+        target_doc = structured_target if structured_target else (job.description or "").strip()
         if (
             enable_semantic
             and scorer.is_available()
@@ -1674,7 +1675,7 @@ def filter_jobs(
     jobs: list[Job],
     prefs: JobPreferences,
     profile: Optional[CandidateProfile] = None,
-    enable_semantic: bool = False,
+    enable_semantic: Optional[bool] = None,
 ) -> list[Job]:
     """Filter and score job listings according to user preferences and candidate profile.
 
@@ -1682,11 +1683,13 @@ def filter_jobs(
         jobs: List of Job instances.
         prefs: JobPreferences configuration.
         profile: Optional CandidateProfile instance. If omitted, resolved dynamically from prefs.cv_path or preferences.
-        enable_semantic: Whether to compute dense semantic similarity during scoring (defaults to False).
+        enable_semantic: Whether to compute dense semantic similarity during scoring (defaults to False or ENABLE_SEMANTIC_SCORING env var).
 
     Returns:
         list[Job]: Filtered and ranked list of Job instances sorted by match_score descending.
     """
+    if enable_semantic is None:
+        enable_semantic = os.getenv("ENABLE_SEMANTIC_SCORING", "false").strip().lower() in ("true", "1", "yes")
     has_explicit_profile = profile is not None
     if profile is None:
         if prefs.cv_path:

@@ -139,8 +139,7 @@ class HireMeTechSource(BaseAuthenticatedSource):
                     department=j.department,
                     fallback_text=j.description,
                 )
-                if clean_tech:
-                    j.tech_stack = clean_tech
+                j.tech_stack = clean_tech
             tagged_jobs.append(j)
 
         # Apply preferences filtering if provided

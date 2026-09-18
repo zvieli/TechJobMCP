@@ -295,3 +295,23 @@ class TestCleanJobTechStackExtraction:
             fallback_text=None,
         )
         assert tech_stack == []
+
+    def test_sentence_starting_with_about_not_parsed_as_company_overview(self):
+        """Verify sentences like 'About 5 years of experience.' inside requirements remain requirements."""
+        job_text = """
+        Requirements:
+        About 5 years of experience with Python and FastAPI.
+        Deep familiarity with Docker and Kubernetes.
+        """
+        sections = parse_job_sections(job_text)
+        assert "About 5 years of experience with Python and FastAPI" in sections.requirements
+        assert sections.company_overview == ""
+
+        tech_stack = extract_clean_job_tech_stack(
+            title="Backend Engineer",
+            sections=sections,
+        )
+        assert "Python" in tech_stack
+        assert "FastAPI" in tech_stack
+        assert "Docker" in tech_stack
+        assert "Kubernetes" in tech_stack

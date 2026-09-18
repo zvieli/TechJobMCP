@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,10 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from job_mcp.models.schemas import JobPreferences, WorkMode
-from job_mcp.sources import BaseJobSource, SourceRegistry, create_default_registry
+from job_mcp.models.schemas import JobPreferences
+from job_mcp.sources import SourceRegistry, create_default_registry
 from job_mcp.sources.direct_tech import (
-    DEFAULT_DIRECT_TECH_COMPANIES,
     DIRECT_TECH_COMPANIES,
     DirectTechCompany,
     DirectTechSource,
@@ -22,7 +20,6 @@ from job_mcp.sources.direct_tech import (
     parse_amazon_positions,
     parse_apple_position,
     parse_apple_positions,
-    parse_google_job,
     parse_google_positions,
     parse_ibm_position,
     parse_ibm_positions,
@@ -155,7 +152,7 @@ class TestDirectTechPositionParsers:
         assert "AWS" in job.tech_stack
         assert "Docker" in job.tech_stack
         assert job.department == "Software Development"
-        assert job.postedDate == "October 15, 2025" if hasattr(job, "postedDate") else job.posted_date == "October 15, 2025"
+        assert job.posted_date == "October 15, 2025"
         assert job.requirements is not None and "Python" in job.requirements
         assert job.responsibilities is not None and "Java" in job.responsibilities
 
