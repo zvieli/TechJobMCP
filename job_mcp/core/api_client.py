@@ -1682,7 +1682,7 @@ def filter_jobs(
         jobs: List of Job instances.
         prefs: JobPreferences configuration.
         profile: Optional CandidateProfile instance. If omitted, resolved dynamically from prefs.cv_path or preferences.
-        enable_semantic: Whether to compute dense semantic similarity during scoring (defaults to True).
+        enable_semantic: Whether to compute dense semantic similarity during scoring (defaults to False).
 
     Returns:
         list[Job]: Filtered and ranked list of Job instances sorted by match_score descending.
