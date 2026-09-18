@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-DEFAULT_SOURCE_TIMEOUT: float = float(os.getenv("SOURCE_TIMEOUT_SECONDS", "12.0"))
+DEFAULT_SOURCE_TIMEOUT: float = float(os.getenv("SOURCE_TIMEOUT_SECONDS", "25.0"))
 
 
 def _normalize_category_to_str(cat: SourceCategory | str) -> str:
@@ -36,14 +36,15 @@ class JobAggregator:
         self,
         registry: Optional[SourceRegistry] = None,
         cache: Optional[JobCache] = None,
-        source_timeout: float = DEFAULT_SOURCE_TIMEOUT,
+        source_timeout: Optional[float] = None,
     ) -> None:
         """Initialize JobAggregator.
 
         Args:
             registry: Optional SourceRegistry instance. If None, uses default registry.
             cache: Optional JobCache instance for storing aggregated jobs.
-            source_timeout: Maximum timeout in seconds allowed per source fetch.
+            source_timeout: Optional explicit override timeout in seconds capping all source fetches.
+                            If None, adaptive per-source timeouts are applied.
         """
         if registry is None:
             from job_mcp.sources import registry as default_registry
@@ -53,7 +54,63 @@ class JobAggregator:
             self.registry = registry
 
         self.cache = cache
-        self.source_timeout = source_timeout
+        self._explicit_timeout: Optional[float] = source_timeout
+
+    @property
+    def source_timeout(self) -> float:
+        """Return explicit timeout override if set, else dynamic maximum source timeout."""
+        if self._explicit_timeout is not None:
+            return self._explicit_timeout
+        return self.get_max_timeout()
+
+    @source_timeout.setter
+    def source_timeout(self, value: Optional[float]) -> None:
+        """Set or override explicit source timeout cap."""
+        self._explicit_timeout = value
+
+    def get_source_timeout(self, source: IJobSource) -> float:
+        """Get effective timeout in seconds for a specific source.
+
+        If an explicit source_timeout override was configured on the aggregator,
+        it clamps/caps the source timeout. Otherwise, the source's own timeout is used.
+
+        Args:
+            source: The IJobSource instance to evaluate.
+
+        Returns:
+            float: Effective timeout in seconds.
+        """
+        raw_timeout: float
+        if hasattr(source, "get_timeout") and callable(source.get_timeout):
+            try:
+                raw_timeout = float(source.get_timeout())
+            except Exception:
+                raw_timeout = DEFAULT_SOURCE_TIMEOUT
+        elif hasattr(source, "timeout") and isinstance(getattr(source, "timeout"), (int, float)):
+            raw_timeout = float(getattr(source, "timeout"))
+        else:
+            raw_timeout = DEFAULT_SOURCE_TIMEOUT
+
+        if self._explicit_timeout is not None:
+            return min(raw_timeout, float(self._explicit_timeout))
+        return raw_timeout
+
+    def get_max_timeout(self, sources: Optional[list[IJobSource]] = None) -> float:
+        """Compute the maximum effective timeout across the given sources or all active sources.
+
+        Args:
+            sources: Optional list of sources. If None, queries active sources from the registry.
+
+        Returns:
+            float: Maximum effective timeout in seconds.
+        """
+        if sources is None:
+            sources = self.registry.get_active() if hasattr(self.registry, "get_active") else []
+
+        if not sources:
+            return float(self._explicit_timeout) if self._explicit_timeout is not None else DEFAULT_SOURCE_TIMEOUT
+
+        return max(self.get_source_timeout(s) for s in sources)
 
     async def fetch_all_jobs(
         self,
@@ -188,19 +245,25 @@ class JobAggregator:
                 return results
 
         # 3. Fetch from active sources concurrently with per-source timeout & error isolation
+        min_src_timeout = min(self.get_source_timeout(s) for s in active_sources)
+        max_src_timeout = self.get_max_timeout(active_sources)
+        max_timeout = max_src_timeout + 2.0
+
         logger.info(
-            "Fetching jobs concurrently from %d source(s): %s (timeout: %.1fs)",
+            "Fetching jobs concurrently from %d source(s) with adaptive timeouts (source range: %.1fs - %.1fs, ceiling: %.1fs)",
             len(active_sources),
-            [s.source_id for s in active_sources],
-            self.source_timeout,
+            min_src_timeout,
+            max_src_timeout,
+            max_timeout,
         )
 
         async def _fetch_with_timeout(src: IJobSource) -> list[Job]:
+            src_timeout = self.get_source_timeout(src)
             t0 = time.perf_counter()
             try:
                 jobs = await asyncio.wait_for(
                     src.fetch_jobs(preferences=child_preferences, limit=limit_per_source),
-                    timeout=self.source_timeout,
+                    timeout=src_timeout,
                 )
                 duration_ms = (time.perf_counter() - t0) * 1000.0
                 logger.info(
@@ -214,7 +277,7 @@ class JobAggregator:
                 logger.warning(
                     "Source '%s' timed out after %.1fs.",
                     src.source_id,
-                    self.source_timeout,
+                    src_timeout,
                 )
                 return []
             except Exception as exc:

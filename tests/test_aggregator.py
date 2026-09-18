@@ -361,6 +361,40 @@ class TestJobAggregator(unittest.IsolatedAsyncioTestCase):
                 mock_warning.assert_called_with("Source '%s' fetch failed: %s", "src2", exc)
 
 
+async def test_aggregator_adaptive_per_source_timeouts() -> None:
+    class FastCustomSource(MockSource):
+        timeout = 2.0
+
+    class SlowCustomSource(MockSource):
+        timeout = 8.0
+
+    src_fast = FastCustomSource("fast", delay=0.1)
+    src_slow = SlowCustomSource("slow", delay=0.1)
+
+    reg = SourceRegistry()
+    reg.register(src_fast)
+    reg.register(src_slow)
+
+    agg = JobAggregator(registry=reg)  # No explicit source_timeout
+    assert agg.get_source_timeout(src_fast) == 2.0
+    assert agg.get_source_timeout(src_slow) == 8.0
+    assert agg.get_max_timeout([src_fast, src_slow]) == 8.0
+
+
+async def test_aggregator_explicit_override_still_clamps_all_sources() -> None:
+    class CustomSource(MockSource):
+        timeout = 20.0
+
+    src = CustomSource("custom", delay=0.1)
+    reg = SourceRegistry()
+    reg.register(src)
+
+    agg = JobAggregator(registry=reg, source_timeout=1.5)
+    # Explicit source_timeout overrides/clamps
+    assert agg.get_source_timeout(src) == 1.5
+    assert agg.source_timeout == 1.5
+
+
 class TestMultiSourceMcpTools(unittest.IsolatedAsyncioTestCase):
     """Tests for list_job_sources and get_job_matches FastMCP tools."""
 
