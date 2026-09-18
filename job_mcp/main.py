@@ -151,7 +151,7 @@ _operation_mode: OperationMode = _get_initial_operation_mode()
 
 # Timeout constant for live scraping operations to avoid proxy / tunnel timeouts (e.g. DevTunnel 10s limit)
 _SCRAPE_TIMEOUT_SECONDS: float = float(os.getenv("SCRAPE_TIMEOUT_SECONDS", "10.0"))
-_WARMUP_TIMEOUT_SECONDS: float = 30.0
+_WARMUP_TIMEOUT_SECONDS: float = 60.0
 _SESSION_COOLDOWN_SECONDS: float = float(os.getenv("SESSION_COOLDOWN_SECONDS", "15.0"))
 _last_session_failure_time: float = 0.0
 
@@ -193,13 +193,24 @@ async def _warm_cache(
             except Exception as exc:
                 logger.debug("Could not resolve profile for cache warmup: %s", exc)
 
-        jobs = await agg.fetch_all_jobs(preferences=prefs, profile=profile, force_refresh=True)
+        try:
+            max_t = float(agg.get_max_timeout()) + 5.0
+        except Exception:
+            max_t = _WARMUP_TIMEOUT_SECONDS
+        warmup_timeout = max(_WARMUP_TIMEOUT_SECONDS, max_t)
+
+        jobs = await asyncio.wait_for(
+            agg.fetch_all_jobs(preferences=prefs, profile=profile, force_refresh=True),
+            timeout=warmup_timeout,
+        )
         if cache is not None and jobs:
             cache.update(jobs)
         logger.info("Cache warmup completed with %d jobs across sources.", len(jobs))
     except asyncio.CancelledError:
         logger.debug("Cache warmup task cancelled.")
         raise
+    except asyncio.TimeoutError:
+        logger.warning("Cache warmup timed out.")
     except Exception as exc:
         logger.warning("Cache warmup failed: %s", exc)
 

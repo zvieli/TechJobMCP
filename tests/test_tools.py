@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 import unittest
@@ -21,9 +22,11 @@ from job_mcp.core.application import (
 )
 from job_mcp.core.auth import SessionManager
 from job_mcp.main import (
+    _WARMUP_TIMEOUT_SECONDS,
     _ensure_session,
     _get_cache,
     _pending_applications,
+    _warm_cache,
     auto_apply_job,
     bookmark_job,
     confirm_auto_apply,
@@ -470,6 +473,53 @@ class TestMcpTools(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["data"]["sources"][0]["source_id"], "hiremetech")
         self.assertEqual(res["data"]["sources"][0]["category"], "authenticated")
         self.assertIn("hiremetech", res["data"]["health"])
+
+
+class TestWarmupConfiguration(unittest.IsolatedAsyncioTestCase):
+    """Test suite for background warmup and timeout configuration."""
+
+    def test_warmup_timeout_seconds_value(self):
+        """Verify _WARMUP_TIMEOUT_SECONDS is configured to 60.0."""
+        self.assertEqual(_WARMUP_TIMEOUT_SECONDS, 60.0)
+
+    async def test_warm_cache_dynamic_timeout_calculation(self):
+        """Verify _warm_cache wraps aggregation in asyncio.wait_for with dynamic ceiling."""
+        mock_agg = MagicMock()
+        mock_agg.get_max_timeout.return_value = 25.0
+        mock_agg.fetch_all_jobs = AsyncMock(return_value=[])
+
+        cache = JobCache()
+        with patch("asyncio.wait_for", wraps=asyncio.wait_for) as mock_wait_for:
+            await _warm_cache(cache=cache, aggregator=mock_agg)
+            mock_wait_for.assert_called_once()
+            # max(60.0, 25.0 + 5.0) = 60.0
+            _, kwargs = mock_wait_for.call_args
+            self.assertEqual(kwargs.get("timeout"), 60.0)
+
+    async def test_warm_cache_dynamic_timeout_large_source_ceiling(self):
+        """Verify _warm_cache expands timeout ceiling if source timeout + 5.0 exceeds 60s."""
+        mock_agg = MagicMock()
+        mock_agg.get_max_timeout.return_value = 70.0
+        mock_agg.fetch_all_jobs = AsyncMock(return_value=[])
+
+        cache = JobCache()
+        with patch("asyncio.wait_for", wraps=asyncio.wait_for) as mock_wait_for:
+            await _warm_cache(cache=cache, aggregator=mock_agg)
+            mock_wait_for.assert_called_once()
+            # max(60.0, 70.0 + 5.0) = 75.0
+            _, kwargs = mock_wait_for.call_args
+            self.assertEqual(kwargs.get("timeout"), 75.0)
+
+    async def test_warm_cache_timeout_error_handled_gracefully(self):
+        """Verify _warm_cache catches asyncio.TimeoutError without raising."""
+        mock_agg = MagicMock()
+        mock_agg.get_max_timeout.return_value = 10.0
+        mock_agg.fetch_all_jobs = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        cache = JobCache()
+        # Should complete gracefully without raising
+        await _warm_cache(cache=cache, aggregator=mock_agg)
+        self.assertEqual(len(cache.get_all()), 0)
 
 
 if __name__ == "__main__":
