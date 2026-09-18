@@ -35,7 +35,6 @@ Every tool response contains a `trace_id`. Preserve every returned trace ID.
 
 1. Call `run_job_scout` exactly once through `@TechJobMCP` with:
    - `action_mode="autonomous"`
-   - `sources=["hiremetech","comeet","workday","eightfold","direct_tech","linkedin"]`
    - `cv_path="/app/cv.pdf"`
    - `location="Israel"`
    - `exclude_keywords=["Senior","Lead","Principal","Staff","Architect","5+ years","university students only","US only"]`
@@ -44,6 +43,7 @@ Every tool response contains a `trace_id`. Preserve every returned trace ID.
    - `limit=30`
    - `top_tier_threshold=85`, `strong_match_threshold=70`, `disqualify_threshold=50`
    - `max_applications=3`
+   *(Do NOT pass `sources` parameter so that all registered sources are dynamically queried).*
 2. Do not call `set_operation_mode`, `list_job_sources`, `get_job_matches`, or `filter_jobs_by_preferences` separately during a scheduled run.
 3. Treat the returned scores, actions, blocks, counts, and trace IDs as authoritative. Never calculate or modify them outside MCP.
 

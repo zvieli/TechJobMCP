@@ -3,12 +3,12 @@ Run the /job-opportunity-scout skill now and explicitly use the connected
 @TechJobMCP custom app. Control the tools in English, but write the complete
 user-facing result in Hebrew.
 
-Call `run_job_scout` exactly once with `action_mode="autonomous"`, sources
-`["hiremetech","comeet","workday","eightfold","direct_tech","linkedin"]`,
+Call `run_job_scout` exactly once with `action_mode="autonomous"`,
 `/app/cv.pdf`, `location="Israel"`, the configured seniority,
 five-or-more-years, foreign-work, and university-only exclusions,
 `force_refresh=false`, `detail_level="summary"`, `limit=30`, thresholds
-`85/70/50`, and `max_applications=3`. Do not call `set_operation_mode`,
+`85/70/50`, and `max_applications=3` (omit `sources` so all registered
+sources are dynamically queried). Do not call `set_operation_mode`,
 `list_job_sources`, `get_job_matches`, or `filter_jobs_by_preferences`
 separately. Treat the server's scores, hybrid application routing (Direct API,
 Easy Apply, Playwright Browser), blocks, counts, and trace IDs as authoritative.

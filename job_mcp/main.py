@@ -1918,28 +1918,9 @@ async def run_job_scout(
         auto_bookmark: If True, automatically bookmarks top-tier and strong-match jobs (default: True).
         force_refresh: Force fresh fetch from live sources bypassing cache.
         notify_channel: Optional notification channel to dispatch alerts to (e.g. 'telegram').
-        sources: Optional list of specific source IDs to query.
-        limit: Maximum number of jobs to return/process.
+        sources: Optional list of specific source IDs to query. If omitted or None, queries all registered sources.
+        limit: Maximum number of jobs to return/process (default: 50).
         detail_level: Response detail level ('summary' or 'full').
-        ctx: FastMCP Context object.
-
-        cv_path: Optional path to candidate CV (PDF, DOCX, TXT) or raw CV string.
-        tech_stack: Target technology stack keywords (defaults dynamically to CV skills).
-        keywords: Additional keywords to match.
-        exclude_keywords: Keywords to filter out (e.g. seniority exclusions).
-        target_roles: Target job titles or roles to prioritize.
-        work_mode: Preferred work mode: 'remote', 'hybrid', or 'onsite'.
-        location: Geographic location filter (e.g. 'Israel', 'Tel Aviv', 'Remote').
-        min_salary: Minimum desired annual salary in USD.
-        top_tier_threshold: Score threshold for Top-Tier priority jobs (default: 85).
-        strong_match_threshold: Score threshold for Strong Match jobs (default: 70).
-        disqualify_threshold: Score threshold below which jobs are dismissed/removed (default: 50).
-        auto_apply: If True, executes safe 2-step application preview and submission for top-tier jobs.
-        auto_bookmark: If True, automatically bookmarks top-tier and strong-match jobs (default: True).
-        force_refresh: Force fresh fetch from live sources bypassing cache.
-        notify_channel: Optional notification channel to dispatch alerts to (e.g. 'telegram').
-        sources: Optional list of specific source IDs to query.
-        limit: Maximum number of jobs to return/process.
         ctx: FastMCP Context object.
 
     Returns:
