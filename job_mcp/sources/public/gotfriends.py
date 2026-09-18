@@ -216,6 +216,7 @@ class GotFriendsSource(BasePublicSource):
     display_name = "GotFriends"
     description = "Israel's top tech recruiter with dedicated AI, Machine Learning, and Algorithm job hubs"
     supports_auto_apply = True
+    timeout: float = 25.0
 
     def __init__(
         self,

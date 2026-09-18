@@ -27,6 +27,7 @@ class HireMeTechSource(BaseAuthenticatedSource):
     description: str = "HireMeTech AI job board and application platform"
     supports_bookmarks: bool = True
     supports_auto_apply: bool = True
+    timeout: float = 12.0
 
     def __init__(self, session_manager: Optional[SessionManager] = None) -> None:
         """Initialize HireMeTechSource with optional session manager."""

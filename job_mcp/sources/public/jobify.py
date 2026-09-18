@@ -297,12 +297,13 @@ class JobifySource(BasePublicSource):
     is_authenticated: bool = False
     supports_bookmarks: bool = False
     supports_auto_apply: bool = False
+    timeout: float = 18.0
 
     def __init__(
         self,
         seed_urls: Optional[list[str]] = None,
         client: Optional[httpx.AsyncClient] = None,
-        timeout: float = 4.0,
+        timeout: float = 18.0,
         max_crawl_pages: int = 15,
         concurrency: int = 4,
     ) -> None:

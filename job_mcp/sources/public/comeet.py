@@ -288,6 +288,7 @@ class ComeetSource(BasePublicSource):
     is_authenticated: bool = False
     supports_bookmarks: bool = False
     supports_auto_apply: bool = True
+    timeout: float = 18.0
 
     def __init__(
         self,
@@ -295,7 +296,7 @@ class ComeetSource(BasePublicSource):
         max_concurrency: int = 5,
         cache_ttl_seconds: int = 3600,
         client: Optional[httpx.AsyncClient] = None,
-        timeout: float = 15.0,
+        timeout: float = 18.0,
     ) -> None:
         """Initialize ComeetSource.
 

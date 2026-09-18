@@ -56,10 +56,14 @@ class BaseJobSource(ABC):
         env_val = os.getenv(env_key)
         if env_val:
             try:
-                return float(env_val.strip())
+                val = float(env_val.strip())
+                if val > 0:
+                    return val
             except ValueError:
                 pass
-        return getattr(self, "timeout", 15.0)
+        fallback = getattr(self, "timeout", 15.0)
+        return float(fallback) if isinstance(fallback, (int, float)) and fallback > 0 else 15.0
+
 
     def get_metadata(self) -> SourceMetadata:
         """Return the metadata descriptor for this source."""

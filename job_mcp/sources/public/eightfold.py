@@ -307,6 +307,7 @@ class EightfoldAISource(BasePublicSource):
     is_authenticated: bool = False
     supports_bookmarks: bool = False
     supports_auto_apply: bool = False
+    timeout: float = 10.0
 
     def __init__(
         self,
@@ -317,7 +318,7 @@ class EightfoldAISource(BasePublicSource):
         max_concurrency: int = 5,
         cache_ttl_seconds: int = 3600,
         client: Optional[httpx.AsyncClient] = None,
-        timeout: float = 15.0,
+        timeout: float = 10.0,
     ) -> None:
         """Initialize EightfoldAISource.
 

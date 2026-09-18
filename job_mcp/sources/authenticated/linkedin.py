@@ -534,6 +534,7 @@ class LinkedInSource(BaseAuthenticatedSource):
     description: str = "LinkedIn Jobs guest search & job details API"
     supports_bookmarks: bool = False
     supports_auto_apply: bool = False
+    timeout: float = 20.0
 
     def __init__(
         self,
@@ -544,7 +545,7 @@ class LinkedInSource(BaseAuthenticatedSource):
         cache_ttl_seconds: int = 3600,
         client: Optional[httpx.AsyncClient] = None,
         session_manager: Optional[Any] = None,
-        timeout: float = LINKEDIN_REQUEST_TIMEOUT,
+        timeout: float = 20.0,
         health_timeout: float = LINKEDIN_HEALTH_TIMEOUT,
         max_retries: int = LINKEDIN_DEFAULT_MAX_RETRIES,
         rate_limit_delay_seconds: float = LINKEDIN_DEFAULT_RATE_LIMIT_DELAY,

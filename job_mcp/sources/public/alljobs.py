@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 from typing import Any, Optional
@@ -204,6 +205,21 @@ class AllJobsSource(BasePublicSource):
     is_authenticated: bool = False
     supports_bookmarks: bool = False
     supports_auto_apply: bool = False
+    timeout: float = 10.0
+
+    def get_timeout(self) -> float:
+        """Get effective timeout in seconds for AllJobs source, factoring in environment overrides."""
+        env_key = f"SOURCE_TIMEOUT_{self.source_id.upper()}"
+        env_val = os.getenv(env_key)
+        if env_val:
+            try:
+                val = float(env_val.strip())
+                if val > 0:
+                    return val
+            except ValueError:
+                pass
+        fallback = getattr(type(self), "timeout", 10.0)
+        return float(fallback) if isinstance(fallback, (int, float)) and fallback > 0 else 10.0
 
     def __init__(
         self,

@@ -148,6 +148,7 @@ class GreenhouseSource(BasePublicSource):
     display_name = "Greenhouse"
     description = "Greenhouse ATS aggregator for Israeli AI startups (AI21 Labs, Lightricks, Tabnine, etc.)"
     supports_auto_apply = True
+    timeout: float = 20.0
 
     def __init__(self, companies: Optional[dict[str, GreenhouseCompany]] = None) -> None:
         self._companies = companies if companies is not None else GREENHOUSE_COMPANIES

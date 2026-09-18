@@ -601,6 +601,7 @@ class DirectTechSource(BaseEnterpriseSource):
     is_authenticated: bool = False
     supports_bookmarks: bool = False
     supports_auto_apply: bool = False
+    timeout: float = 15.0
 
     def __init__(
         self,
