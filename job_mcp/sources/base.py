@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
@@ -21,8 +22,18 @@ class SourceMetadata(BaseModel):
     description: str = ""
     category: SourceCategory = SourceCategory.PUBLIC
     is_authenticated: bool = False
+    requires_auth: bool = False
     supports_bookmarks: bool = False
     supports_auto_apply: bool = False
+    is_healthy: bool = True
+    default_timeout: float = 15.0
+
+    def __init__(self, **data: Any) -> None:
+        if "requires_auth" in data and "is_authenticated" not in data:
+            data["is_authenticated"] = data["requires_auth"]
+        elif "is_authenticated" in data and "requires_auth" not in data:
+            data["requires_auth"] = data["is_authenticated"]
+        super().__init__(**data)
 
 
 class BaseJobSource(ABC):
@@ -33,9 +44,22 @@ class BaseJobSource(ABC):
     description: str = ""
     category: SourceCategory = SourceCategory.PUBLIC
     is_authenticated: bool = False
+    requires_auth: bool = False
     supports_auth: bool = False
     supports_bookmarks: bool = False
     supports_auto_apply: bool = False
+    timeout: float = 15.0
+
+    def get_timeout(self) -> float:
+        """Get effective timeout in seconds for this source, factoring in environment overrides."""
+        env_key = f"SOURCE_TIMEOUT_{self.source_id.upper()}"
+        env_val = os.getenv(env_key)
+        if env_val:
+            try:
+                return float(env_val.strip())
+            except ValueError:
+                pass
+        return getattr(self, "timeout", 15.0)
 
     def get_metadata(self) -> SourceMetadata:
         """Return the metadata descriptor for this source."""
@@ -45,8 +69,10 @@ class BaseJobSource(ABC):
             description=self.description,
             category=self.category,
             is_authenticated=self.is_authenticated,
+            requires_auth=getattr(self, "requires_auth", self.supports_auth),
             supports_bookmarks=self.supports_bookmarks,
             supports_auto_apply=self.supports_auto_apply,
+            default_timeout=self.get_timeout(),
         )
 
     @abstractmethod
@@ -66,14 +92,13 @@ class BaseJobSource(ABC):
         """
         pass
 
-    @abstractmethod
     async def check_health(self) -> bool:
         """Check the operational health and readiness of this source.
 
         Returns:
             bool: True if source is healthy and accessible, False otherwise.
         """
-        pass
+        return True
 
     async def bookmark_job(self, job_id: str) -> bool:
         """Bookmark/favorite a job listing by ID.

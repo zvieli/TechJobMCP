@@ -20,14 +20,31 @@ class SourceCategory(str, Enum):
     AUTHENTICATED = "authenticated"
 
 
+class _JobSourceMeta(typing._ProtocolMeta):
+    """Metaclass ensuring IJobSource supports runtime checking with backward compatibility."""
+
+    def __instancecheck__(cls, instance: Any) -> bool:
+        core_attrs = (
+            "source_id",
+            "display_name",
+            "description",
+            "category",
+            "fetch_jobs",
+            "check_health",
+            "get_metadata",
+        )
+        return all(hasattr(instance, attr) for attr in core_attrs)
+
+
 @runtime_checkable
-class IJobSource(Protocol):
+class IJobSource(Protocol, metaclass=_JobSourceMeta):
     """Core contract that every job source must satisfy."""
 
     source_id: str
     display_name: str
     description: str
     category: SourceCategory
+    timeout: float
 
     async def fetch_jobs(
         self, preferences: UserPreferences | None = None, limit: int = 50
@@ -41,6 +58,10 @@ class IJobSource(Protocol):
 
     def get_metadata(self) -> SourceMetadata:
         """Return standardized metadata describing source capabilities."""
+        ...
+
+    def get_timeout(self) -> float:
+        """Get effective timeout in seconds for this source."""
         ...
 
 
