@@ -175,12 +175,28 @@ def parse_comeet_position(raw: dict[str, Any], company_name: str) -> Job:
             name_low = name.lower()
             if any(k in name_low for k in ("requirement", "qualification", "skills", "who you are", "דרישות", "כישורים")):
                 sec_buckets["requirements"].append(val)
-            elif any(k in name_low for k in ("responsibilit", "description", "about the position", "about the role", "the role", "תפקיד", "אחריות")):
+            elif any(k in name_low for k in ("responsibilit", "about the position", "about the role", "the role", "תפקיד", "אחריות")):
                 sec_buckets["responsibilities"].append(val)
             elif any(k in name_low for k in ("about the company", "about us", "company", "who we are", "אודות")):
                 sec_buckets["company_overview"].append(val)
             elif any(k in name_low for k in ("benefit", "perk", "offer", "תנאים", "הטבות")):
                 sec_buckets["benefits"].append(val)
+            elif "description" in name_low:
+                # Check if val itself contains structured sections (e.g. About Company / Requirements)
+                parsed_inner = parse_job_sections(val)
+                if parsed_inner.company_overview or parsed_inner.responsibilities or parsed_inner.requirements:
+                    if parsed_inner.company_overview:
+                        sec_buckets["company_overview"].append(parsed_inner.company_overview)
+                    if parsed_inner.responsibilities:
+                        sec_buckets["responsibilities"].append(parsed_inner.responsibilities)
+                    if parsed_inner.requirements:
+                        sec_buckets["requirements"].append(parsed_inner.requirements)
+                    if parsed_inner.benefits:
+                        sec_buckets["benefits"].append(parsed_inner.benefits)
+                    if parsed_inner.raw_other:
+                        sec_buckets["raw_other"].append(parsed_inner.raw_other)
+                else:
+                    sec_buckets["responsibilities"].append(val)
             else:
                 sec_buckets["raw_other"].append(val)
 
