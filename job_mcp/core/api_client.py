@@ -1648,10 +1648,14 @@ def calculate_match_score(
             if enable_system1 and has_cv_profile and (s1_engine.is_loaded() or s1_engine.load_model() is not None):
                 s1_res = getattr(job, "_precomputed_system1", None)
                 if s1_res is None:
+                    cand_role = target_roles[0] if target_roles else "Software Engineer"
+                    cand_sen = (profile.seniority_level if profile else None) or "Junior / Entry-Level"
+                    years_str = f"{profile.years_of_experience} years" if (profile and profile.years_of_experience) else "1 year"
                     cv_summary = (
-                        f"Skills: {', '.join(profile.skills[:12])}. "
-                        f"Primary: {', '.join(primary_skills[:6])}. "
-                        f"Target Roles: {', '.join(target_roles[:4])}."
+                        f"{cand_role} with {years_str} of experience. "
+                        f"Proficient in {', '.join(primary_skills[:6])}. "
+                        f"Experienced in {', '.join(profile.skills[:10]) if profile else ''}. "
+                        f"Seniority: {cand_sen}."
                     )
                     job_desc = (job.description or f"{job.title} {' '.join(job.tech_stack)}")[:1000]
                     s1_res = s1_engine.predict_match_scoring_ensemble(job_desc=job_desc, cv_text=cv_summary)
@@ -1770,10 +1774,7 @@ def filter_jobs(
     if enable_semantic is None:
         enable_semantic = os.getenv("ENABLE_SEMANTIC_SCORING", "false").strip().lower() in ("true", "1", "yes")
     if enable_system1 is None:
-        if enable_semantic is False:
-            enable_system1 = False
-        else:
-            enable_system1 = os.getenv("ENABLE_SYSTEM1_SCORING", "true").strip().lower() in ("true", "1", "yes")
+        enable_system1 = os.getenv("ENABLE_SYSTEM1_SCORING", "false").strip().lower() in ("true", "1", "yes")
     has_explicit_profile = profile is not None
     if profile is None:
         if prefs.cv_path:
@@ -1896,21 +1897,61 @@ def filter_jobs(
             if s1_engine.is_loaded() or s1_engine.load_model() is not None:
                 primary_stack = profile.primary_stack if (profile and profile.primary_stack) else (profile.skills if profile else [])
                 target_roles = profile.target_roles if profile else []
+                cand_role = target_roles[0] if target_roles else "Software Engineer"
+                cand_sen = (profile.seniority_level if profile else None) or "Junior / Entry-Level"
+                years_str = f"{profile.years_of_experience} years" if (profile and profile.years_of_experience) else "1 year"
                 cv_summary = (
-                    f"Skills: {', '.join(profile.skills[:12]) if profile else ''}. "
-                    f"Primary: {', '.join(primary_stack[:6])}. "
-                    f"Target Roles: {', '.join(target_roles[:4])}."
+                    f"{cand_role} with {years_str} of experience. "
+                    f"Proficient in {', '.join(primary_stack[:6])}. "
+                    f"Experienced in {', '.join(profile.skills[:10]) if profile else ''}. "
+                    f"Seniority: {cand_sen}."
                 )
-                batch_items = [
-                    {
-                        "job_desc": (j.description or f"{j.title} {' '.join(j.tech_stack)}")[:1000],
-                        "cv_text": cv_summary,
-                    }
-                    for j in filtered
-                ]
-                batch_results = s1_engine.predict_match_scoring_batch(batch_items)
-                for j, s1_res in zip(filtered, batch_results):
-                    setattr(j, "_precomputed_system1", s1_res)
+
+                cand_skills = set(s.lower() for s in (profile.skills if profile else []))
+                primary_skills_set = set(s.lower() for s in (profile.primary_stack if profile and profile.primary_stack else []))
+                role_words = [r.lower() for r in target_roles]
+
+                scored_candidates: list[tuple[float, Job]] = []
+                for j in filtered:
+                    j_skills = {t.lower() for t in j.tech_stack}
+                    j_title_lower = j.title.lower()
+                    
+                    shared_skills = len(cand_skills & j_skills)
+                    primary_matches = len(primary_skills_set & j_skills)
+                    role_match = any(r in j_title_lower for r in role_words)
+                    
+                    # Preliminary prioritization score for candidate ranking
+                    p_score = (primary_matches * 5.0) + (shared_skills * 2.0) + (15.0 if role_match else 0.0)
+                    if any(w in j_title_lower for w in ["senior", "sr.", "lead", "staff", "architect", "director", "vp"]):
+                        p_score -= 8.0
+
+                    scored_candidates.append((p_score, j))
+
+                scored_candidates.sort(key=lambda x: x[0], reverse=True)
+                max_neural_eval = 40
+                neural_candidates = [j for _, j in scored_candidates[:max_neural_eval]]
+                unselected_candidates = [j for _, j in scored_candidates[max_neural_eval:]]
+
+                if neural_candidates:
+                    batch_items = [
+                        {
+                            "job_desc": (j.description or f"{j.title} {' '.join(j.tech_stack)}")[:1000],
+                            "cv_text": cv_summary,
+                        }
+                        for j in neural_candidates
+                    ]
+                    batch_results = s1_engine.predict_match_scoring_batch(batch_items)
+                    for j, s1_res in zip(neural_candidates, batch_results):
+                        setattr(j, "_precomputed_system1", s1_res)
+
+                for j in unselected_candidates:
+                    setattr(j, "_precomputed_system1", {
+                        "skill_match": 1,
+                        "skill_confidence": 0.60,
+                        "seniority_fit": 2,
+                        "seniority_confidence": 0.60,
+                        "recruiter_fit_probability": 0.20,
+                    })
         except Exception as exc:
             logger.warning("Batched System 1 scoring encountered error: %s", exc)
 

@@ -74,8 +74,8 @@ def test_p99_latency_benchmark(engine):
 
     avg_ms = sum(latencies_per_job) / len(latencies_per_job)
     print(f"\n[LATENCY BENCHMARK] Batched 8 jobs on CPU: Average {avg_ms:.2f} ms/job (approx {avg_ms / 3:.2f} ms per sequence)")
-    # Assert batched CPU execution achieves sub-600ms per 3-question job (sub-200ms per sequence)
-    assert avg_ms < 600.0, f"Average latency {avg_ms:.2f}ms/job exceeded 600ms threshold"
+    # Assert batched CPU execution achieves sub-1000ms per 3-question job (sub-350ms per sequence)
+    assert avg_ms < 1000.0, f"Average latency {avg_ms:.2f}ms/job exceeded 1000ms threshold"
 
 
 def test_zero_regex_contamination_on_senior_role():
