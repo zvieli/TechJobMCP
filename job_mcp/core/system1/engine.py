@@ -159,7 +159,7 @@ class LazyLayaEngine:
             opts = " | ".join(f"[{i}] {opt}" for i, opt in enumerate(options))
             prompt = f"Context:\n{state}\n\nInstruction: {question}\nOptions:\n{opts}"
 
-            enc = self._tokenizer(prompt, truncation=True, max_length=320, return_tensors="pt")
+            enc = self._tokenizer(prompt, truncation=True, max_length=512, return_tensors="pt")
             with torch.inference_mode():
                 logits = model(**enc).logits[0, : len(options)]
                 scaled = logits / max(1e-4, self.temperature)
@@ -184,7 +184,7 @@ class LazyLayaEngine:
             opts = " | ".join(f"[{i}] {opt}" for i, opt in enumerate(options))
             prompt = f"Context:\n{state}\n\nInstruction: {question}\nOptions:\n{opts}"
 
-            enc = self._tokenizer(prompt, truncation=True, max_length=320, return_tensors="pt")
+            enc = self._tokenizer(prompt, truncation=True, max_length=512, return_tensors="pt")
             with torch.inference_mode():
                 logits = model(**enc).logits[0, :2]
                 scaled = logits / max(1e-4, self.temperature)
@@ -209,10 +209,10 @@ class LazyLayaEngine:
         return chosen, conf
 
     def predict_match_scoring_ensemble(
-        self, job_desc: str, cv_text: str
+        self, job_title: str, job_desc: str, cv_text: str
     ) -> Dict[str, Any]:
         """Execute the 3-question ensemble for a single candidate/job pair."""
-        results = self.predict_match_scoring_batch([{"job_desc": job_desc, "cv_text": cv_text}])
+        results = self.predict_match_scoring_batch([{"job_title": job_title, "job_desc": job_desc, "cv_text": cv_text}])
         return results[0] if results else {
             "skill_match": 2,
             "skill_confidence": 0.50,
@@ -248,9 +248,9 @@ class LazyLayaEngine:
                 for _ in items
             ]
 
-        skill_options = ["None", "Weak", "Partial", "Strong", "Perfect"]
+        skill_options = ["None (0-20%)", "Weak (20-40%)", "Partial (40-60%)", "Strong (60-80%)", "Perfect (80-100%)"]
         sen_options = ["Far too junior", "Slightly junior", "Good fit", "Senior", "Overqualified"]
-        rec_options = ["Reject / No", "Advance / Yes"]
+        rec_options = ["No", "Yes"]
 
         skill_opts_str = " | ".join(f"[{i}] {opt}" for i, opt in enumerate(skill_options))
         sen_opts_str = " | ".join(f"[{i}] {opt}" for i, opt in enumerate(sen_options))
@@ -267,10 +267,11 @@ class LazyLayaEngine:
                 prompts: List[str] = []
 
                 for item in chunk:
-                    state = f"CANDIDATE CV:\n{item['cv_text']}\n\nJOB LISTING:\n{item['job_desc']}"
-                    p_skill = f"Context:\n{state}\n\nInstruction: Rate the technical skill overlap between CV and job requirements.\nOptions:\n{skill_opts_str}"
-                    p_sen = f"Context:\n{state}\n\nInstruction: Rate the seniority fit based on years of experience and track record.\nOptions:\n{sen_opts_str}"
-                    p_rec = f"Context:\n{state}\n\nInstruction: Overall, would a human technical recruiter invite this candidate to an interview?\nOptions:\n{rec_opts_str}"
+                    job_title = item.get("job_title", "Unknown Role")
+                    state = f"Job Title: {job_title}\nJob Description:\n{item['job_desc']}\nCandidate CV:\n{item['cv_text']}"
+                    p_skill = f"Context:\n{state}\n\nInstruction: Evaluate the technical and professional skill match of the candidate for this role.\nOptions:\n{skill_opts_str}"
+                    p_sen = f"Context:\n{state}\n\nInstruction: Assess the seniority alignment of the candidate relative to the requirements.\nOptions:\n{sen_opts_str}"
+                    p_rec = f"Context:\n{state}\n\nInstruction: Would a human technical recruiter recommend advancing this candidate to an interview?\nOptions:\n{rec_opts_str}"
                     prompts.extend([p_skill, p_sen, p_rec])
 
                 # Batched dynamic padding
@@ -278,7 +279,7 @@ class LazyLayaEngine:
                     prompts,
                     padding=True,
                     truncation=True,
-                    max_length=240,
+                    max_length=512,
                     return_tensors="pt",
                 )
 

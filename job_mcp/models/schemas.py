@@ -64,6 +64,7 @@ class CandidateProfile(BaseModel):
     top_skills: list[str] = Field(default_factory=list)
     primary_stack: list[str] = Field(default_factory=list)
     seniority_level: Optional[str] = None
+    years_of_experience: Optional[int] = None
     target_roles: list[str] = Field(default_factory=list)
     search_queries: list[str] = Field(default_factory=list)
     suggested_exclusions: list[str] = Field(default_factory=list)
