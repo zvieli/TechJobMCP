@@ -207,7 +207,7 @@ class GreenhouseSource(BasePublicSource):
 
         # Filter using candidate preferences if provided
         if preferences:
-            all_jobs = filter_jobs(all_jobs, preferences)
+            all_jobs = filter_jobs(all_jobs, preferences, enable_semantic=False)
 
         self._last_fetch_time = time.time()
         logger.info("Greenhouse: fetched %d total jobs (limit=%d)", len(all_jobs), limit)

@@ -46,6 +46,8 @@ class Job(BaseModel):
     responsibilities: Optional[str] = None
     company_overview: Optional[str] = None
     semantic_score: Optional[float] = None
+    system1_confidence: Optional[float] = None
+    requires_system2_review: bool = False
 
     @model_validator(mode="after")
     def _sync_sources(self) -> "Job":

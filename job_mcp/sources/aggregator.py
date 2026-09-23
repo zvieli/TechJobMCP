@@ -58,10 +58,10 @@ class JobAggregator:
 
     @property
     def source_timeout(self) -> float:
-        """Return explicit timeout override if set, else dynamic maximum source timeout."""
+        """Return explicit timeout override if set, else DEFAULT_SOURCE_TIMEOUT."""
         if self._explicit_timeout is not None:
             return self._explicit_timeout
-        return self.get_max_timeout()
+        return DEFAULT_SOURCE_TIMEOUT
 
     @source_timeout.setter
     def source_timeout(self, value: Optional[float]) -> None:
@@ -241,7 +241,7 @@ class JobAggregator:
                         if j.source in allowed_source_ids or any(s in allowed_source_ids for s in getattr(j, "sources", []))
                     ]
                 if preferences is not None or profile is not None:
-                    results = filter_jobs(results, preferences or JobPreferences(), profile=profile)
+                    results = filter_jobs(results, preferences or JobPreferences(), profile=profile, enable_system1=True)
                 return results
 
         # 3. Fetch from active sources concurrently with per-source timeout & error isolation
@@ -312,7 +312,7 @@ class JobAggregator:
 
         # 6. Apply preferences filtering & scoring if provided
         if preferences is not None or profile is not None:
-            deduped = filter_jobs(deduped, preferences or JobPreferences(), profile=profile)
+            deduped = filter_jobs(deduped, preferences or JobPreferences(), profile=profile, enable_system1=True)
 
         return deduped
 

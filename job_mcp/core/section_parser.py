@@ -232,7 +232,7 @@ def _clean_html_and_extract_lines(text_or_html: str) -> list[str]:
     return lines
 
 
-def parse_job_sections(text_or_html: str) -> JobSections:
+def parse_job_sections(text_or_html: str, enable_system1: bool = False) -> JobSections:
     """Parse raw job description text or HTML into structured JobSections.
 
     Bilingual English and Hebrew header recognition partitions content into:
@@ -271,13 +271,51 @@ def parse_job_sections(text_or_html: str) -> JobSections:
         else:
             section_content[active_section].append(line)
 
-    return JobSections(
+    res = JobSections(
         requirements="\n".join(section_content["requirements"]).strip(),
         responsibilities="\n".join(section_content["responsibilities"]).strip(),
         company_overview="\n".join(section_content["company_overview"]).strip(),
         benefits="\n".join(section_content["benefits"]).strip(),
         raw_other="\n".join(section_content["raw_other"]).strip(),
     )
+
+    # System 1 Paragraph Recovery for Unstructured Descriptions (Phase 3 Upgrade)
+    if enable_system1 and not res.requirements and not res.responsibilities and len(res.raw_other) > 80:
+        try:
+            from job_mcp.core.system1.engine import LazyLayaEngine
+
+            engine = LazyLayaEngine.get_instance()
+            if engine.is_loaded():
+                paragraphs = [p.strip() for p in res.raw_other.split("\n") if len(p.strip()) > 30]
+                section_options = ["Requirements", "Responsibilities", "About Company", "Benefits", "Tech Stack", "Other"]
+                reqs, resps, about, benefits = [], [], [], []
+                for p in paragraphs[:8]:
+                    sec_choice, conf = engine.predict_choice(
+                        p,
+                        "Identify the section type of this text block.",
+                        section_options,
+                    )
+                    if conf >= 0.70:
+                        if sec_choice in ("Requirements", "Tech Stack"):
+                            reqs.append(p)
+                        elif sec_choice == "Responsibilities":
+                            resps.append(p)
+                        elif sec_choice == "About Company":
+                            about.append(p)
+                        elif sec_choice == "Benefits":
+                            benefits.append(p)
+                if reqs or resps:
+                    return JobSections(
+                        requirements="\n".join(reqs),
+                        responsibilities="\n".join(resps),
+                        company_overview="\n".join(about) or res.company_overview,
+                        benefits="\n".join(benefits) or res.benefits,
+                        raw_other=res.raw_other,
+                    )
+        except Exception:
+            pass
+
+    return res
 
 
 def is_non_tech_role(title: str, department: Optional[str] = None) -> bool:

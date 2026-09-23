@@ -423,7 +423,7 @@ class JobifySource(BasePublicSource):
                             url_queue.append(r_url)
 
                 if preferences and limit:
-                    filtered_preview = filter_jobs(jobs, preferences)
+                    filtered_preview = filter_jobs(jobs, preferences, enable_semantic=False)
                     if len(filtered_preview) >= limit:
                         break
         except Exception as exc:
@@ -434,7 +434,7 @@ class JobifySource(BasePublicSource):
 
         # Apply preferences filtering if provided
         if preferences:
-            jobs = filter_jobs(jobs, preferences)
+            jobs = filter_jobs(jobs, preferences, enable_semantic=False)
 
         # Truncate to limit
         if limit and len(jobs) > limit:

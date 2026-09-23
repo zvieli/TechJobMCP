@@ -6,10 +6,11 @@ import asyncio
 import logging
 import os
 import random
-from typing import Any, Callable, Coroutine, List, Optional, Tuple
+from typing import Any, Callable, Coroutine, List, Optional, Tuple, Type
 
 import httpx
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -30,6 +31,31 @@ class RateLimitOrUnavailableError(LLMError):
 
 class LLMProviderError(LLMError):
     """Raised when an LLM provider returns an unexpected error or fails."""
+
+
+def clean_schema_for_gemini(schema_cls: Type[BaseModel]) -> dict[str, Any]:
+    """Dereference and inline $defs/$ref and strip unsupported OpenAPI fields for Gemini REST API."""
+    import copy
+
+    raw = schema_cls.model_json_schema()
+    defs = raw.get("$defs", {})
+
+    def _resolve(node: Any) -> Any:
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref_name = node["$ref"].split("/")[-1]
+                target = defs.get(ref_name, {})
+                return _resolve(copy.deepcopy(target))
+            return {
+                k: _resolve(v)
+                for k, v in node.items()
+                if k not in ("$defs", "title", "$schema")
+            }
+        elif isinstance(node, list):
+            return [_resolve(x) for x in node]
+        return node
+
+    return _resolve(raw)
 
 
 class ResilientLLMGateway:
@@ -54,7 +80,7 @@ class ResilientLLMGateway:
         openrouter_extraction_model: Optional[str] = None,
         openrouter_base_url: Optional[str] = None,
         ollama_url: Optional[str] = None,
-        ollama_model: str = "llama3.2",
+        ollama_model: Optional[str] = None,
         tokenharbor_api_key: Optional[str] = None,
         tokenharbor_base_url: Optional[str] = None,
         tokenharbor_model: Optional[str] = None,
@@ -124,7 +150,9 @@ class ResilientLLMGateway:
             or os.environ.get("OLLAMA_URL")
             or "http://localhost:11434/api/generate"
         )
-        self.ollama_model = ollama_model
+        self.ollama_model = (
+            ollama_model or os.environ.get("OLLAMA_MODEL") or "llama3.2"
+        )
         self.tokenharbor_api_key = (
             tokenharbor_api_key or os.environ.get("TOKENHARBOR_API_KEY")
         )
@@ -149,8 +177,12 @@ class ResilientLLMGateway:
             return self._http_client
         return httpx.AsyncClient(timeout=60.0)
 
-
-    async def _call_gemini(self, prompt: str, system_prompt: str) -> str:
+    async def _call_gemini(
+        self,
+        prompt: str,
+        system_prompt: str,
+        response_schema: Optional[Type[BaseModel]] = None,
+    ) -> str:
         """Invoke Google Gemini REST API."""
         if not self.gemini_api_key:
             raise LLMProviderError("Gemini API key is not configured.")
@@ -159,7 +191,7 @@ class ResilientLLMGateway:
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.gemini_model}:generateContent?key={self.gemini_api_key}"
         )
-        payload = {
+        payload: dict[str, Any] = {
             "contents": [
                 {
                     "parts": [{"text": prompt}],
@@ -169,12 +201,18 @@ class ResilientLLMGateway:
                 "parts": [{"text": system_prompt}],
             },
         }
+        if response_schema is not None:
+            payload["generationConfig"] = {
+                "responseMimeType": "application/json",
+                "responseSchema": clean_schema_for_gemini(response_schema),
+            }
 
         client = await self._get_client()
         should_close = self._http_client is None
+        timeout = float(os.getenv("GEMINI_TIMEOUT", "90.0"))
         try:
-            resp = await client.post(url, json=payload)
-            if resp.status_code in (429, 503):
+            resp = await client.post(url, json=payload, timeout=timeout)
+            if resp.status_code in (429, 500, 502, 503, 504):
                 raise RateLimitOrUnavailableError(
                     f"Gemini returned HTTP {resp.status_code}: {resp.text}"
                 )
@@ -200,6 +238,7 @@ class ResilientLLMGateway:
         prompt: str,
         system_prompt: str,
         model: Optional[str] = None,
+        response_schema: Optional[Type[BaseModel]] = None,
     ) -> str:
         """Invoke OpenRouter Chat Completions API."""
         if not self.openrouter_api_key:
@@ -212,20 +251,28 @@ class ResilientLLMGateway:
             "HTTP-Referer": os.getenv("OPENROUTER_HTTP_REFERER", "https://github.com/TechJobMCP/TechJobMCP"),
             "X-Title": "TechJobMCP Application Engine",
         }
-        payload = {
+        payload: dict[str, Any] = {
             "model": model or self.openrouter_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
         }
-
+        if response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_schema.__name__,
+                    "strict": True,
+                    "schema": response_schema.model_json_schema(),
+                },
+            }
 
         client = await self._get_client()
         should_close = self._http_client is None
         try:
             resp = await client.post(url, headers=headers, json=payload)
-            if resp.status_code in (429, 503):
+            if resp.status_code in (429, 500, 502, 503, 504):
                 raise RateLimitOrUnavailableError(
                     f"OpenRouter returned HTTP {resp.status_code}: {resp.text}"
                 )
@@ -249,6 +296,7 @@ class ResilientLLMGateway:
         prompt: str,
         system_prompt: str,
         model: Optional[str] = None,
+        response_schema: Optional[Type[BaseModel]] = None,
     ) -> str:
         """Invoke TokenHarbor Chat Completions API (OpenAI-compatible)."""
         if not self.tokenharbor_api_key:
@@ -261,19 +309,29 @@ class ResilientLLMGateway:
             "HTTP-Referer": os.getenv("TOKENHARBOR_HTTP_REFERER", "https://github.com/TechJobMCP/TechJobMCP"),
             "X-Title": "TechJobMCP Application Engine",
         }
-        payload = {
+        payload: dict[str, Any] = {
             "model": model or self.tokenharbor_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
         }
+        if response_schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": response_schema.__name__,
+                    "strict": True,
+                    "schema": response_schema.model_json_schema(),
+                },
+            }
 
         client = await self._get_client()
         should_close = self._http_client is None
+        timeout = float(os.getenv("TOKENHARBOR_TIMEOUT", "25.0"))
         try:
-            resp = await client.post(url, headers=headers, json=payload, timeout=90.0)
-            if resp.status_code in (429, 503):
+            resp = await client.post(url, headers=headers, json=payload, timeout=timeout)
+            if resp.status_code in (429, 500, 502, 503, 504):
                 raise RateLimitOrUnavailableError(
                     f"TokenHarbor returned HTTP {resp.status_code}: {resp.text}"
                 )
@@ -292,19 +350,26 @@ class ResilientLLMGateway:
             if should_close:
                 await client.aclose()
 
-    async def _call_ollama(self, prompt: str, system_prompt: str) -> str:
+    async def _call_ollama(
+        self,
+        prompt: str,
+        system_prompt: str,
+        response_schema: Optional[Type[BaseModel]] = None,
+    ) -> str:
         """Invoke local Ollama generate API."""
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.ollama_model,
             "prompt": f"{system_prompt}\n\n{prompt}",
             "stream": False,
         }
+        if response_schema is not None:
+            payload["format"] = response_schema.model_json_schema()
 
         client = await self._get_client()
         should_close = self._http_client is None
         try:
             resp = await client.post(self.ollama_url, json=payload)
-            if resp.status_code in (429, 503):
+            if resp.status_code in (429, 500, 502, 503, 504):
                 raise RateLimitOrUnavailableError(
                     f"Ollama returned HTTP {resp.status_code}: {resp.text}"
                 )
@@ -365,10 +430,10 @@ class ResilientLLMGateway:
         for attempt in range(self.max_retries + 1):
             try:
                 return await call_fn()
-            except RateLimitOrUnavailableError as err:
+            except (RateLimitOrUnavailableError, httpx.TimeoutException) as err:
                 if attempt >= self.max_retries:
                     logger.warning(
-                        "Provider %s rate limit retries exhausted (%d attempts): %s",
+                        "Provider %s transient retries exhausted (%d attempts): %s",
                         provider_name,
                         self.max_retries + 1,
                         err,
@@ -377,7 +442,7 @@ class ResilientLLMGateway:
                 jitter = random.uniform(0.1, 0.5)
                 delay = (self.initial_backoff * (2**attempt)) + jitter
                 logger.warning(
-                    "Provider %s hit rate limit (attempt %d/%d). Retrying in %.2fs: %s",
+                    "Provider %s encountered transient error (attempt %d/%d). Retrying in %.2fs: %s",
                     provider_name,
                     attempt + 1,
                     self.max_retries,
@@ -386,10 +451,11 @@ class ResilientLLMGateway:
                 )
                 await asyncio.sleep(delay)
             except Exception as err:
+                err_msg = str(err).strip() or repr(err)
                 logger.warning(
                     "Provider %s encountered non-retryable error: %s",
                     provider_name,
-                    err,
+                    err_msg,
                 )
                 raise
 
@@ -397,38 +463,72 @@ class ResilientLLMGateway:
 
     def _get_provider_chain(
         self,
+        response_schema: Optional[Type[BaseModel]] = None,
     ) -> List[Tuple[str, Callable[[str, str], Coroutine[Any, Any, str]]]]:
         """Build provider chain list based on available configuration."""
-        chain: List[Tuple[str, Callable[[str, str], Coroutine[Any, Any, str]]]] = []
-
-        if self.tokenharbor_api_key:
-            chain.append(("tokenharbor", self._call_tokenharbor))
+        providers_map: Dict[str, Tuple[str, Callable[[str, str], Coroutine[Any, Any, str]]]] = {}
 
         if self.gemini_api_key:
-            chain.append(("gemini", self._call_gemini))
+            providers_map["gemini"] = (
+                "gemini",
+                lambda p, s: self._call_gemini(p, s, response_schema=response_schema),
+            )
+
+        if self.tokenharbor_api_key:
+            providers_map["tokenharbor"] = (
+                "tokenharbor",
+                lambda p, s: self._call_tokenharbor(p, s, response_schema=response_schema),
+            )
 
         if self.openrouter_api_key:
-            chain.append(("openrouter", self._call_openrouter))
+            providers_map["openrouter"] = (
+                "openrouter",
+                lambda p, s: self._call_openrouter(p, s, response_schema=response_schema),
+            )
 
-        # Ollama can always be attempted if configured URL exists
-        chain.append(("ollama", self._call_ollama))
+        providers_map["ollama"] = (
+            "ollama",
+            lambda p, s: self._call_ollama(p, s, response_schema=response_schema),
+        )
+
+        primary = os.environ.get("PRIMARY_LLM_PROVIDER", "").lower().strip()
+        chain: List[Tuple[str, Callable[[str, str], Coroutine[Any, Any, str]]]] = []
+
+        if primary and primary in providers_map:
+            chain.append(providers_map.pop(primary))
+
+        # Add remaining providers in prioritized order: tokenharbor -> gemini -> openrouter -> ollama
+        for p in ("tokenharbor", "gemini", "openrouter", "ollama"):
+            if p in providers_map:
+                chain.append(providers_map.pop(p))
+
         return chain
 
-    async def ask_question(self, question: str, cv_context: str = "") -> str:
-        """Answer a screening questionnaire question using cached answer or LLM.
+    async def ask_question(
+        self,
+        question: str,
+        cv_context: str = "",
+        system_prompt: Optional[str] = None,
+        response_schema: Optional[Type[BaseModel]] = None,
+    ) -> str:
+        """Answer a screening questionnaire question or evaluate prompt with optional structured output.
 
         Args:
-            question: The screening question text.
+            question: The screening question text or evaluation prompt.
             cv_context: Candidate profile or CV summary to ground the response.
+            system_prompt: Optional system instruction prompt override.
+            response_schema: Optional Pydantic BaseModel for guaranteed strict structured output.
 
         Returns:
-            Concise, relevant answer text.
+            Concise, relevant answer text or strict JSON string matching response_schema.
         """
         if not question or not question.strip():
             return ""
 
+        cache_key = f"{question}:{response_schema.__name__}" if response_schema else question
+
         # 1. Check SQLite Cache First (Zero-cost bypass)
-        cached_answer = self.cache.get_cached_answer(question)
+        cached_answer = self.cache.get_cached_answer(cache_key)
         if cached_answer is not None:
             logger.info("Cache HIT for question: '%s'", question[:50])
             return cached_answer
@@ -436,47 +536,56 @@ class ResilientLLMGateway:
         # 2. Acquire Rate Limiter Token (free-tier quota preservation)
         await self.rate_limiter.wait_for_token()
 
-        prompt = (
-            f"Candidate CV / Profile Context:\n{cv_context or 'N/A'}\n\n"
-            f"Job Application Screening Question:\n{question}\n\n"
-            "Direct, concise, professional answer:"
-        )
-        system_prompt = (
-            "You are an AI career assistant answering application screening questions "
-            "on behalf of a candidate based on their CV. Provide concise, professional, "
-            "truthful, and relevant answers."
-        )
+        if system_prompt is None:
+            prompt = (
+                f"Candidate CV / Profile Context:\n{cv_context or 'N/A'}\n\n"
+                f"Job Application Screening Question:\n{question}\n\n"
+                "Direct, concise, professional answer:"
+            )
+            effective_sys = (
+                "You are an AI career assistant answering application screening questions "
+                "on behalf of a candidate based on their CV. Provide concise, professional, "
+                "truthful, and relevant answers."
+            )
+        else:
+            prompt = question
+            effective_sys = system_prompt
 
         # 3. Try Multi-Provider Fallback Chain
-        providers = self._get_provider_chain()
+        providers = self._get_provider_chain(response_schema=response_schema)
         last_error: Optional[Exception] = None
 
         for provider_name, provider_fn in providers:
             try:
                 answer = await self._execute_with_retry(
                     provider_name,
-                    lambda fn=provider_fn: fn(prompt, system_prompt),
+                    lambda fn=provider_fn: fn(prompt, effective_sys),
                 )
                 if answer and answer.strip():
                     clean_answer = answer.strip()
-                    self.cache.cache_answer(question, clean_answer)
+                    self.cache.cache_answer(cache_key, clean_answer)
                     return clean_answer
             except Exception as err:
+                err_msg = str(err).strip() or repr(err)
                 logger.warning(
                     "Provider %s failed, falling back to next provider: %s",
                     provider_name,
-                    err,
+                    err_msg,
                 )
                 last_error = err
 
         # 4. Fallback to Mock LLM if enabled
         if self.mock_fallback:
+            if response_schema is not None:
+                raise LLMProviderError(
+                    f"All real LLM providers in fallback chain failed to produce structured output. Last error: {last_error}"
+                )
             logger.info(
                 "All real providers failed/unconfigured. Using Mock LLM fallback for: '%s'",
                 question[:50],
             )
             mock_answer = self._generate_mock_answer(question, cv_context)
-            self.cache.cache_answer(question, mock_answer)
+            self.cache.cache_answer(cache_key, mock_answer)
             return mock_answer
 
         raise LLMProviderError(

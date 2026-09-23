@@ -754,7 +754,7 @@ class LinkedInSource(BaseAuthenticatedSource):
 
             # Apply preferences filtering if provided
             if preferences:
-                all_jobs = filter_jobs(all_jobs, preferences)
+                all_jobs = filter_jobs(all_jobs, preferences, enable_semantic=False)
 
             # Truncate to limit
             if limit and len(all_jobs) > limit:

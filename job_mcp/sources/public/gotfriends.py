@@ -296,7 +296,7 @@ class GotFriendsSource(BasePublicSource):
 
         # Filter using candidate preferences if provided
         if preferences:
-            unique_jobs = filter_jobs(unique_jobs, preferences)
+            unique_jobs = filter_jobs(unique_jobs, preferences, enable_semantic=False)
 
         self._last_fetch_time = time.time()
         logger.info("GotFriends: fetched %d unique jobs (limit=%d)", len(unique_jobs), limit)

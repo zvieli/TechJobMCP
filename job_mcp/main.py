@@ -241,6 +241,17 @@ async def browser_lifespan(server: FastMCP):
 
     warmup_task = asyncio.create_task(_warm_cache(session_mgr, job_cache, aggregator=aggregator))
 
+    # Pre-warm System 1 neural engine in RAM for consistent sub-50ms P99 latency
+    def _warmup_system1() -> None:
+        try:
+            from job_mcp.core.system1.engine import LazyLayaEngine
+
+            LazyLayaEngine.get_instance().warmup()
+        except Exception as exc:
+            logger.warning("System 1 neural engine warmup error: %s", exc)
+
+    asyncio.get_running_loop().run_in_executor(None, _warmup_system1)
+
     try:
         yield {
             "session": session_mgr,
@@ -1046,7 +1057,7 @@ async def filter_jobs_by_preferences(
     )
 
     try:
-        filtered = filter_jobs(cached_jobs, prefs, profile=profile)
+        filtered = filter_jobs(cached_jobs, prefs, profile=profile, enable_system1=True)
         if limit and len(filtered) > limit:
             filtered = filtered[:limit]
         return _response(
@@ -2026,7 +2037,7 @@ async def run_job_scout(
 
     # 3. Score & Filter Jobs
     try:
-        scored_jobs = filter_jobs(all_jobs, prefs, profile=profile)
+        scored_jobs = filter_jobs(all_jobs, prefs, profile=profile, enable_system1=True)
     except Exception as exc:
         logger.warning("Error scoring jobs in run_job_scout: %s", exc)
         scored_jobs = list(all_jobs)

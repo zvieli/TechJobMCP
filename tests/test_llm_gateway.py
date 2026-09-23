@@ -6,7 +6,7 @@ import asyncio
 import os
 import time
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 import httpx
@@ -79,6 +79,10 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
             max_retries=2,
             mock_fallback=True,
         )
+        # Clear external keys so unit tests don't make real network calls
+        self.gateway.tokenharbor_api_key = ""
+        self.gateway.gemini_api_key = ""
+        self.gateway.openrouter_api_key = ""
 
     async def test_cache_hit_bypasses_provider_and_rate_limiter(self) -> None:
         """Verify cache hit returns immediately without touching rate limiter or providers."""
@@ -160,10 +164,11 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
 
     async def test_mock_fallback_when_offline_or_unconfigured(self) -> None:
         """Verify Mock LLM handles questions when no API keys are provided."""
-        with patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "OPENROUTER_API_KEY": ""}):
+        with patch.dict(os.environ, {"GEMINI_API_KEY": "", "GOOGLE_API_KEY": "", "OPENROUTER_API_KEY": "", "TOKENHARBOR_API_KEY": ""}):
             gateway = ResilientLLMGateway(
                 cache=LLMCache(db_path=":memory:"),
                 rate_limiter=TokenBucketRateLimiter(rpm=600),
+                tokenharbor_api_key=None,
                 gemini_api_key=None,
                 openrouter_api_key=None,
                 mock_fallback=True,
@@ -185,10 +190,11 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
 
     async def test_error_raised_when_all_fail_and_no_mock(self) -> None:
         """Verify LLMProviderError is raised if all providers fail and mock_fallback is False."""
-        with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}):
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "", "TOKENHARBOR_API_KEY": ""}):
             gateway = ResilientLLMGateway(
                 cache=LLMCache(db_path=":memory:"),
                 rate_limiter=TokenBucketRateLimiter(rpm=600),
+                tokenharbor_api_key=None,
                 gemini_api_key="fake_key",
                 openrouter_api_key=None,
                 mock_fallback=False,
@@ -398,6 +404,71 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(gw.tokenharbor_api_key, "th_test_key")
             self.assertEqual(gw.tokenharbor_base_url, "https://api.tokenharbor.ai/v1")
             self.assertEqual(gw.tokenharbor_model, "deepseek-v4.1-flash:free")
+
+    async def test_structured_output_gemini_payload(self) -> None:
+        """Verify _call_gemini includes responseSchema in generationConfig when schema is provided."""
+        from pydantic import BaseModel, Field
+
+        class TestSchema(BaseModel):
+            score: int = Field(ge=0, le=4)
+            label: str
+
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": '{"score": 3, "label": "test"}'}]}}]
+        }
+        mock_client.post.return_value = mock_resp
+
+        gw = ResilientLLMGateway(
+            cache=LLMCache(db_path=":memory:"),
+            gemini_api_key="fake_key",
+            http_client=mock_client,
+        )
+
+        res = await gw._call_gemini("prompt", "system", response_schema=TestSchema)
+        self.assertEqual(res, '{"score": 3, "label": "test"}')
+
+        mock_client.post.assert_called_once()
+        _, kwargs = mock_client.post.call_args
+        payload = kwargs["json"]
+        self.assertIn("generationConfig", payload)
+        self.assertEqual(payload["generationConfig"]["responseMimeType"], "application/json")
+        self.assertIn("properties", payload["generationConfig"]["responseSchema"])
+
+    async def test_structured_output_tokenharbor_payload(self) -> None:
+        """Verify _call_tokenharbor includes response_format json_schema when schema is provided."""
+        from pydantic import BaseModel, Field
+
+        class TestSchema(BaseModel):
+            decision: bool
+            reason: str
+
+        mock_client = AsyncMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": '{"decision": true, "reason": "ok"}'}}]
+        }
+        mock_client.post.return_value = mock_resp
+
+        gw = ResilientLLMGateway(
+            cache=LLMCache(db_path=":memory:"),
+            tokenharbor_api_key="fake_key",
+            http_client=mock_client,
+        )
+
+        res = await gw._call_tokenharbor("prompt", "system", response_schema=TestSchema)
+        self.assertEqual(res, '{"decision": true, "reason": "ok"}')
+
+        mock_client.post.assert_called_once()
+        _, kwargs = mock_client.post.call_args
+        payload = kwargs["json"]
+        self.assertIn("response_format", payload)
+        self.assertEqual(payload["response_format"]["type"], "json_schema")
+        self.assertEqual(payload["response_format"]["json_schema"]["name"], "TestSchema")
+        self.assertTrue(payload["response_format"]["json_schema"]["strict"])
 
 
 if __name__ == "__main__":

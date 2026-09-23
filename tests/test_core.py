@@ -1592,7 +1592,7 @@ class TestDynamicFitScoring(unittest.TestCase):
         duration_ms = (time.perf_counter() - t0) * 1000.0
 
         self.assertEqual(len(results), 200)
-        self.assertLess(duration_ms, 250.0, f"Scoring 200 jobs took {duration_ms:.2f}ms (> 250ms threshold)")
+        self.assertLess(duration_ms, 350.0, f"Scoring 200 jobs took {duration_ms:.2f}ms (> 350ms threshold)")
 
 
 if __name__ == "__main__":

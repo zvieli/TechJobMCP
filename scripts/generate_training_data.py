@@ -1,11 +1,11 @@
-"""Bootstrap training and evaluation datasets for TechJobMCP v2 dual-cognition Laya models.
+"""Bootstrap training and evaluation datasets for TechJobMCP v2 dual-cognition models.
 
-Generates labeled datasets across 5 domains:
-1. match_scoring: (job_desc, candidate_cv) -> skill_match (0-4), seniority_fit (0-4), recruiter_fit (bool)
-2. dedup_verification: (job_a, job_b) -> is_duplicate (bool)
-3. role_classification: (job_title, job_desc) -> category (Core Engineering / Engineering-Adjacent / Technical Hybrid / Non-Technical / Administrative)
-4. section_parsing: (paragraph) -> section_type (Requirements / Responsibilities / Company overview / Benefits / Application instructions / Boilerplate)
-5. field_mapping: (field_label, placeholder, type) -> field_intent (First name / Last name / Email / Phone / Resume / Cover letter / Custom / etc.)
+Strategy: "Annotation over Generation"
+- Extracts REAL, authentic job postings directly from SQLite database (data/real_jobs.db).
+- Uses a curated, realistic static CV Matrix of 20 diverse profiles.
+- Creates natural cross-product pairs (yielding genuine real-world edge cases and hard negatives).
+- Uses ResilientLLMGateway strictly as an LLM-as-a-Judge annotator (assigning scores & flags).
+- Splits into training and golden holdout sets.
 """
 
 from __future__ import annotations
@@ -16,10 +16,13 @@ import json
 import logging
 import os
 import random
+import re
+import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 from job_mcp.core.llm.gateway import ResilientLLMGateway
 
@@ -31,312 +34,605 @@ logger = logging.getLogger("generate_training_data")
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 TRAINING_DIR = DATA_DIR / "training"
 HOLDOUT_DIR = DATA_DIR / "holdout"
+REAL_JOBS_DB = DATA_DIR / "real_jobs.db"
+
+# ---------------------------------------------------------------------------
+# Strict Structured Output Pydantic Schemas
+# ---------------------------------------------------------------------------
+class MatchScoringItem(BaseModel):
+    id: int
+    skill_match: int = Field(ge=0, le=4, description="0: None, 1: Weak, 2: Partial, 3: Strong, 4: Perfect")
+    seniority_fit: int = Field(ge=0, le=4, description="0: Far too junior, 1: Slightly junior, 2: Good fit, 3: Senior, 4: Overqualified")
+    recruiter_fit: bool = Field(description="Would a human technical recruiter invite this candidate to an interview?")
+    reasoning: str = Field(description="Concise 1-sentence evaluation justification")
 
 
-async def generate_batch_with_llm(
+class MatchScoringBatchOutput(BaseModel):
+    items: List[MatchScoringItem]
+
+
+class DedupVerificationItem(BaseModel):
+    id: int
+    is_duplicate: bool
+    reasoning: str
+
+
+class DedupVerificationBatchOutput(BaseModel):
+    items: List[DedupVerificationItem]
+
+
+class RoleClassificationItem(BaseModel):
+    id: int
+    category: str = Field(description="One of: Core Engineering, Engineering-Adjacent, Technical Hybrid, Administrative, Non-Technical")
+
+
+class RoleClassificationBatchOutput(BaseModel):
+    items: List[RoleClassificationItem]
+
+
+class SectionParsingItem(BaseModel):
+    id: int
+    section_type: str = Field(description="One of: Requirements, Responsibilities, Company overview, Benefits, Application instructions, Boilerplate")
+
+
+class SectionParsingBatchOutput(BaseModel):
+    items: List[SectionParsingItem]
+
+
+# ---------------------------------------------------------------------------
+# The 20-Profile CV Matrix (Realistic, diverse candidate summaries)
+# ---------------------------------------------------------------------------
+CV_MATRIX = [
+    # 0. Senior Python / AI Engineer
+    "Senior Python & AI Engineer with 8 years of experience. Expert in FastAPI, PyTorch, LangChain, and Agentic RAG workflows. Built multi-agent LLM systems with vector databases (Qdrant, Pinecone) in production on AWS. Seniority: Senior.",
+    # 1. Junior Frontend Developer (Bootcamp)
+    "Junior Frontend Developer with 1 year of hands-on experience following an intensive coding bootcamp. Proficient in React, JavaScript (ES6+), HTML5, and Tailwind CSS. Built responsive web apps and personal portfolio projects. Seniority: Junior.",
+    # 2. Staff Systems / Distributed Backend Engineer
+    "Staff Systems Engineer with 12 years of experience architecting high-throughput distributed systems in Go and C++. Deep expertise in Kafka, gRPC, Kubernetes, and low-latency network protocols handling 200k RPS. Seniority: Staff / Principal.",
+    # 3. Mid-level Full Stack Developer
+    "Full Stack Developer with 3 years of commercial experience. Strong background in TypeScript, React, Node.js, and PostgreSQL. Experienced with RESTful APIs, Docker, and CI/CD pipelines in fast-paced startup environments. Seniority: Mid-level.",
+    # 4. Senior DevOps & Cloud Infrastructure Architect
+    "Senior DevOps / Cloud Architect with 10 years of experience. Expert in AWS, GCP, Terraform, Kubernetes (EKS/GKE), Helm, and GitLab CI. Spearheaded zero-downtime multi-region migrations and GitOps adoption with ArgoCD. Seniority: Senior.",
+    # 5. Applied ML / Computer Vision Researcher
+    "Machine Learning Scientist (Ph.D. in Computer Science). 5 years of post-doc and industry experience in Computer Vision, PyTorch, CUDA kernel optimization, and diffusion models. Published at CVPR and NeurIPS. Seniority: Senior / Staff.",
+    # 6. Mobile Application Developer
+    "Cross-platform Mobile Developer with 4 years of experience building consumer apps in Flutter / Dart and native iOS (Swift). Successfully published and maintained apps with over 500k active users on App Store and Google Play. Seniority: Mid-level.",
+    # 7. Senior Data Engineer
+    "Senior Data Engineer with 6 years of experience building enterprise data platforms. Advanced skills in Apache Spark (PySpark), Airflow, Snowflake, dbt, SQL, and AWS Lake Formation. Designed petabyte-scale ETL pipelines. Seniority: Senior.",
+    # 8. Embedded / Low-Level Firmware Developer
+    "Firmware & Embedded Systems Engineer with 7 years of experience. Expert in Embedded C, C++, FreeRTOS, ARM Cortex-M microcontrollers, Linux device drivers, and I2C/SPI hardware protocols. Seniority: Senior.",
+    # 9. Cybersecurity / Application Security Engineer
+    "Application Security Engineer with 5 years of experience in AppSec, threat modeling, SAST/DAST tooling, and OWASP Top 10 remediation. Skilled in Python scripting, penetration testing, and cloud security posture management. Seniority: Mid-level / Senior.",
+    # 10. Technical Product Manager
+    "Technical Product Manager with 6 years of experience in B2B enterprise SaaS. Former backend developer. Skilled in writing detailed PRDs, conducting user research, Agile sprint planning, and partnering with R&D on complex APIs. Seniority: Senior.",
+    # 11. Senior QA Automation Engineer
+    "Senior QA Automation Lead with 7 years of experience designing robust test automation frameworks from scratch using Playwright, Cypress, Python, and TypeScript. Integrated end-to-end testing into GitHub Actions pipelines. Seniority: Senior.",
+    # 12. Junior Cloud Support / Sysadmin
+    "Junior Cloud Support Engineer with 1.5 years of experience providing Tier-2 technical support and Linux system administration. Familiar with Bash scripting, Docker basics, and AWS EC2/S3 monitoring. Seniority: Junior.",
+    # 13. Web3 & Smart Contract Developer
+    "Blockchain / Smart Contract Engineer with 3 years of experience in Web3. Developed and audited Solidity contracts using Foundry, Hardhat, Ethers.js, and OpenZeppelin on Ethereum and Arbitrum. Seniority: Mid-level.",
+    # 14. Non-Technical Technical Recruiter / HR
+    "Technical Talent Acquisition Specialist with 5 years of experience in high-tech recruiting. Expert in sourcing software engineers, conducting screening interviews, managing ATS workflows (Comeet, Greenhouse), and candidate pipeline. Seniority: Mid-level.",
+    # 15. VP of Engineering / Executive
+    "VP of Engineering with 16 years of engineering and management experience. Scaled R&D organization from 15 to 110 engineers across 4 international sites. Managed engineering budgets, technical strategy, and architectural governance. Seniority: Executive.",
+    # 16. Overqualified Enterprise Architect
+    "Chief Enterprise Architect with 18 years of experience leading core architecture across Fortune 500 financial institutions. Specialized in core banking modernisation, legacy mainframe migration, and global regulatory compliance. Seniority: Principal / Director.",
+    # 17. Java Enterprise Backend Developer
+    "Enterprise Java Developer with 7 years of experience. Deep proficiency in Java 17, Spring Boot, Hibernate, Apache Kafka, Oracle DB, and microservice refactoring in enterprise financial domains. Seniority: Senior.",
+    # 18. Junior Data Analyst
+    "Junior Data Analyst with a B.Sc. in Statistics and 1 year of experience. Highly proficient in SQL, Python (Pandas, NumPy), Excel modeling, and creating executive dashboards in Tableau and PowerBI. Seniority: Junior.",
+    # 19. IDF 8200 Veteran Full Stack & Cyber Developer
+    "Full Stack & Cyber Security Developer, 4 years in IDF elite intelligence unit (8200). Expert in Python, Go, React, reverse engineering, and low-latency network telemetry. Fluent in Hebrew and English. Seniority: Mid-level.",
+]
+
+CV_DOMAIN_KEYWORDS: Dict[int, List[str]] = {
+    0: ["python", "ai", "fastapi", "pytorch", "langchain", "rag", "llm", "backend", "machine learning"],
+    1: ["frontend", "front end", "react", "web", "ui", "ux", "full stack"],
+    2: ["distributed", "systems", "backend", "go", "golang", "c++", "kafka", "grpc", "kubernetes"],
+    3: ["full stack", "fullstack", "typescript", "react", "node", "postgres"],
+    4: ["devops", "cloud", "aws", "gcp", "terraform", "kubernetes", "sre", "infrastructure"],
+    5: ["computer vision", "vision", "machine learning", "deep learning", "pytorch", "algorithm", "research", "ai"],
+    6: ["mobile", "flutter", "ios", "android", "swift"],
+    7: ["data engineer", "data platform", "spark", "airflow", "snowflake", "dbt", "etl", "sql", "bigquery"],
+    8: ["embedded", "firmware", "hardware", "c/c++", "low level", "rtos"],
+    9: ["security", "appsec", "cyber", "soc", "penetration", "threat", "vulnerability"],
+    10: ["product manager", "product management", "technical product", "product owner"],
+    11: ["qa", "automation", "test", "quality", "playwright", "cypress", "sdet"],
+    12: ["support", "it specialist", "sysadmin", "helpdesk", "system administrator"],
+    13: ["blockchain", "web3", "smart contract", "crypto", "solidity"],
+    14: ["recruiter", "talent", "sourcer", "hr", "people"],
+    15: ["vp", "director", "head of", "engineering manager", "team lead", "lead", "leadership"],
+    16: ["architect", "enterprise", "system architect", "solutions architect", "principal"],
+    17: ["java", "spring", "backend", "microservice", "hibernate"],
+    18: ["analyst", "data analyst", "bi", "tableau", "powerbi", "sql", "dashboard"],
+    19: ["cyber", "full stack", "security", "react", "python", "backend"],
+}
+
+
+def clean_html(raw_html: str) -> str:
+    """Strip basic HTML tags and entities for cleaner evaluation."""
+    clean = re.sub(r"<[^>]+>", " ", raw_html)
+    clean = clean.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean
+
+
+def load_real_jobs_from_sqlite(limit: int = 500) -> List[Dict[str, Any]]:
+    """Load authentic, raw job postings from SQLite database."""
+    if not REAL_JOBS_DB.exists():
+        raise FileNotFoundError(f"Database {REAL_JOBS_DB} does not exist. Run seeder first.")
+
+    conn = sqlite3.connect(REAL_JOBS_DB)
+    c = conn.cursor()
+    c.execute(
+        "SELECT job_id, company, title, description, location, source FROM real_jobs WHERE LENGTH(description) > 100 ORDER BY RANDOM() LIMIT ?",
+        (limit,),
+    )
+    rows = c.fetchall()
+    conn.close()
+
+    jobs = []
+    for r in rows:
+        jobs.append({
+            "job_id": r[0],
+            "company": r[1],
+            "title": r[2],
+            "description": clean_html(r[3]),
+            "raw_description": r[3],
+            "location": r[4],
+            "source": r[5],
+        })
+    logger.info(f"Loaded {len(jobs)} authentic real jobs from {REAL_JOBS_DB}")
+    return jobs
+
+
+def parse_batch_response(
+    raw_response: str,
+    item_cls: Type[BaseModel],
+    batch_cls: Type[BaseModel],
+) -> List[Any]:
+    """Parse batch response safely handling wrapper dicts, bare lists, single objects, and markdown fences."""
+    cleaned = raw_response.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```$", "", cleaned)
+        cleaned = cleaned.strip()
+
+    # 1. Try direct batch model validation
+    try:
+        batch_obj = batch_cls.model_validate_json(cleaned)
+        return getattr(batch_obj, "items", [])
+    except Exception:
+        pass
+
+    # 2. Try JSON parse and inspect structure
+    try:
+        data = json.loads(cleaned)
+    except Exception as e:
+        logger.warning(f"Failed to parse JSON response: {e}. Raw response snippet: {cleaned[:200]}")
+        return []
+
+    items = []
+    if isinstance(data, dict):
+        if "items" in data and isinstance(data["items"], list):
+            for x in data["items"]:
+                try:
+                    items.append(item_cls.model_validate(x))
+                except Exception as ex:
+                    logger.warning(f"Error validating item: {ex}")
+        else:
+            try:
+                items.append(item_cls.model_validate(data))
+            except Exception as ex:
+                logger.warning(f"Error validating single object item: {ex}")
+    elif isinstance(data, list):
+        for x in data:
+            try:
+                items.append(item_cls.model_validate(x))
+            except Exception as ex:
+                logger.warning(f"Error validating item in list: {ex}")
+
+    return items
+
+
+async def annotate_match_scoring_batch(
     gateway: ResilientLLMGateway,
-    task_prompt: str,
-    system_prompt: str,
-    expected_count: int,
+    pairs: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Prompt the LLM gateway to generate structured synthetic examples in JSON."""
-    full_prompt = (
-        f"{task_prompt}\n\n"
-        f"Generate exactly {expected_count} diverse, realistic examples. "
-        "Include realistic tech stack combinations, edge cases, both English and Hebrew listings.\n"
-        "Return ONLY a valid JSON array of objects, with no markdown code fences and no conversational filler."
+    """Use LLM-as-a-Judge to evaluate real job vs candidate CV pairs."""
+    eval_items = []
+    for idx, p in enumerate(pairs):
+        eval_items.append({
+            "id": idx,
+            "job_title": p["job_title"],
+            "job_description_excerpt": p["job_description"][:500],
+            "candidate_cv": p["candidate_cv"],
+        })
+
+    prompt = f"""You are an elite, objective technical recruiter acting as an LLM Judge.
+You must EVALUATE each real job description against the candidate CV. You must NOT generate text or modify descriptions.
+
+Evaluate each pair on three dimensions:
+1. "skill_match" (integer 0 to 4):
+   - 0: No skill overlap (e.g. Accountant applying to Linux Kernel dev)
+   - 1: Weak overlap (only tangential tools like Git, but zero primary tech)
+   - 2: Partial overlap (knows ~50% of core stack, e.g. Knows Python but no ML/PyTorch)
+   - 3: Strong overlap (knows primary stack and core tools, small secondary gaps)
+   - 4: Perfect overlap (possesses all required skills and primary competencies)
+
+2. "seniority_fit" (integer 0 to 4):
+   - 0: Far too junior (e.g. Junior 1 yr applying for Staff 10+ yrs)
+   - 1: Slightly junior (e.g. Junior 2 yrs applying for Mid 3-4 yrs)
+   - 2: Good fit (ideal seniority alignment)
+   - 3: Senior (slightly more experienced than role requires)
+   - 4: Overqualified (e.g. Director/Principal 15+ yrs applying for entry level junior)
+
+3. "recruiter_fit" (boolean):
+   - Would a human technical recruiter invite this candidate to a first-round interview? (true/false)
+
+Pairs to evaluate:
+{json.dumps(eval_items, indent=1, ensure_ascii=False)}
+
+Return a JSON object with an "items" array containing the evaluated objects with fields: "id", "skill_match", "seniority_fit", "recruiter_fit", "reasoning".
+"""
+
+    system_prompt = "You are an objective technical recruiter evaluation judge. Output strictly valid JSON matching the schema."
+
+    raw_response = await gateway.ask_question(
+        question=prompt,
+        system_prompt=system_prompt,
+        response_schema=MatchScoringBatchOutput,
     )
 
-    # Use gateway internal call directly to avoid screening question cache/formatting
-    providers = gateway._get_provider_chain()
-    if not providers:
-        raise RuntimeError("No LLM providers available in gateway chain.")
+    items = parse_batch_response(raw_response, MatchScoringItem, MatchScoringBatchOutput)
+    label_map = {}
+    for pos, it in enumerate(items):
+        item_id = getattr(it, "id", None)
+        if item_id is not None and isinstance(item_id, int):
+            label_map[item_id] = it
+        else:
+            label_map[pos] = it
 
-    last_err = None
-    for name, fn in providers:
-        try:
-            logger.info("Requesting batch generation via provider: %s", name)
-            raw = await gateway._execute_with_retry(name, lambda f=fn: f(full_prompt, system_prompt))
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                lines = cleaned.splitlines()
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                cleaned = "\n".join(lines).strip()
-            data = json.loads(cleaned)
-            if isinstance(data, list):
-                return data
-            logger.warning("Provider %s did not return a JSON array", name)
-        except Exception as e:
-            logger.warning("Provider %s failed during batch gen: %s", name, e)
-            last_err = e
-
-    raise RuntimeError(f"All providers failed to generate batch: {last_err}")
+    annotated = []
+    for idx, p in enumerate(pairs):
+        lbl = label_map.get(idx) or (items[idx] if idx < len(items) else None)
+        if lbl:
+            annotated.append({
+                "job_title": p["job_title"],
+                "job_description": p["job_description"],
+                "candidate_cv": p["candidate_cv"],
+                "skill_match": lbl.skill_match,
+                "seniority_fit": lbl.seniority_fit,
+                "recruiter_fit": lbl.recruiter_fit,
+                "reasoning": lbl.reasoning,
+            })
+    return annotated
 
 
-async def generate_match_scoring_samples(
-    gateway: ResilientLLMGateway, count: int
+async def generate_real_match_scoring(
+    gateway: ResilientLLMGateway, real_jobs: List[Dict[str, Any]], target_count: int, batch_size: int = 8
 ) -> List[Dict[str, Any]]:
-    """Generate (job_description, candidate_cv) pairs with 3-question ensemble labels.
+    """Create balanced pairs of real jobs and static CVs (55% targeted domain, 45% random negative), then annotate via LLM-as-a-Judge."""
+    logger.info(f"Generating {target_count} balanced real-world match scoring samples...")
+    results: List[Dict[str, Any]] = []
 
-    Enforces a realistic distribution:
-    - ~35% strong matches (skill_match 3-4, seniority 2-3, recruiter_fit true)
-    - ~35% hard negatives / near misses (e.g. Java dev applying to Python role; Junior applying to Staff;
-      Senior applying to entry level; frontend dev applying to DevOps)
-    - ~30% partial matches (skill_match 1-2, seniority 1-2, recruiter_fit false or borderline)
-    """
-    prompt = """Generate job-candidate evaluation samples for training an AI recruiter triage model.
-CRITICAL: Do NOT generate only perfect matches! Enforce this distribution across the batch:
-1. Hard Negatives / Near Misses (~35%):
-   - Candidate has the right seniority but entirely wrong core language (e.g. 7-year Java/Spring dev applying for Python/FastAPI ML role).
-   - Junior candidate (1-2 years) applying for Senior/Principal role (seniority_fit: 0, recruiter_fit: false).
-   - Overqualified / Director-level applying for Junior developer (seniority_fit: 4, recruiter_fit: false).
-   - Domain mismatch (e.g. Frontend React developer applying for Linux Kernel / Embedded C role).
-2. Partial Matches (~30%):
-   - Candidate knows 1-2 secondary tools (e.g. Docker, Git) but lacks primary stack (e.g. no Go experience for Senior Go role).
-3. Strong Matches (~35%):
-   - Direct stack and seniority alignment.
+    # Precompute domain job matches for each CV profile
+    cv_domain_matches: Dict[int, List[Dict[str, Any]]] = {}
+    for cv_idx, kws in CV_DOMAIN_KEYWORDS.items():
+        patterns = [re.compile(r"\b" + re.escape(kw) + r"\b", re.IGNORECASE) for kw in kws]
+        matches = [
+            j for j in real_jobs
+            if any(p.search(j["title"]) for p in patterns)
+        ]
+        if matches:
+            cv_domain_matches[cv_idx] = matches
 
-For each sample, provide:
-- "job_title": string
-- "job_description": 2-4 sentences describing requirements, tech stack, and seniority
-- "candidate_cv": 2-4 sentences describing candidate's stack, experience, projects, and seniority
-- "skill_match": integer 0-4 (0: None, 1: Weak, 2: Partial, 3: Strong, 4: Perfect)
-- "seniority_fit": integer 0-4 (0: Far too junior, 1: Slightly junior, 2: Good fit, 3: Senior, 4: Overqualified)
-- "recruiter_fit": boolean (true if candidate would realistically get phone screen, false otherwise)
-- "match_type": "strong_match" | "hard_negative" | "partial_match"
-- "reasoning": 1-2 sentences explaining why the recruiter made this decision"""
+    valid_cv_indices = list(cv_domain_matches.keys())
 
-    system = "You are an expert technical recruiter calibrating an AI job matching dataset. You are rigorous and reject unqualified candidates."
-    return await generate_batch_with_llm(gateway, prompt, system, count)
+    # Build balanced candidate pairs
+    candidate_pairs = []
+    used_combos = set()
+    targeted_target = int(target_count * 0.55)
 
+    # 1. Targeted Domain Pairs (generates true positives & partial matches: scores 2, 3, 4)
+    attempts = 0
+    while len(candidate_pairs) < targeted_target and attempts < targeted_target * 10:
+        attempts += 1
+        cv_idx = random.choice(valid_cv_indices)
+        job = random.choice(cv_domain_matches[cv_idx])
+        combo_key = (job["job_id"], cv_idx)
+        if combo_key in used_combos:
+            continue
+        used_combos.add(combo_key)
+        candidate_pairs.append({
+            "job_title": job["title"],
+            "job_description": job["description"],
+            "candidate_cv": CV_MATRIX[cv_idx],
+        })
 
-async def generate_dedup_samples(
-    gateway: ResilientLLMGateway, count: int
-) -> List[Dict[str, Any]]:
-    """Generate (job_a, job_b) pairs with duplicate verification labels.
+    # 2. Random Cross-Product Pairs (generates authentic hard & soft negatives: scores 0, 1)
+    attempts = 0
+    while len(candidate_pairs) < target_count and attempts < target_count * 10:
+        attempts += 1
+        job = random.choice(real_jobs)
+        cv_idx = random.randint(0, len(CV_MATRIX) - 1)
+        combo_key = (job["job_id"], cv_idx)
+        if combo_key in used_combos:
+            continue
+        used_combos.add(combo_key)
+        candidate_pairs.append({
+            "job_title": job["title"],
+            "job_description": job["description"],
+            "candidate_cv": CV_MATRIX[cv_idx],
+        })
 
-    Enforces:
-    - ~40% true duplicates (cross-postings with title variations, different ATS formatting, same company)
-    - ~40% hard negatives (same company different seniority, same company different department, same title different company)
-    - ~20% obvious negatives
-    """
-    prompt = """Generate pairs of job postings to train a cross-platform duplicate detection engine.
-CRITICAL: Include subtle hard negatives that string matching or naive algorithms fail on!
-Required distribution:
-1. True Duplicates (~40%):
-   - Cross-postings across platforms (e.g. "Senior Python Engineer" on Comeet vs "Sr. Software Engineer - Python" on LinkedIn at the same company).
-   - Hebrew vs English titles for the exact same opening (e.g. "מפתח Fullstack" vs "Full Stack Developer" at same company).
-   - Same job posted with slightly different location labels (e.g. "Tel Aviv (Hybrid)" vs "Israel - Central").
-2. Hard Negatives (~40%):
-   - SAME company, SAME tech stack, but DIFFERENT seniority (e.g. "Junior Backend Developer" vs "Tech Lead Backend" at Monday.com).
-   - SAME company, DIFFERENT role (e.g. "Product Manager - AI" vs "AI Research Scientist" at same company).
-   - SAME exact title, DIFFERENT company (e.g. "Senior DevOps Engineer" at Wix vs "Senior DevOps Engineer" at AppsFlyer).
-   - Parent company vs subsidiary listing different requisitions.
-3. Obvious Negatives (~20%): Completely different companies and titles.
-
-For each sample, provide:
-- "job_a": {"title": string, "company": string, "location": string}
-- "job_b": {"title": string, "company": string, "location": string}
-- "is_duplicate": boolean (true if these represent the exact same opening, false otherwise)
-- "pair_type": "cross_platform_dup" | "same_co_diff_role" | "same_title_diff_co" | "diff_all"
-- "reasoning": brief explanation"""
-
-    system = "You are an ATS data engineer specializing in job aggregation deduplication and anti-collision."
-    return await generate_batch_with_llm(gateway, prompt, system, count)
-
-
-async def generate_role_classification_samples(
-    gateway: ResilientLLMGateway, count: int
-) -> List[Dict[str, Any]]:
-    """Generate role title/description samples with 5-class categorization."""
-    prompt = """Generate job titles and snippets for role category classification.
-Categories MUST be one of:
-["Core Engineering", "Engineering-Adjacent", "Technical Hybrid", "Non-Technical", "Administrative"]
-
-CRITICAL: Emphasize boundary and edge cases:
-- Technical Hybrid: Solutions Architect, Developer Advocate / DevRel, Technical Product Manager (TPM), Forward Deployed Engineer.
-- Engineering-Adjacent: Data Analyst, BI Developer, QA Manual, Technical Support Tier 3, SRE Operations.
-- Administrative: Scrum Master, Agile Coach, IT Helpdesk, Project Coordinator.
-- Non-Technical: HR Recruiter, Sales Executive, Marketing Manager, Legal Counsel.
-- Core Engineering: Backend, Fullstack, Frontend, Embedded, ML Engineer, DevOps Infrastructure.
-
-Include Hebrew titles (e.g. "מנהל מוצר טכנולוגי", "איש סיסטם ותמיכה", "מהנדס אלגוריתמים").
-
-For each sample, provide:
-- "title": string
-- "snippet": 1-2 sentence description
-- "category": one of the 5 categories above
-- "reasoning": brief explanation"""
-
-    system = "You are an AI taxonomy specialist classifying job postings into career categories."
-    return await generate_batch_with_llm(gateway, prompt, system, count)
-
-
-async def generate_section_parsing_samples(
-    gateway: ResilientLLMGateway, count: int
-) -> List[Dict[str, Any]]:
-    """Generate job description paragraphs with section type labels."""
-    prompt = """Generate individual paragraphs or snippets from diverse job postings (50% English, 50% Hebrew).
-Section types MUST be one of:
-["Requirements", "Responsibilities", "Company overview", "Benefits", "Application instructions", "Boilerplate"]
-
-CRITICAL: Include unstructured and tricky formats:
-- Bullet points WITHOUT clear section headers (e.g. starting directly with "- 3+ years experience...").
-- Mixed content (e.g. paragraph describing company mission while casually mentioning required degree).
-- Hebrew listings with colloquial phrasing (e.g. "מה אנחנו מציעים?", "מה נדרש ממך?", "קצת עלינו").
-- Legal boilerplate and EEO statements.
-
-For each sample, provide:
-- "paragraph": text of the snippet
-- "section_type": one of the 6 section types above
-- "language": "en" | "he"
-- "has_explicit_header": boolean"""
-
-    system = "You are an NLP engineer parsing unstructured ATS job postings without relying on regex headers."
-    return await generate_batch_with_llm(gateway, prompt, system, count)
-
-
-async def generate_field_mapping_samples(
-    gateway: ResilientLLMGateway, count: int
-) -> List[Dict[str, Any]]:
-    """Generate job application form fields with target intent labels."""
-    prompt = """Generate form field inputs found in various ATS application forms (Comeet, Greenhouse, Lever, Workday).
-Field intents MUST be one of:
-["First name", "Last name", "Full name", "Email", "Phone", "LinkedIn", "GitHub", "Resume upload", "Cover letter", "Years of experience", "Education", "Work authorization", "Salary expectation", "Custom screening question", "Other"]
-
-CRITICAL: Include non-standard, cryptic, and Hebrew labels:
-- Ambiguous labels (e.g. "Tell us about a time...", "Links / Portfolio", "CV / Attachment").
-- Hebrew labels (e.g. "טלפון נייד", "שם מלא", "ציפיות שכר חודשיות ברוטו", "האם יש ברשותך אישור עבודה תקף?").
-- HTML placeholder cues (e.g. placeholder "https://...", "e.g. 35,000 NIS").
-- Screening questions (e.g. "Are you willing to work 3 days from the office in Herzliya?").
-
-For each sample, provide:
-- "label": field label text
-- "placeholder": optional placeholder text
-- "field_type": e.g. "text", "textarea", "select", "file", "radio"
-- "field_intent": one of the 15 intents above"""
-
-    system = "You are an automation engineer mapping HTML web form fields to candidate profile attributes."
-    return await generate_batch_with_llm(gateway, prompt, system, count)
-
-
-async def run_task_loop(
-    gateway: ResilientLLMGateway,
-    name: str,
-    gen_fn: Any,
-    target_count: int,
-    batch_size: int,
-    holdout_ratio: float,
-) -> None:
-    """Run iterative generation loop for a single task until target count is reached."""
-    train_file = TRAINING_DIR / f"{name}_train.json"
-    holdout_file = HOLDOUT_DIR / f"{name}_holdout.json"
-
-    existing_train: List[Dict[str, Any]] = (
-        json.loads(train_file.read_text()) if train_file.exists() else []
-    )
-    existing_holdout: List[Dict[str, Any]] = (
-        json.loads(holdout_file.read_text()) if holdout_file.exists() else []
-    )
-
-    total_existing = len(existing_train) + len(existing_holdout)
-    if total_existing >= target_count:
-        logger.info(
-            "Task %s already has %d samples (target: %d). Skipping.",
-            name,
-            total_existing,
-            target_count,
-        )
-        return
-
+    random.shuffle(candidate_pairs)
     logger.info(
-        "Starting generation for %s: %d existing, %d target (need %d more)...",
-        name,
-        total_existing,
-        target_count,
-        target_count - total_existing,
+        f"Assembled {len(candidate_pairs)} candidate pairs ({len([p for p in candidate_pairs if p in candidate_pairs[:targeted_target]])} targeted domain, "
+        f"{len(candidate_pairs) - targeted_target} random cross-product)."
     )
 
-    while (len(existing_train) + len(existing_holdout)) < target_count:
-        needed = target_count - (len(existing_train) + len(existing_holdout))
-        current_batch = min(batch_size, needed)
-
+    # Batch process through LLM-as-a-Judge
+    for i in range(0, len(candidate_pairs), batch_size):
+        batch = candidate_pairs[i : i + batch_size]
+        logger.info(f"Annotating batch {i // batch_size + 1}/{(len(candidate_pairs) + batch_size - 1) // batch_size} ({len(batch)} pairs)...")
         try:
-            samples = await gen_fn(gateway, current_batch)
-            if not samples:
-                logger.warning("Empty batch received for %s. Retrying in 2s...", name)
-                await asyncio.sleep(2.0)
-                continue
+            annotated_batch = await annotate_match_scoring_batch(gateway, batch)
+            results.extend(annotated_batch)
+        except Exception as ex:
+            logger.warning(f"Batch {i // batch_size + 1} annotation failed: {ex}. Continuing with remaining batches...")
 
-            random.shuffle(samples)
-            split_idx = int(len(samples) * (1.0 - holdout_ratio))
-            train_part = samples[:split_idx]
-            holdout_part = samples[split_idx:]
-
-            existing_train.extend(train_part)
-            existing_holdout.extend(holdout_part)
-
-            train_file.write_text(json.dumps(existing_train, indent=2, ensure_ascii=False))
-            holdout_file.write_text(json.dumps(existing_holdout, indent=2, ensure_ascii=False))
-
-            total_now = len(existing_train) + len(existing_holdout)
-            logger.info(
-                "[%s Progress] %d / %d samples generated (Train: %d, Holdout: %d)",
-                name,
-                total_now,
-                target_count,
-                len(existing_train),
-                len(existing_holdout),
-            )
-
-            # Polite delay between batches to respect rate limits
-            await asyncio.sleep(1.5)
-
-        except Exception as e:
-            logger.error("Error during batch generation for %s: %s. Pausing 5s...", name, e)
-            await asyncio.sleep(5.0)
+    return results
 
 
-async def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate synthetic training data for TechJobMCP v2 Laya models")
-    parser.add_argument("--target-per-task", type=int, default=400, help="Target total samples per task (default: 400 -> 2,000 total)")
-    parser.add_argument("--batch-size", type=int, default=15, help="Number of items to request per LLM batch call")
-    parser.add_argument("--holdout-ratio", type=float, default=0.2, help="Ratio of samples to reserve for holdout set")
-    parser.add_argument("--task", type=str, default="all", help="Specific task to run (match_scoring, dedup_verification, role_classification, section_parsing, field_mapping, or all)")
-    args = parser.parse_args()
+async def generate_real_dedup_samples(
+    gateway: ResilientLLMGateway, real_jobs: List[Dict[str, Any]], target_count: int, batch_size: int = 10
+) -> List[Dict[str, Any]]:
+    """Generate authentic deduplication pairs using real jobs and LLM judge."""
+    logger.info(f"Generating {target_count} authentic deduplication samples...")
+    pairs: List[Dict[str, Any]] = []
 
+    # Group real jobs by company for authentic same-company hard negatives
+    company_jobs: Dict[str, List[Dict[str, Any]]] = {}
+    for j in real_jobs:
+        c = j["company"]
+        company_jobs.setdefault(c, []).append(j)
+
+    # 1. Authentic Hard Negatives: Same company, different roles (~50%)
+    hard_neg_count = target_count // 2
+    for _ in range(hard_neg_count):
+        # Pick a company with multiple jobs
+        candidates = [c for c, jobs in company_jobs.items() if len(jobs) >= 2]
+        if candidates:
+            comp = random.choice(candidates)
+            j_a, j_b = random.sample(company_jobs[comp], 2)
+            pairs.append({
+                "job_a": {"title": j_a["title"], "company": j_a["company"], "location": j_a["location"]},
+                "job_b": {"title": j_b["title"], "company": j_b["company"], "location": j_b["location"]},
+                "is_duplicate": False,
+                "reasoning": f"Authentic hard negative: Same company ({comp}) but different roles ({j_a['title']} vs {j_b['title']}).",
+            })
+        else:
+            # Fallback across companies
+            j_a, j_b = random.sample(real_jobs, 2)
+            pairs.append({
+                "job_a": {"title": j_a["title"], "company": j_a["company"], "location": j_a["location"]},
+                "job_b": {"title": j_b["title"], "company": j_b["company"], "location": j_b["location"]},
+                "is_duplicate": False,
+                "reasoning": "Different companies and roles.",
+            })
+
+    # 2. Authentic True Duplicates: Real job with realistic aggregator title variations (~50%)
+    dup_count = target_count - len(pairs)
+    variations = [
+        lambda t: f"{t} (Hybrid)",
+        lambda t: f"{t} - Tel Aviv",
+        lambda t: t.replace("Engineer", "Developer") if "Engineer" in t else f"Senior {t}",
+        lambda t: f"דרוש/ה {t}",
+        lambda t: f"{t} [Remote / Onsite]",
+    ]
+
+    for _ in range(dup_count):
+        j = random.choice(real_jobs)
+        var_fn = random.choice(variations)
+        title_b = var_fn(j["title"])
+        pairs.append({
+            "job_a": {"title": j["title"], "company": j["company"], "location": j["location"]},
+            "job_b": {"title": title_b, "company": j["company"], "location": j["location"]},
+            "is_duplicate": True,
+            "reasoning": f"True duplicate with common aggregator formatting variation.",
+        })
+
+    random.shuffle(pairs)
+    return pairs[:target_count]
+
+
+async def generate_real_role_classification(
+    gateway: ResilientLLMGateway, real_jobs: List[Dict[str, Any]], target_count: int, batch_size: int = 15
+) -> List[Dict[str, Any]]:
+    """Classify real jobs into career categories using LLM judge."""
+    logger.info(f"Classifying {target_count} real jobs into role categories...")
+    sampled = random.sample(real_jobs, min(target_count, len(real_jobs)))
+    results = []
+
+    for i in range(0, len(sampled), batch_size):
+        batch = sampled[i : i + batch_size]
+        items = [{"id": idx, "title": b["title"], "snippet": b["description"][:300]} for idx, b in enumerate(batch)]
+
+        prompt = f"""Classify these REAL tech company job postings into exactly ONE role category:
+- Core Engineering
+- Engineering-Adjacent
+- Technical Hybrid
+- Administrative
+- Non-Technical
+
+Jobs:
+{json.dumps(items, indent=1, ensure_ascii=False)}
+
+Return a JSON object with an "items" array where each object has fields: "id", "category".
+"""
+        raw_response = await gateway.ask_question(
+            question=prompt,
+            system_prompt="You are an expert role classification judge. Output strictly valid JSON matching the schema.",
+            response_schema=RoleClassificationBatchOutput,
+        )
+        parsed_items = parse_batch_response(raw_response, RoleClassificationItem, RoleClassificationBatchOutput)
+        cat_map = {}
+        for pos, it in enumerate(parsed_items):
+            item_id = getattr(it, "id", None)
+            if item_id is not None and isinstance(item_id, int):
+                cat_map[item_id] = it.category
+            else:
+                cat_map[pos] = it.category
+
+        for idx, b in enumerate(batch):
+            cat = cat_map.get(idx) or (parsed_items[idx].category if idx < len(parsed_items) else "Core Engineering")
+            results.append({
+                "title": b["title"],
+                "snippet": b["description"][:300],
+                "category": cat,
+                "reasoning": f"Classified from authentic {b['company']} job posting.",
+            })
+
+    return results
+
+
+async def generate_real_section_parsing(
+    gateway: ResilientLLMGateway, real_jobs: List[Dict[str, Any]], target_count: int, batch_size: int = 15
+) -> List[Dict[str, Any]]:
+    """Extract real paragraphs from real job descriptions and label them with LLM judge."""
+    logger.info(f"Extracting and labeling {target_count} real paragraphs for section parsing...")
+    paragraphs = []
+    for j in real_jobs:
+        # Split description by sentences or breaks
+        parts = re.split(r"\n\s*\n|\.\s{2,}|<br\s*/?>|</p>", j["raw_description"])
+        for p in parts:
+            clean_p = clean_html(p)
+            if 60 <= len(clean_p) <= 400:
+                paragraphs.append(clean_p)
+
+    sampled_paras = random.sample(paragraphs, min(target_count, len(paragraphs)))
+    results = []
+
+    for i in range(0, len(sampled_paras), batch_size):
+        batch = sampled_paras[i : i + batch_size]
+        items = [{"id": idx, "paragraph": b} for idx, b in enumerate(batch)]
+
+        prompt = f"""Label each authentic job description paragraph with its primary section type:
+- Requirements
+- Responsibilities
+- Company overview
+- Benefits
+- Application instructions
+- Boilerplate
+
+Paragraphs:
+{json.dumps(items, indent=1, ensure_ascii=False)}
+
+Return a JSON object with an "items" array where each object has fields: "id", "section_type".
+"""
+        raw_response = await gateway.ask_question(
+            question=prompt,
+            system_prompt="You are an expert section parsing judge. Output strictly valid JSON matching the schema.",
+            response_schema=SectionParsingBatchOutput,
+        )
+        parsed_items = parse_batch_response(raw_response, SectionParsingItem, SectionParsingBatchOutput)
+        sec_map = {}
+        for pos, it in enumerate(parsed_items):
+            item_id = getattr(it, "id", None)
+            if item_id is not None and isinstance(item_id, int):
+                sec_map[item_id] = it.section_type
+            else:
+                sec_map[pos] = it.section_type
+
+        for idx, b in enumerate(batch):
+            sec = sec_map.get(idx) or (parsed_items[idx].section_type if idx < len(parsed_items) else "Boilerplate")
+            results.append({
+                "paragraph": b,
+                "section_type": sec,
+                "language": "he" if any("\u0590" <= c <= "\u05ea" for c in b) else "en",
+            })
+
+    return results
+
+
+def split_train_holdout(samples: List[Dict[str, Any]], holdout_ratio: float = 0.2) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Deterministically split samples into training and holdout sets with guaranteed zero leakage."""
+    random.seed(42)
+    seen = set()
+    unique_samples = []
+    for s in samples:
+        key = json.dumps(s, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            unique_samples.append(s)
+
+    random.shuffle(unique_samples)
+    split_idx = int(len(unique_samples) * (1.0 - holdout_ratio))
+    return unique_samples[:split_idx], unique_samples[split_idx:]
+
+
+def save_dataset(name: str, train: List[Dict[str, Any]], holdout: List[Dict[str, Any]]) -> None:
+    """Save train and holdout splits to JSON files."""
     TRAINING_DIR.mkdir(parents=True, exist_ok=True)
     HOLDOUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    train_path = TRAINING_DIR / f"{name}_train.json"
+    holdout_path = HOLDOUT_DIR / f"{name}_holdout.json"
+
+    with open(train_path, "w", encoding="utf-8") as f:
+        json.dump(train, f, indent=2, ensure_ascii=False)
+
+    with open(holdout_path, "w", encoding="utf-8") as f:
+        json.dump(holdout, f, indent=2, ensure_ascii=False)
+
+    logger.info("Saved %s: %d train, %d holdout", name, len(train), len(holdout))
+
+
+async def run_pipeline(target_per_task: int, batch_size: int, task: str = "all", provider: str = "gemini") -> None:
+    """Run Annotation over Generation pipeline."""
+    if provider:
+        os.environ["PRIMARY_LLM_PROVIDER"] = provider
+
+    real_jobs = load_real_jobs_from_sqlite(limit=600)
     gateway = ResilientLLMGateway()
 
-    task_map = {
-        "match_scoring": generate_match_scoring_samples,
-        "dedup_verification": generate_dedup_samples,
-        "role_classification": generate_role_classification_samples,
-        "section_parsing": generate_section_parsing_samples,
-        "field_mapping": generate_field_mapping_samples,
-    }
+    tasks_to_run = ["match_scoring", "dedup_verification", "role_classification", "section_parsing"]
+    if task != "all":
+        tasks_to_run = [task]
 
-    selected_tasks = (
-        task_map.items() if args.task == "all" else [(args.task, task_map[args.task])]
-    )
+    for t in tasks_to_run:
+        if t == "match_scoring":
+            samples = await generate_real_match_scoring(gateway, real_jobs, target_per_task, batch_size)
+            tr, ho = split_train_holdout(samples, holdout_ratio=0.2)
+            save_dataset("match_scoring", tr, ho)
 
-    for name, gen_fn in selected_tasks:
-        await run_task_loop(
-            gateway=gateway,
-            name=name,
-            gen_fn=gen_fn,
-            target_count=args.target_per_task,
-            batch_size=args.batch_size,
-            holdout_ratio=args.holdout_ratio,
-        )
+        elif t == "dedup_verification":
+            samples = await generate_real_dedup_samples(gateway, real_jobs, target_per_task, batch_size)
+            tr, ho = split_train_holdout(samples, holdout_ratio=0.2)
+            save_dataset("dedup_verification", tr, ho)
 
-    logger.info("All requested generation tasks completed successfully!")
+        elif t == "role_classification":
+            samples = await generate_real_role_classification(gateway, real_jobs, target_per_task, batch_size)
+            tr, ho = split_train_holdout(samples, holdout_ratio=0.2)
+            save_dataset("role_classification", tr, ho)
+
+        elif t == "section_parsing":
+            samples = await generate_real_section_parsing(gateway, real_jobs, target_per_task, batch_size)
+            tr, ho = split_train_holdout(samples, holdout_ratio=0.2)
+            save_dataset("section_parsing", tr, ho)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Annotation over Generation Data Pipeline for TechJobMCP v2.")
+    parser.add_argument("--target-per-task", type=int, default=100, help="Target samples per task")
+    parser.add_argument("--batch-size", type=int, default=5, help="Batch size for LLM-as-a-judge annotation (default: 5)")
+    parser.add_argument("--task", type=str, default="all", help="Specific task or 'all'")
+    parser.add_argument("--provider", type=str, default="gemini", help="Preferred primary LLM provider (default: gemini)")
+    args = parser.parse_args()
+
+    asyncio.run(run_pipeline(args.target_per_task, args.batch_size, args.task, args.provider))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

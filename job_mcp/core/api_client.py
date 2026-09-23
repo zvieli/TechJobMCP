@@ -1234,16 +1234,40 @@ NON_TECH_ROLE_TERMS: tuple[str, ...] = (
 
 
 
-def detect_seniority_level(title: str, text: str = "") -> Optional[str]:
+def detect_seniority_level(title: str, text: str = "", enable_system1: bool = True) -> Optional[str]:
     """Detect seniority level from job title and description.
+
+    Uses System 1 (LazyLayaEngine) calibrated classification when available,
+    falling back to title-based keyword heuristics.
 
     Args:
         title: Job title string.
         text: Optional job description or body text.
+        enable_system1: Whether to query LazyLayaEngine (default: True).
 
     Returns:
         Optional[str]: Detected seniority level ('Student', 'Intern', 'Junior', 'Mid', 'Senior', 'Lead') or None.
     """
+    if enable_system1:
+        try:
+            from job_mcp.core.system1.engine import LazyLayaEngine
+
+            engine = LazyLayaEngine.get_instance()
+            if engine.is_loaded():
+                state = f"Title: {title}\nDescription: {(text or '')[:400]}"
+                options = ["Junior", "Mid", "Senior", "Lead", "Student / Intern"]
+                choice, conf = engine.predict_choice(
+                    state,
+                    "What is the seniority level required for this position?",
+                    options,
+                )
+                if conf >= 0.75:
+                    if choice == "Student / Intern":
+                        return "Intern" if "intern" in (title + (text or "")).lower() else "Student"
+                    return choice
+        except Exception as exc:
+            logger.debug("System 1 seniority detection fallback: %s", exc)
+
     title_clean = (title or "").lower()
 
     # 1. Check title first (highest precision)
@@ -1356,6 +1380,7 @@ def calculate_match_score(
     profile: Optional[CandidateProfile] = None,
     display_map: Optional[dict[str, str]] = None,
     enable_semantic: bool = True,
+    enable_system1: bool = False,
 ) -> float:
     """Calculate dynamic requirement-based fit score (0.0 - 100.0) and populate explainability fields on Job.
 
@@ -1615,6 +1640,47 @@ def calculate_match_score(
                 if raw_score > 15.0:
                     raw_score = (raw_score * 0.70) + (job.semantic_score * 0.30)
 
+        # System 1 Neural Ensemble Match Scoring (Phase 3 Upgrade)
+        try:
+            from job_mcp.core.system1.engine import LazyLayaEngine
+
+            s1_engine = LazyLayaEngine.get_instance()
+            if enable_system1 and has_cv_profile and (s1_engine.is_loaded() or s1_engine.load_model() is not None):
+                s1_res = getattr(job, "_precomputed_system1", None)
+                if s1_res is None:
+                    cv_summary = (
+                        f"Skills: {', '.join(profile.skills[:12])}. "
+                        f"Primary: {', '.join(primary_skills[:6])}. "
+                        f"Target Roles: {', '.join(target_roles[:4])}."
+                    )
+                    job_desc = (job.description or f"{job.title} {' '.join(job.tech_stack)}")[:1000]
+                    s1_res = s1_engine.predict_match_scoring_ensemble(job_desc=job_desc, cv_text=cv_summary)
+
+                skill_val = s1_res.get("skill_match", 2)
+                sen_val = s1_res.get("seniority_fit", 2)
+                rec_prob = s1_res.get("recruiter_fit_probability", 0.5)
+                avg_conf = (s1_res.get("skill_confidence", 0.5) + s1_res.get("seniority_confidence", 0.5)) / 2.0
+
+                # System 1 Normalized Score: 0.0 to 100.0
+                sen_points = 20.0 if sen_val in (2, 3) else (10.0 if sen_val == 1 else 0.0)
+                s1_score = (skill_val * 10.0) + sen_points + (rec_prob * 40.0)
+
+                job.system1_confidence = avg_conf
+                job.requires_system2_review = avg_conf < 0.85
+
+                # System 1 is authoritative: NO blending with legacy regex rules!
+                raw_score = s1_score
+            elif enable_system1 and has_cv_profile:
+                # System 1 was requested with CV, but model was unavailable: fail-safe
+                job.system1_confidence = 0.50
+                job.requires_system2_review = True
+                raw_score = min(raw_score, 50.0)
+        except Exception as exc:
+            logger.warning("System 1 match scoring error on '%s': %s", job.job_id, exc, exc_info=True)
+            job.system1_confidence = 0.50
+            job.requires_system2_review = True
+            raw_score = min(raw_score, 50.0)
+
         if is_non_tech_title and not is_explicitly_targeted:
             raw_score = min(raw_score, 15.0)
         elif is_admin_title:
@@ -1628,6 +1694,10 @@ def calculate_match_score(
 
     # 6. Generate explainability reasons
     reasons: list[str] = []
+    if job.system1_confidence is not None:
+        conf_pct = int(job.system1_confidence * 100)
+        status_tag = "Auto-Triaged" if not job.requires_system2_review else "Escalated for System 2 Review"
+        reasons.append(f"System 1 Neural Fit: {conf_pct}% confidence ({status_tag})")
     if all_matched_tokens:
         if has_cv_profile and matched_job_skills:
             cv_names = sorted([display_map.get(s, s.title()) for s in matched_job_skills], key=lambda s: s.lower())
@@ -1683,6 +1753,7 @@ def filter_jobs(
     prefs: JobPreferences,
     profile: Optional[CandidateProfile] = None,
     enable_semantic: Optional[bool] = None,
+    enable_system1: Optional[bool] = None,
 ) -> list[Job]:
     """Filter and score job listings according to user preferences and candidate profile.
 
@@ -1691,12 +1762,18 @@ def filter_jobs(
         prefs: JobPreferences configuration.
         profile: Optional CandidateProfile instance. If omitted, resolved dynamically from prefs.cv_path or preferences.
         enable_semantic: Whether to compute dense semantic similarity during scoring (defaults to False or ENABLE_SEMANTIC_SCORING env var).
+        enable_system1: Whether to evaluate System 1 neural ensemble scoring (defaults to True unless explicitly disabled).
 
     Returns:
         list[Job]: Filtered and ranked list of Job instances sorted by match_score descending.
     """
     if enable_semantic is None:
         enable_semantic = os.getenv("ENABLE_SEMANTIC_SCORING", "false").strip().lower() in ("true", "1", "yes")
+    if enable_system1 is None:
+        if enable_semantic is False:
+            enable_system1 = False
+        else:
+            enable_system1 = os.getenv("ENABLE_SYSTEM1_SCORING", "true").strip().lower() in ("true", "1", "yes")
     has_explicit_profile = profile is not None
     if profile is None:
         if prefs.cv_path:
@@ -1710,6 +1787,7 @@ def filter_jobs(
                 search_queries=prefs.tech_stack,
             )
 
+    has_cv_profile = bool(prefs.cv_path or (profile and profile.skills and profile.skills != prefs.tech_stack))
     filtered: list[Job] = []
 
     # Prepare display mapping
@@ -1807,16 +1885,53 @@ def filter_jobs(
             if parsed_salary is not None and parsed_salary < prefs.min_salary:
                 continue
 
-        # 5. Calculate match score and enrich job fields
-        calculate_match_score(
-            job, prefs, profile=profile, display_map=display_map, enable_semantic=enable_semantic
-        )
         filtered.append(job)
 
+    # 5. Batched System 1 Neural Ensemble Pass (Vectorized Tensor Forward Passes)
+    if enable_system1 and has_cv_profile and filtered:
+        try:
+            from job_mcp.core.system1.engine import LazyLayaEngine
+
+            s1_engine = LazyLayaEngine.get_instance()
+            if s1_engine.is_loaded() or s1_engine.load_model() is not None:
+                primary_stack = profile.primary_stack if (profile and profile.primary_stack) else (profile.skills if profile else [])
+                target_roles = profile.target_roles if profile else []
+                cv_summary = (
+                    f"Skills: {', '.join(profile.skills[:12]) if profile else ''}. "
+                    f"Primary: {', '.join(primary_stack[:6])}. "
+                    f"Target Roles: {', '.join(target_roles[:4])}."
+                )
+                batch_items = [
+                    {
+                        "job_desc": (j.description or f"{j.title} {' '.join(j.tech_stack)}")[:1000],
+                        "cv_text": cv_summary,
+                    }
+                    for j in filtered
+                ]
+                batch_results = s1_engine.predict_match_scoring_batch(batch_items)
+                for j, s1_res in zip(filtered, batch_results):
+                    setattr(j, "_precomputed_system1", s1_res)
+        except Exception as exc:
+            logger.warning("Batched System 1 scoring encountered error: %s", exc)
+
+    # 6. Calculate match score and enrich explainability fields
+    scored_jobs: list[Job] = []
+    for job in filtered:
+        calculate_match_score(
+            job,
+            prefs,
+            profile=profile,
+            display_map=display_map,
+            enable_semantic=enable_semantic,
+            enable_system1=enable_system1,
+        )
+        scored_jobs.append(job)
+
     # Sort descending by match_score
-    filtered.sort(key=lambda j: (j.match_score or 0.0), reverse=True)
-    logger.info("Filtered %d jobs down to %d matching jobs.", len(jobs), len(filtered))
-    return filtered
+    scored_jobs.sort(key=lambda j: (j.match_score or 0.0), reverse=True)
+    logger.info("Filtered %d jobs down to %d matching jobs.", len(jobs), len(scored_jobs))
+
+    return scored_jobs
 
 
 def parse_api_job_dict(raw: dict) -> Job:
@@ -1993,7 +2108,7 @@ def parse_api_job_dict(raw: dict) -> Job:
     is_bookmarked = bool(raw.get("is_saved") or raw.get("is_bookmarked") or False)
     match_score = float(raw["match_score"]) if raw.get("match_score") is not None else None
 
-    seniority_level = detect_seniority_level(title, combined_desc)
+    seniority_level = detect_seniority_level(title, combined_desc, enable_system1=False)
     description_summary = generate_description_summary(combined_desc)
 
     return Job(

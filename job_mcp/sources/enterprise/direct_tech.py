@@ -996,7 +996,7 @@ class DirectTechSource(BaseEnterpriseSource):
 
         # Preferences filtering
         if preferences:
-            tagged_jobs = filter_jobs(tagged_jobs, preferences)
+            tagged_jobs = filter_jobs(tagged_jobs, preferences, enable_semantic=False)
 
         # Truncate
         if limit and len(tagged_jobs) > limit:

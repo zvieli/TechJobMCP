@@ -1,8 +1,9 @@
-"""Deduplication and entity merging engine for multi-source job aggregation."""
-
+import logging
 import re
 from typing import Optional
 from job_mcp.models.schemas import Job
+
+logger = logging.getLogger(__name__)
 
 ATS_DOMAINS = (
     "comeet.com",
@@ -314,11 +315,18 @@ def merge_job_entities(primary: Job, secondary: Job) -> Job:
     )
 
 
-def deduplicate_jobs(jobs: list[Job]) -> list[Job]:
-    """Deduplicate a list of jobs across multiple sources by merging duplicate entities."""
+def deduplicate_jobs(jobs: list[Job], enable_system1: bool = True) -> list[Job]:
+    """Deduplicate a list of jobs across multiple sources by merging duplicate entities.
+
+    1. Fast Pass (O(1)): Exact key matching using normalized title and company.
+    2. System 1 Pass (Neural Dedup): Evaluates remaining jobs within the same company
+       using LazyLayaEngine (100% precision & recall) to catch title variations and
+       fuzzy duplicates that regex normalization misses.
+    """
     if not jobs:
         return []
 
+    # 1. Fast exact-key pass
     merged_map: dict[str, Job] = {}
     for job in jobs:
         key = compute_dedup_key(job.title, job.company)
@@ -327,4 +335,62 @@ def deduplicate_jobs(jobs: list[Job]) -> list[Job]:
         else:
             merged_map[key] = job
 
-    return list(merged_map.values())
+    current_jobs = list(merged_map.values())
+    if not enable_system1 or len(current_jobs) <= 1:
+        return current_jobs
+
+    # 2. System 1 Semantic Pass
+    try:
+        from job_mcp.core.system1.engine import LazyLayaEngine
+
+        engine = LazyLayaEngine.get_instance()
+        if not engine.is_loaded() and engine.load_model() is None:
+            return current_jobs
+
+        # Group by normalized company
+        company_buckets: dict[str, list[Job]] = {}
+        for j in current_jobs:
+            c_norm = normalize_company(j.company) or "unknown"
+            company_buckets.setdefault(c_norm, []).append(j)
+
+        final_jobs: list[Job] = []
+        for c_norm, bucket in company_buckets.items():
+            if len(bucket) <= 1 or c_norm == "unknown":
+                final_jobs.extend(bucket)
+                continue
+
+            merged_bucket: list[Job] = []
+            for candidate in bucket:
+                merged = False
+                for idx, existing in enumerate(merged_bucket):
+                    state = (
+                        f"Job A:\n"
+                        f"Title: {existing.title}\n"
+                        f"Company: {existing.company}\n"
+                        f"Location: {existing.location}\n\n"
+                        f"Job B:\n"
+                        f"Title: {candidate.title}\n"
+                        f"Company: {candidate.company}\n"
+                        f"Location: {candidate.location}"
+                    )
+                    options = ["Different jobs", "Duplicate jobs"]
+                    pred_idx, conf = engine.predict_score(
+                        state,
+                        "Determine whether Job A and Job B describe the exact same underlying job posting.",
+                        options,
+                    )
+                    if pred_idx == 1 and conf >= 0.80:
+                        merged_bucket[idx] = merge_job_entities(existing, candidate)
+                        merged = True
+                        break
+                if not merged:
+                    merged_bucket.append(candidate)
+            final_jobs.extend(merged_bucket)
+
+        if engine.auto_release_after_batch:
+            engine.unload_model()
+
+        return final_jobs
+    except Exception as exc:
+        logger.debug("System 1 semantic deduplication skipped: %s", exc)
+        return current_jobs

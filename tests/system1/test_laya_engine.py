@@ -19,8 +19,8 @@ class TestLazyLayaEngine:
         assert e1 is e2
         assert not e1.is_loaded()
 
-    def test_fallback_when_laya_not_installed(self):
-        engine = LazyLayaEngine(auto_release_after_batch=False)
+    def test_fallback_when_model_missing(self):
+        engine = LazyLayaEngine(model_name="data/models/nonexistent", auto_release_after_batch=False)
         score, conf = engine.predict_score("state", "question", ["A", "B", "C"])
         assert score == 2
         assert conf == 0.50
@@ -34,10 +34,15 @@ class TestLazyLayaEngine:
     def test_match_scoring_ensemble_execution(self):
         engine = LazyLayaEngine(auto_release_after_batch=True)
         res = engine.predict_match_scoring_ensemble(
-            job_desc="Python Backend Engineer, 5+ yrs experience",
-            cv_text="Software Developer, 6 yrs experience in Python and AWS",
+            job_desc="Python Backend Engineer, 5+ yrs experience in FastAPI and AWS",
+            cv_text="Software Developer, 6 yrs experience in Python, FastAPI, and AWS cloud",
         )
         assert "skill_match" in res
         assert "seniority_fit" in res
         assert "recruiter_fit_probability" in res
+        assert 0 <= res["skill_match"] <= 4
+        assert 0.0 <= res["skill_confidence"] <= 1.0
+        assert 0 <= res["seniority_fit"] <= 4
+        assert 0.0 <= res["seniority_confidence"] <= 1.0
+        assert 0.0 <= res["recruiter_fit_probability"] <= 1.0
         assert not engine.is_loaded()  # Auto-released
