@@ -367,6 +367,38 @@ class TestResilientLLMGateway(unittest.IsolatedAsyncioTestCase):
         self.assertIn("enthusiasm for your team's work", result)
         self.assertIn("AI Engineer role", result)
 
+    async def test_provider_fallback_chain_with_tokenharbor(self) -> None:
+        """Verify TokenHarbor is called as primary provider ahead of Gemini."""
+        question = "Do you have experience with Rust?"
+        tokenharbor_answer = "Yes, built async high-throughput backend services using Tokio and Axum."
+
+        self.gateway.tokenharbor_api_key = "fake_tokenharbor_key"
+        self.gateway.gemini_api_key = "fake_gemini_key"
+
+        self.gateway._call_tokenharbor = AsyncMock(return_value=tokenharbor_answer)
+        self.gateway._call_gemini = AsyncMock()
+
+        result = await self.gateway.ask_question(question)
+
+        self.assertEqual(result, tokenharbor_answer)
+        self.gateway._call_tokenharbor.assert_called_once()
+        self.gateway._call_gemini.assert_not_called()
+
+    def test_tokenharbor_env_configuration(self) -> None:
+        """Verify environment variables correctly configure TokenHarbor."""
+        with patch.dict(
+            os.environ,
+            {
+                "TOKENHARBOR_API_KEY": "th_test_key",
+                "TOKENHARBOR_BASE_URL": "https://api.tokenharbor.ai/v1",
+                "TOKENHARBOR_MODEL": "deepseek-v4.1-flash:free",
+            },
+        ):
+            gw = ResilientLLMGateway(cache=LLMCache(db_path=":memory:"))
+            self.assertEqual(gw.tokenharbor_api_key, "th_test_key")
+            self.assertEqual(gw.tokenharbor_base_url, "https://api.tokenharbor.ai/v1")
+            self.assertEqual(gw.tokenharbor_model, "deepseek-v4.1-flash:free")
+
 
 if __name__ == "__main__":
     unittest.main()

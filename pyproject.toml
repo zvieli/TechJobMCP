@@ -28,6 +28,14 @@ dev = [
 ml = [
     "fastembed>=0.4.0",
 ]
+training = [
+    "laya>=0.3.5",
+    "torch>=2.0.0",
+    "transformers>=4.48.0",
+    "datasets>=3.0.0",
+    "safetensors>=0.4.0",
+    "accelerate>=0.26.0",
+]
 
 [project.scripts]
 job-mcp-setup = "job_mcp.setup:main"

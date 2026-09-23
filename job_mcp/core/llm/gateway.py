@@ -9,6 +9,9 @@ import random
 from typing import Any, Callable, Coroutine, List, Optional, Tuple
 
 import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from job_mcp.core.llm.cache import LLMCache
 from job_mcp.core.llm.rate_limiter import TokenBucketRateLimiter
@@ -52,6 +55,9 @@ class ResilientLLMGateway:
         openrouter_base_url: Optional[str] = None,
         ollama_url: Optional[str] = None,
         ollama_model: str = "llama3.2",
+        tokenharbor_api_key: Optional[str] = None,
+        tokenharbor_base_url: Optional[str] = None,
+        tokenharbor_model: Optional[str] = None,
         max_retries: int = 3,
         initial_backoff: float = 2.0,
         mock_fallback: bool = True,
@@ -119,6 +125,19 @@ class ResilientLLMGateway:
             or "http://localhost:11434/api/generate"
         )
         self.ollama_model = ollama_model
+        self.tokenharbor_api_key = (
+            tokenharbor_api_key or os.environ.get("TOKENHARBOR_API_KEY")
+        )
+        self.tokenharbor_base_url = (
+            tokenharbor_base_url
+            or os.environ.get("TOKENHARBOR_BASE_URL")
+            or "https://tokenharbor.ai/v1"
+        ).rstrip("/")
+        self.tokenharbor_model = (
+            tokenharbor_model
+            or os.environ.get("TOKENHARBOR_MODEL")
+            or "deepseek-v4.1-flash:free"
+        )
         self.max_retries = max_retries
         self.initial_backoff = initial_backoff
         self.mock_fallback = mock_fallback
@@ -128,7 +147,7 @@ class ResilientLLMGateway:
         """Get or create an httpx.AsyncClient."""
         if self._http_client is not None:
             return self._http_client
-        return httpx.AsyncClient(timeout=30.0)
+        return httpx.AsyncClient(timeout=60.0)
 
 
     async def _call_gemini(self, prompt: str, system_prompt: str) -> str:
@@ -219,6 +238,54 @@ class ResilientLLMGateway:
             choices = data.get("choices", [])
             if not choices:
                 raise LLMProviderError("OpenRouter returned empty choices list.")
+            content = choices[0].get("message", {}).get("content", "")
+            return str(content).strip()
+        finally:
+            if should_close:
+                await client.aclose()
+
+    async def _call_tokenharbor(
+        self,
+        prompt: str,
+        system_prompt: str,
+        model: Optional[str] = None,
+    ) -> str:
+        """Invoke TokenHarbor Chat Completions API (OpenAI-compatible)."""
+        if not self.tokenharbor_api_key:
+            raise LLMProviderError("TokenHarbor API key is not configured.")
+
+        url = f"{self.tokenharbor_base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.tokenharbor_api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": os.getenv("TOKENHARBOR_HTTP_REFERER", "https://github.com/TechJobMCP/TechJobMCP"),
+            "X-Title": "TechJobMCP Application Engine",
+        }
+        payload = {
+            "model": model or self.tokenharbor_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+        }
+
+        client = await self._get_client()
+        should_close = self._http_client is None
+        try:
+            resp = await client.post(url, headers=headers, json=payload, timeout=90.0)
+            if resp.status_code in (429, 503):
+                raise RateLimitOrUnavailableError(
+                    f"TokenHarbor returned HTTP {resp.status_code}: {resp.text}"
+                )
+            if resp.status_code != 200:
+                raise LLMProviderError(
+                    f"TokenHarbor API returned HTTP {resp.status_code}: {resp.text}"
+                )
+
+            data = resp.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise LLMProviderError("TokenHarbor returned empty choices list.")
             content = choices[0].get("message", {}).get("content", "")
             return str(content).strip()
         finally:
@@ -333,6 +400,9 @@ class ResilientLLMGateway:
     ) -> List[Tuple[str, Callable[[str, str], Coroutine[Any, Any, str]]]]:
         """Build provider chain list based on available configuration."""
         chain: List[Tuple[str, Callable[[str, str], Coroutine[Any, Any, str]]]] = []
+
+        if self.tokenharbor_api_key:
+            chain.append(("tokenharbor", self._call_tokenharbor))
 
         if self.gemini_api_key:
             chain.append(("gemini", self._call_gemini))
