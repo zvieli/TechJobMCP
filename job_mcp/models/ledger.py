@@ -37,3 +37,4 @@ class ApplicationEntry(BaseModel):
     response_payload: Optional[dict[str, Any] | str] = None
     error_message: Optional[str] = None
     notes: Optional[str] = None
+    receipt_details: Optional[dict[str, Any]] = None

@@ -676,3 +676,125 @@ async def test_dispatcher_fallback_from_api_to_browser_on_http_redirect_or_not_a
             assert entry is not None
             assert entry.status == ApplicationStatus.SUCCESS.value
             assert entry.method == ApplicationMethod.BROWSER.value
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_records_receipt_details_in_ledger(
+    memory_ledger: ApplicationLedger,
+    sample_profile: CandidateProfile,
+):
+    """Verify that structured receipt_details from strategy is recorded in the ApplicationEntry ledger."""
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+        dispatcher = HybridApplicationDispatcher(ledger=memory_ledger)
+
+        job = Job(
+            job_id="job_receipt_test_1",
+            title="Senior Backend Engineer",
+            company="ReceiptCorp",
+            location="Tel Aviv, Israel",
+            match_score=90.0,
+            source="greenhouse",
+            apply_url="https://boards.greenhouse.io/receiptcorp/1",
+        )
+
+        mock_receipt = {
+            "confirmed": True,
+            "confirmation_type": "DOM_CONFIRMATION",
+            "receipt_text": "Confirmation message: 'thank you for applying'",
+            "confirmation_url": "https://boards.greenhouse.io/receiptcorp/1",
+            "screenshot_path": "data/screenshots/receipt.png",
+            "http_receipts": [{"url": "https://boards-api.greenhouse.io/apply", "status": 200}],
+        }
+
+        mock_apply_return = {
+            "success": True,
+            "job_id": job.job_id,
+            "method": ApplicationMethod.BROWSER.value,
+            "status": "success",
+            "receipt_details": mock_receipt,
+            "receipt": mock_receipt["receipt_text"],
+        }
+
+        with patch(
+            "job_mcp.core.application.strategies.browser.BrowserPlaywrightStrategy.apply",
+            new_callable=AsyncMock,
+        ) as mock_browser_apply:
+            mock_browser_apply.return_value = mock_apply_return
+            res = await dispatcher.execute_application(job, sample_profile)
+
+        assert res["success"] is True
+        entry = memory_ledger.get_application(job.job_id)
+        assert entry is not None
+        assert entry.receipt_details is not None
+        assert entry.receipt_details["confirmation_type"] == "DOM_CONFIRMATION"
+        assert entry.receipt_details["screenshot_path"] == "data/screenshots/receipt.png"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_auto_tailor_invokes_system2(
+    memory_ledger: ApplicationLedger,
+    sample_profile: CandidateProfile,
+):
+    """Verify that auto_tailor=True invokes System 2 application package generation for high match scores."""
+    from job_mcp.core.application.tailoring import ApplicationPackage, InterviewQuestionPrep
+
+    with patch.dict(os.environ, {"AUTO_APPLY_ENABLED": "true"}):
+        dispatcher = HybridApplicationDispatcher(ledger=memory_ledger)
+
+        job = Job(
+            job_id="job_tailor_test_1",
+            title="Senior AI Engineer",
+            company="AILabs",
+            location="Tel Aviv, Israel",
+            match_score=88.0,
+            source="comeet",
+            apply_url="https://comeet.com/jobs/ailabs/1",
+        )
+
+        mock_pkg = ApplicationPackage(
+            job_id=job.job_id,
+            job_title=job.title,
+            company=job.company,
+            tailored_cv_highlights=[
+                "Proven expertise in Python & Agentic systems",
+                "Hands-on production delivery with fast retrieval architectures",
+            ],
+            custom_cover_letter="Dear AILabs team, I am eager to contribute...",
+            recruiter_pitch="Experienced engineer with strong background in LLMs.",
+            interview_prep_questions=[
+                InterviewQuestionPrep(
+                    question="How do you handle multi-agent orchestration?",
+                    topic="Agent Architecture",
+                    recommended_strategy="Highlight hands-on Antigravity CLI work",
+                ),
+                InterviewQuestionPrep(
+                    question="How do you evaluate system 1 vs system 2 models?",
+                    topic="Model Evaluation",
+                    recommended_strategy="Discuss A/B benchmarking and precision capping",
+                ),
+            ],
+        )
+
+        with patch(
+            "job_mcp.core.application.tailoring.generate_application_package",
+            new_callable=AsyncMock,
+        ) as mock_tailor, patch(
+            "job_mcp.core.application.strategies.browser.BrowserPlaywrightStrategy.apply",
+            new_callable=AsyncMock,
+        ) as mock_browser_apply:
+            mock_tailor.return_value = mock_pkg
+            mock_browser_apply.return_value = {
+                "success": True,
+                "job_id": job.job_id,
+                "method": ApplicationMethod.BROWSER.value,
+                "status": "success",
+            }
+
+            res = await dispatcher.execute_application(job, sample_profile, auto_tailor=True)
+
+        assert res["success"] is True
+        mock_tailor.assert_called_once()
+        # Ensure strategy received profile with customized cover letter
+        called_args, called_kwargs = mock_browser_apply.call_args
+        called_profile = called_args[1]
+        assert called_profile.cover_letter == "Dear AILabs team, I am eager to contribute..."

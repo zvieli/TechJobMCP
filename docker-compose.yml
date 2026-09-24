@@ -26,6 +26,7 @@ services:
       - APPLICATION_LEDGER_PATH=/app/data/application_ledger.db
       - LLM_CACHE_PATH=/app/data/llm_cache.db
       - JOB_TRACKER_PATH=/app/data/job_tracker.json
+      - LAYA_MODEL_PATH=/app/data/models/laya-techjob
       - OLLAMA_URL=http://ollama:11434/api/generate
       # Source timeouts are adaptive by default (10s-25s per source).
       # Optional override: SOURCE_TIMEOUT_SECONDS

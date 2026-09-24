@@ -396,16 +396,21 @@ async def test_easy_apply_strategy_hebrew_buttons():
     mock_submit_btn.count = AsyncMock(return_value=1)
     mock_submit_btn.is_visible = AsyncMock(return_value=True)
 
+    mock_empty = MagicMock()
+    mock_empty.count = AsyncMock(return_value=0)
+    mock_empty.is_visible = AsyncMock(return_value=False)
+    mock_empty.first = mock_empty
+
     def locator_side_effect(selector):
         loc = MagicMock()
         # Distinguish between Easy Apply button and modal submit button
         if "הגשה מהירה" in selector or "Easy Apply" in selector:
             loc.first = mock_apply_btn
+            return loc
         elif "שלח" in selector or "Submit application" in selector:
             loc.first = mock_submit_btn
-        else:
-            loc.first = mock_apply_btn
-        return loc
+            return loc
+        return mock_empty
 
     mock_page.locator = MagicMock(side_effect=locator_side_effect)
 

@@ -25,10 +25,10 @@ class LazyLayaEngine:
 
     def __init__(
         self,
-        model_name: str = "data/models/laya-techjob",
+        model_name: Optional[str] = None,
         auto_release_after_batch: bool = False,
     ) -> None:
-        self.model_name = model_name
+        self.model_name = model_name or os.getenv("LAYA_MODEL_PATH", "data/models/laya-techjob")
         self.auto_release_after_batch = auto_release_after_batch
         self._model: Optional[Any] = None
         self._tokenizer: Optional[Any] = None
@@ -36,11 +36,12 @@ class LazyLayaEngine:
         self._model_lock = threading.Lock()
 
     @classmethod
-    def get_instance(cls, model_name: str = "data/models/laya-techjob") -> LazyLayaEngine:
+    def get_instance(cls, model_name: Optional[str] = None) -> LazyLayaEngine:
+        target_model = model_name or os.getenv("LAYA_MODEL_PATH", "data/models/laya-techjob")
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    cls._instance = cls(model_name=model_name)
+                    cls._instance = cls(model_name=target_model)
         return cls._instance
 
     @classmethod

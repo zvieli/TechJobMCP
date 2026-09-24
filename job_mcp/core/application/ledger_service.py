@@ -73,10 +73,15 @@ class ApplicationLedger:
                         cv_used TEXT,
                         response_payload TEXT,
                         error_message TEXT,
-                        notes TEXT
+                        notes TEXT,
+                        receipt_details TEXT
                     );
                     """
                 )
+                try:
+                    conn.execute("ALTER TABLE applications ADD COLUMN receipt_details TEXT;")
+                except Exception:
+                    pass
                 conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_applications_job_id ON applications(job_id);"
                 )
@@ -100,6 +105,13 @@ class ApplicationLedger:
             except Exception:
                 pass
 
+        receipt = None
+        if "receipt_details" in row.keys() and row["receipt_details"] is not None:
+            try:
+                receipt = json.loads(row["receipt_details"])
+            except Exception:
+                receipt = {"receipt_text": str(row["receipt_details"])}
+
         try:
             applied_at = datetime.fromisoformat(row["applied_at"])
         except Exception:
@@ -118,6 +130,7 @@ class ApplicationLedger:
             response_payload=payload,
             error_message=str(row["error_message"]) if row["error_message"] is not None else None,
             notes=str(row["notes"]) if row["notes"] is not None else None,
+            receipt_details=receipt,
         )
 
     def record_application(self, entry: ApplicationEntry) -> None:
@@ -140,6 +153,12 @@ class ApplicationLedger:
         elif entry.response_payload is not None:
             payload_str = str(entry.response_payload)
 
+        receipt_str: Optional[str] = None
+        if isinstance(entry.receipt_details, (dict, list)):
+            receipt_str = json.dumps(entry.receipt_details)
+        elif entry.receipt_details is not None:
+            receipt_str = str(entry.receipt_details)
+
         with self._lock:
             conn = self._get_connection()
             try:
@@ -148,8 +167,8 @@ class ApplicationLedger:
                     INSERT INTO applications (
                         job_id, company, job_title, source, applied_at,
                         method, status, match_score, cv_used,
-                        response_payload, error_message, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        response_payload, error_message, notes, receipt_details
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """,
                     (
                         entry.job_id,
@@ -164,6 +183,7 @@ class ApplicationLedger:
                         payload_str,
                         entry.error_message,
                         entry.notes,
+                        receipt_str,
                     ),
                 )
                 conn.commit()

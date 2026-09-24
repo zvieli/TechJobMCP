@@ -237,7 +237,9 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
             logger.debug("Screenshot capture failed for %s: %s", job_id, err)
             return None
 
-    async def _verify_submission_receipt(self, page: Any) -> tuple[bool, str]:
+    async def _verify_submission_receipt(
+        self, page: Any, captured_http_receipts: Optional[list[dict[str, Any]]] = None
+    ) -> tuple[bool, str]:
         """Check whether post-submission confirmation receipt appeared on page."""
         raw_url = getattr(page, "url", None)
         current_url = raw_url if isinstance(raw_url, str) else ""
@@ -284,6 +286,11 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
             except Exception:
                 pass
 
+        # Layer 3: Network HTTP 200/201 response on submission endpoint
+        if captured_http_receipts:
+            latest = captured_http_receipts[-1]
+            return True, f"HTTP {latest.get('status', 200)} from {latest.get('url', '')}"
+
         return False, ""
 
     async def apply(
@@ -310,6 +317,46 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
             try:
                 page = await self.session_manager.get_page()
                 if page is not None:
+                    captured_http_receipts: list[dict[str, Any]] = []
+
+                    def _on_response(resp: Any) -> None:
+                        try:
+                            status_val = getattr(resp, "status", None)
+                            if callable(status_val):
+                                status_val = status_val()
+                            url_val = getattr(resp, "url", None)
+                            if callable(url_val):
+                                url_val = url_val()
+                            url_str = str(url_val or "").lower()
+                            if status_val in (200, 201) and any(
+                                kw in url_str
+                                for kw in (
+                                    "apply",
+                                    "application",
+                                    "candidate",
+                                    "submission",
+                                    "submit",
+                                    "comeet",
+                                    "greenhouse",
+                                    "lever",
+                                    "workday",
+                                    "eightfold",
+                                )
+                            ):
+                                captured_http_receipts.append(
+                                    {"url": str(url_val), "status": int(status_val)}
+                                )
+                        except Exception:
+                            pass
+
+                    if hasattr(page, "on") and callable(page.on):
+                        try:
+                            on_res = page.on("response", _on_response)
+                            if hasattr(on_res, "__await__") or asyncio.iscoroutine(on_res):
+                                await on_res
+                        except Exception:
+                            pass
+
                     target_url = job.apply_url or job.url
                     if (
                         target_url
@@ -326,6 +373,30 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                             await page.wait_for_load_state("domcontentloaded", timeout=5000)
                         except Exception:
                             pass
+
+                    # Detect if Comeet career iframe is embedded on page
+                    try:
+                        loc_callable = getattr(page, "locator", None)
+                        if callable(loc_callable):
+                            loc_res = loc_callable(
+                                "iframe#comeet-iframe, iframe[src*='comeet'], iframe[name*='comeet']"
+                            )
+                            if hasattr(loc_res, "__await__") or asyncio.iscoroutine(loc_res):
+                                loc_res = await loc_res
+                            first_loc = getattr(loc_res, "first", loc_res)
+                            cf_cnt_val = getattr(first_loc, "count", None)
+                            if callable(cf_cnt_val):
+                                cf_cnt = cf_cnt_val()
+                                if hasattr(cf_cnt, "__await__") or asyncio.iscoroutine(cf_cnt):
+                                    cf_cnt = await cf_cnt
+                                if isinstance(cf_cnt, (int, float)) and cf_cnt > 0:
+                                    logger.info("Detected Comeet career iframe on page.")
+                                    if hasattr(page, "wait_for_timeout"):
+                                        t = page.wait_for_timeout(800)
+                                        if hasattr(t, "__await__") or asyncio.iscoroutine(t):
+                                            await t
+                    except Exception:
+                        pass
 
                     # Safely extract current URL and Title
                     raw_url = getattr(page, "url", None)
@@ -609,8 +680,33 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                         }
 
                     # Submission was clicked -> wait and verify confirmation
-                    confirmed, receipt_note = await self._verify_submission_receipt(page)
-                    screenshot_path = await self._capture_screenshot(page, job.job_id, suffix="submitted")
+                    confirmed, receipt_note = await self._verify_submission_receipt(
+                        page, captured_http_receipts
+                    )
+                    screenshot_path = await self._capture_screenshot(
+                        page, job.job_id, suffix="submitted"
+                    )
+
+                    confirmation_type = (
+                        "URL_REDIRECT"
+                        if "Confirmation URL" in receipt_note
+                        else "DOM_CONFIRMATION"
+                        if "Confirmation message" in receipt_note
+                        else "HTTP_STATUS_200"
+                        if "HTTP" in receipt_note
+                        else ("SUBMIT_CLICKED" if submit_clicked else "UNCONFIRMED")
+                    )
+                    receipt_details = {
+                        "confirmed": confirmed,
+                        "confirmation_type": confirmation_type,
+                        "receipt_text": receipt_note
+                        if confirmed
+                        else "Submit button clicked successfully",
+                        "confirmation_url": current_url,
+                        "screenshot_path": screenshot_path,
+                        "http_receipts": captured_http_receipts,
+                        "timestamp": applied_at,
+                    }
 
                     return {
                         "success": True,
@@ -619,16 +715,24 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                         "status": "success",
                         "submission_id": submission_id,
                         "fields_filled": fields_filled,
-                        "submit_button": submit_info.model_dump() if submit_info else None,
+                        "submit_button": submit_info.model_dump()
+                        if submit_info
+                        else None,
                         "submit_clicked": True,
                         "confirmed": confirmed,
-                        "receipt": receipt_note if confirmed else "Submit button clicked successfully",
+                        "receipt": receipt_note
+                        if confirmed
+                        else "Submit button clicked successfully",
+                        "receipt_details": receipt_details,
                         "screenshot_path": screenshot_path,
                         "response": {
                             "source": job.source,
                             "portal": "Dynamic ATS Browser Automation",
                             "fields_count": len(fields_filled),
-                            "receipt": receipt_note if confirmed else "Submit button clicked successfully",
+                            "receipt": receipt_note
+                            if confirmed
+                            else "Submit button clicked successfully",
+                            "receipt_details": receipt_details,
                             "screenshot_path": screenshot_path,
                             "message": f"Successfully submitted application for '{job.title}' at {job.company}",
                         },
@@ -646,16 +750,27 @@ class BrowserPlaywrightStrategy(ApplicationStrategy):
                 }
 
         # Simulated fallback execution (when session_manager has no page or is None)
+        receipt_details = {
+            "confirmed": True,
+            "confirmation_type": "SIMULATED_SUCCESS",
+            "receipt_text": f"Successfully simulated browser submission for '{job.title}' at {job.company}",
+            "confirmation_url": job.apply_url or job.url or "",
+            "timestamp": applied_at,
+        }
         return {
             "success": True,
             "job_id": job.job_id,
             "method": ApplicationMethod.BROWSER.value,
             "status": "success",
             "submission_id": submission_id,
+            "receipt": receipt_details["receipt_text"],
+            "receipt_details": receipt_details,
             "response": {
                 "source": job.source,
                 "portal": "Playwright Browser Automation",
                 "message": f"Successfully executed browser submission for '{job.title}' at {job.company}",
+                "receipt": receipt_details["receipt_text"],
+                "receipt_details": receipt_details,
             },
             "timestamp": applied_at,
         }

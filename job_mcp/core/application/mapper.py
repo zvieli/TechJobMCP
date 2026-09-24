@@ -559,6 +559,15 @@ class SemanticFormMapper:
             and field_type.lower() in ("textarea", "text")
             and not options
         ):
+            # Prioritize pre-generated cover letter or personal note if available
+            pre_letter = (
+                profile_data.get("cover_letter")
+                or profile_data.get("personal_note")
+                or profile_data.get("note")
+            )
+            if pre_letter and isinstance(pre_letter, str) and pre_letter.strip():
+                return pre_letter.strip()
+
             target_roles = profile_data.get("target_roles")
             default_role = (
                 target_roles[0]

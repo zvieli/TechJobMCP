@@ -219,6 +219,7 @@ class HybridApplicationDispatcher:
         profile: CandidateProfile,
         cv_path: Optional[str] = None,
         force: bool = False,
+        auto_tailor: bool = False,
     ) -> dict[str, Any]:
         """Execute job application submission enforcing all safety guardrails.
 
@@ -234,6 +235,7 @@ class HybridApplicationDispatcher:
             profile: Candidate profile extracted from CV/preferences.
             cv_path: Optional path to CV document.
             force: If True, bypasses non-duplicate guardrails (auto apply toggle, daily cap, score, location).
+            auto_tailor: If True, generates tailored cover letter via System 2 when match score >= 80.0.
 
         Returns:
             dict[str, Any]: Application submission outcome.
@@ -381,8 +383,31 @@ class HybridApplicationDispatcher:
             strategy.__class__.__name__,
         )
 
+        # Tailoring Hook: If strong match (score >= 80.0) and cover_letter not set,
+        # generate custom application package via System 2
+        effective_profile = profile
+        should_tailor = auto_tailor or os.getenv("ENABLE_SYSTEM2_AUTO_TAILOR", "false").lower() in ("true", "1", "yes")
+        if (
+            (job.match_score is not None and job.match_score >= 80.0)
+            and not getattr(profile, "cover_letter", None)
+            and should_tailor
+        ):
+            try:
+                from job_mcp.core.application.tailoring import generate_application_package
+                pkg = await generate_application_package(job, profile)
+                effective_profile = profile.model_copy()
+                effective_profile.cover_letter = pkg.custom_cover_letter
+                logger.info(
+                    "System 2 generated tailored application package for '%s' at %s (score=%.1f)",
+                    job.title,
+                    job.company,
+                    job.match_score,
+                )
+            except Exception as tailor_err:
+                logger.debug("System 2 auto-tailoring notice for job '%s': %s", job.job_id, tailor_err)
+
         try:
-            result = await strategy.apply(job, profile, cv_path=cv_path)
+            result = await strategy.apply(job, effective_profile, cv_path=cv_path)
 
             # Fallback routing: Graceful fallback from API to Browser automation when endpoint is not a REST API
             error_code = result.get("error_code")
@@ -405,7 +430,7 @@ class HybridApplicationDispatcher:
                 from job_mcp.core.application.strategies.browser import BrowserPlaywrightStrategy
 
                 fallback_strategy = BrowserPlaywrightStrategy(session_manager=self.session_manager)
-                fallback_result = await fallback_strategy.apply(job, profile, cv_path=cv_path)
+                fallback_result = await fallback_strategy.apply(job, effective_profile, cv_path=cv_path)
                 result = fallback_result
                 method = fallback_strategy.method
 
@@ -417,6 +442,17 @@ class HybridApplicationDispatcher:
                 status = ApplicationStatus.SUCCESS
             else:
                 status = ApplicationStatus.FAILED
+
+            # Extract receipt details from strategy result
+            receipt_details = result.get("receipt_details")
+            if not receipt_details and isinstance(result.get("receipt"), dict):
+                receipt_details = result["receipt"]
+            elif not receipt_details and result.get("receipt"):
+                receipt_details = {
+                    "receipt_text": str(result.get("receipt")),
+                    "confirmed": result.get("confirmed", is_success),
+                    "screenshot_path": result.get("screenshot_path"),
+                }
 
             self.ledger.record_application(
                 ApplicationEntry(
@@ -430,6 +466,7 @@ class HybridApplicationDispatcher:
                     cv_used=cv_path,
                     response_payload=result.get("response") or result,
                     error_message=result.get("error") if not is_success else None,
+                    receipt_details=receipt_details,
                     notes=(
                         result.get("error")
                         if status == ApplicationStatus.BLOCKED

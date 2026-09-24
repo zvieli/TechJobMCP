@@ -20,9 +20,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY pyproject.toml README.md ./
 COPY job_mcp ./job_mcp
 
-# Build virtual environment
+# Build virtual environment with CPU PyTorch and System 1 Laya
 RUN uv venv /app/.venv && \
-    uv pip install --no-cache -e ".[dev]"
+    uv pip install --no-cache torch --index-url https://download.pytorch.org/whl/cpu && \
+    uv pip install --no-cache -e ".[dev,training]"
 
 
 FROM python:3.12-slim AS runtime
@@ -83,6 +84,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     LLM_CACHE_PATH=/app/data/llm_cache.db \
     JOB_TRACKER_PATH=/app/data/job_tracker.json \
     DEFAULT_CV_PATH=/app/cv.pdf \
+    LAYA_MODEL_PATH=/app/data/models/laya-techjob \
     AUTO_APPLY_ENABLED=false \
     MCP_TRANSPORT=http \
     MCP_HOST=0.0.0.0 \

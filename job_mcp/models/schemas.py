@@ -75,6 +75,9 @@ class CandidateProfile(BaseModel):
     phone: Optional[str] = None
     linkedin_url: Optional[str] = None
     github_url: Optional[str] = None
+    cover_letter: Optional[str] = None
+    summary: Optional[str] = None
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class JobPreferences(BaseModel):
