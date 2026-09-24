@@ -15,3 +15,10 @@ def get_system1_engine() -> System1Engine:
     if _ACTIVE_ENGINE is None:
         _ACTIVE_ENGINE = LazyLayaEngine.get_instance()
     return _ACTIVE_ENGINE
+
+
+def reset_engine() -> None:
+    """Reset the active engine to default (None)."""
+    global _ACTIVE_ENGINE
+    _ACTIVE_ENGINE = None
+

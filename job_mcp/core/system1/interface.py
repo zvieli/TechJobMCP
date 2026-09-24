@@ -2,11 +2,12 @@ import sys
 from typing import Any, Dict, List, Tuple
 
 if sys.version_info >= (3, 8):
-    from typing import Protocol
+    from typing import Protocol, runtime_checkable
 else:
-    from typing_extensions import Protocol
+    from typing_extensions import Protocol, runtime_checkable
 
 
+@runtime_checkable
 class System1Engine(Protocol):
     """Protocol defining the interface for the System 1 decision engine.
     
@@ -35,7 +36,7 @@ class System1Engine(Protocol):
         ...
 
     def predict_match_scoring_ensemble(
-        self, job_title: str, job_desc: str, cv_text: str
+        self, job_desc: str = "", cv_text: str = "", job_title: str = "Unknown Role"
     ) -> Dict[str, Any]:
         """Execute the 3-question ensemble for a single candidate/job pair."""
         ...

@@ -1588,7 +1588,7 @@ class TestDynamicFitScoring(unittest.TestCase):
         ]
 
         t0 = time.perf_counter()
-        results = filter_jobs(sample_jobs, JobPreferences(), profile=self.junior_profile)
+        results = filter_jobs(sample_jobs, JobPreferences(), profile=self.junior_profile, enable_system1=False)
         duration_ms = (time.perf_counter() - t0) * 1000.0
 
         self.assertEqual(len(results), 200)

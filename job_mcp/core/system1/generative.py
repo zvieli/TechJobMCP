@@ -60,7 +60,7 @@ class GenerativeBaselineEngine:
         idx, conf = self.predict_score(state, question, options)
         return options[idx], conf
 
-    def predict_match_scoring_ensemble(self, job_title: str, job_desc: str, cv_text: str) -> Dict[str, Any]:
+    def predict_match_scoring_ensemble(self, job_desc: str = "", cv_text: str = "", job_title: str = "Unknown Role") -> Dict[str, Any]:
         results = self.predict_match_scoring_batch([{"job_desc": job_desc, "cv_text": cv_text, "job_title": "Unknown"}])
         return results[0] if results else {
             "skill_match": 2,

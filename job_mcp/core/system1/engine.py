@@ -209,7 +209,7 @@ class LazyLayaEngine:
         return chosen, conf
 
     def predict_match_scoring_ensemble(
-        self, job_title: str, job_desc: str, cv_text: str
+        self, job_desc: str = "", cv_text: str = "", job_title: str = "Unknown Role"
     ) -> Dict[str, Any]:
         """Execute the 3-question ensemble for a single candidate/job pair."""
         results = self.predict_match_scoring_batch([{"job_title": job_title, "job_desc": job_desc, "cv_text": cv_text}])
@@ -269,9 +269,9 @@ class LazyLayaEngine:
                 for item in chunk:
                     job_title = item.get("job_title", "Unknown Role")
                     state = f"Job Title: {job_title}\nJob Description:\n{item['job_desc']}\nCandidate CV:\n{item['cv_text']}"
-                    p_skill = f"Context:\n{state}\n\nInstruction: Evaluate the technical and professional skill match of the candidate for this role.\nOptions:\n{skill_opts_str}"
-                    p_sen = f"Context:\n{state}\n\nInstruction: Assess the seniority alignment of the candidate relative to the requirements.\nOptions:\n{sen_opts_str}"
-                    p_rec = f"Context:\n{state}\n\nInstruction: Would a human technical recruiter recommend advancing this candidate to an interview?\nOptions:\n{rec_opts_str}"
+                    p_skill = f"Context:\n{state}\n\nInstruction: Evaluate the technical and professional skill match of the candidate for this role.\nCandidate Options:\n{skill_opts_str}"
+                    p_sen = f"Context:\n{state}\n\nInstruction: Assess the seniority alignment of the candidate relative to the requirements.\nCandidate Options:\n{sen_opts_str}"
+                    p_rec = f"Context:\n{state}\n\nInstruction: Would a human technical recruiter recommend advancing this candidate to an interview?\nCandidate Options:\n{rec_opts_str}"
                     prompts.extend([p_skill, p_sen, p_rec])
 
                 # Batched dynamic padding

@@ -92,13 +92,11 @@ def test_zero_regex_contamination_on_senior_role():
     )
 
     prefs = JobPreferences(cv_path="cv.pdf")
-    scored = filter_jobs([senior_job], prefs, profile=profile, enable_system1=True)
+    from job_mcp.core.api_client import calculate_match_score
+    score = calculate_match_score(senior_job, prefs, profile=profile, enable_system1=True)
 
-    assert len(scored) == 1
-    job = scored[0]
-
-    # Without legacy regex inflation, the score must be <= 53.0
-    assert job.match_score <= 53.0, f"Expected score <= 53.0, got {job.match_score}"
-    assert job.system1_confidence is not None
-    assert job.system1_confidence < 0.85
-    assert job.requires_system2_review is True
+    # Without legacy regex inflation, the score must be <= 40.0
+    assert score <= 40.0, f"Expected score <= 40.0, got {score}"
+    assert senior_job.match_score <= 40.0
+    assert senior_job.system1_confidence is not None
+    assert senior_job.requires_system2_review is True

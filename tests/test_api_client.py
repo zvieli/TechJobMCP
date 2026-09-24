@@ -347,11 +347,11 @@ def test_calculate_match_score_with_semantic_scoring(monkeypatch):
         description=job.description,
         tech_stack=list(job.tech_stack),
     )
-    lexical_score = calculate_match_score(job_lexical, prefs, profile=profile, enable_semantic=False)
+    lexical_score = calculate_match_score(job_lexical, prefs, profile=profile, enable_semantic=False, enable_system1=False)
     assert job_lexical.semantic_score is None
 
     # Now calculate with semantic scoring enabled
-    hybrid_score = calculate_match_score(job, prefs, profile=profile, enable_semantic=True)
+    hybrid_score = calculate_match_score(job, prefs, profile=profile, enable_semantic=True, enable_system1=False)
 
     assert job.semantic_score == 85.0
     expected_hybrid = round((lexical_score * 0.70) + (85.0 * 0.30), 1)

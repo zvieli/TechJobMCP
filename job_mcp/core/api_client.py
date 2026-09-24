@@ -611,19 +611,60 @@ def extract_cv_keywords(cv_path: Optional[str] = None) -> list[str]:
 
 
 def _detect_cv_seniority(text: str) -> Optional[str]:
-    """Detect candidate seniority level from CV text using System 1."""
+    """Detect candidate seniority level from CV text."""
     if not text:
         return None
 
-    from job_mcp.core.system1.factory import get_system1_engine
-    engine = get_system1_engine()
-    state = f"Candidate CV:\n{text[:2000]}"
-    options = ["Student", "Intern", "Junior", "Mid", "Senior", "Lead", "Principal"]
-    choice, conf = engine.predict_choice(state, "What is the overall seniority level of this candidate based on their experience?", options)
-    
-    if conf > 0.30:
-        return choice
-    return "Mid"  # Default fallback if extremely uncertain
+    header_chunk = text[:1500]
+
+    # Explicit summary/title markers
+    if re.search(r"\b(student)\b", header_chunk, re.IGNORECASE):
+        if not re.search(r"\b(senior\s+(?:developer|engineer|architect)|lead\s+developer|tech\s+lead)\b", header_chunk, re.IGNORECASE):
+            return "Student"
+    if re.search(r"\b(intern|internship)\b", header_chunk, re.IGNORECASE):
+        return "Intern"
+    if re.search(r"\b(junior|entry[\s-]level|graduate|b\.?sc|bachelor)\b", header_chunk, re.IGNORECASE):
+        if not re.search(r"\b(senior\s+(?:developer|engineer|architect)|lead\s+developer|tech\s+lead|principal|staff|director|vp)\b", header_chunk, re.IGNORECASE):
+            return "Junior"
+    if re.search(r"\b(principal|distinguished)\b", header_chunk, re.IGNORECASE):
+        return "Principal"
+    if re.search(r"\b(tech\s+lead|team\s+lead|lead\s+developer|lead\s+engineer|head\s+of|director|vp)\b", header_chunk, re.IGNORECASE):
+        return "Lead"
+    if re.search(r"\b(senior|staff|architect)\b|\bsr\.?\b", header_chunk, re.IGNORECASE):
+        return "Senior"
+    if re.search(r"\b(mid[\s-]level|intermediate)\b", header_chunk, re.IGNORECASE):
+        return "Mid"
+
+    # Check years of experience in full text
+    m_years = re.search(r"\b(\d+)\+?\s*years(?:\s+of)?\s*(?:experience|working)?\b", text, re.IGNORECASE)
+    if m_years:
+        years = int(m_years.group(1))
+        if years >= 10:
+            return "Principal" if re.search(r"\b(architect|principal|staff)\b", text, re.IGNORECASE) else "Senior"
+        elif years >= 5:
+            return "Senior"
+        elif years >= 2:
+            return "Mid"
+        elif years <= 1:
+            return "Junior"
+
+    # Fallback to full text keyword scan
+    if re.search(r"\b(principal|distinguished)\b", text, re.IGNORECASE):
+        return "Principal"
+    if re.search(r"\b(tech\s+lead|team\s+lead|lead\s+developer|lead\s+engineer)\b", text, re.IGNORECASE):
+        return "Lead"
+    if re.search(r"\b(senior|software\s+architect|solutions\s+architect|staff\s+engineer)\b", text, re.IGNORECASE):
+        return "Senior"
+    if re.search(r"\b(junior|entry[\s-]level)\b", text, re.IGNORECASE):
+        return "Junior"
+    if re.search(r"\b(student)\b", text, re.IGNORECASE):
+        return "Student"
+    if re.search(r"\b(intern|internship)\b", text, re.IGNORECASE):
+        return "Intern"
+    if re.search(r"\b(mid[\s-]level|intermediate)\b", text, re.IGNORECASE):
+        return "Mid"
+
+    return None
 
 
 def _compute_top_skills(skills: list[str], text: str) -> list[str]:
@@ -1201,8 +1242,8 @@ NON_TECH_ROLE_TERMS: tuple[str, ...] = (
 def detect_seniority_level(title: str, text: str = "", enable_system1: bool = True) -> Optional[str]:
     """Detect seniority level from job title and description.
 
-    Uses System 1 calibrated classification via the injected engine,
-    completely bypassing legacy regex heuristics.
+    Checks title first for unambiguous seniority markers (highest precision),
+    falling back to description text keywords when neutral.
 
     Args:
         title: Job title string.
@@ -1212,27 +1253,45 @@ def detect_seniority_level(title: str, text: str = "", enable_system1: bool = Tr
     Returns:
         Optional[str]: Detected seniority level ('Student', 'Intern', 'Junior', 'Mid', 'Senior', 'Lead') or None.
     """
-    if not enable_system1:
-        return None
+    title_clean = (title or "").lower()
 
-    try:
-        from job_mcp.core.system1.factory import get_system1_engine
-        engine = get_system1_engine()
-        state = f"Title: {title}\nDescription: {(text or '')[:400]}"
-        options = ["Junior", "Mid", "Senior", "Lead", "Student / Intern"]
-        choice, conf = engine.predict_choice(
-            state,
-            "What is the seniority level required for this position?",
-            options,
-        )
-        if conf >= 0.30:
-            if choice == "Student / Intern":
-                return "Intern" if "intern" in (title + (text or "")).lower() else "Student"
-            return choice
-    except Exception as exc:
-        logger.debug("System 1 seniority detection fallback failed: %s", exc)
+    # 1. Check title first (highest precision)
+    if re.search(r"\b(student)\b", title_clean, re.IGNORECASE):
+        return "Student"
+    if re.search(r"\b(intern|internship)\b", title_clean, re.IGNORECASE):
+        return "Intern"
+    if re.search(r"\b(junior|entry|graduate)\b", title_clean, re.IGNORECASE):
+        return "Junior"
+    if re.search(r"\b(lead|director|vp)\b|\bhead(\s+of)?\b", title_clean, re.IGNORECASE):
+        return "Lead"
+    if re.search(r"\b(senior|principal|staff|architect)\b|\bsr\b|\bsr\.", title_clean, re.IGNORECASE):
+        return "Senior"
+    if re.search(r"\b(mid|intermediate)\b", title_clean, re.IGNORECASE):
+        return "Mid"
 
-    return "Mid"
+    # 2. Check text fallback if title has no clear indication
+    text_clean = (text or "").lower()
+    if text_clean:
+        if re.search(r"\b(tech\s+lead|team\s+lead|lead\s+developer|lead\s+engineer|head\s+of|director|vp)\b", text_clean, re.IGNORECASE):
+            return "Lead"
+        if re.search(r"\b(senior\s+developer|senior\s+engineer|senior\s+fullstack|senior\s+backend|senior\s+frontend|principal\s+engineer|staff\s+engineer|software\s+architect)\b", text_clean, re.IGNORECASE):
+            return "Senior"
+        if re.search(r"\b(junior\s+developer|junior\s+engineer|junior\s+position|entry[\s-]level|graduate\s+program)\b", text_clean, re.IGNORECASE):
+            return "Junior"
+        if re.search(r"\b(student\s+position|student\s+developer|internship|intern\s+position)\b", text_clean, re.IGNORECASE):
+            return "Intern" if "intern" in text_clean else "Student"
+        if re.search(r"\b(mid[\s-]level|intermediate)\b", text_clean, re.IGNORECASE):
+            return "Mid"
+        if re.search(r"\b(junior|entry|graduate)\b", text_clean, re.IGNORECASE):
+            return "Junior"
+        if re.search(r"\b(intern|internship)\b", text_clean, re.IGNORECASE):
+            return "Intern"
+        if re.search(r"\b(student)\b", text_clean, re.IGNORECASE):
+            return "Student"
+        if re.search(r"\b(senior|lead|principal|staff|architect)\b", text_clean, re.IGNORECASE):
+            return "Senior"
+
+    return None
 
 
 
@@ -1307,7 +1366,7 @@ def calculate_match_score(
     profile: Optional[CandidateProfile] = None,
     display_map: Optional[dict[str, str]] = None,
     enable_semantic: bool = True,
-    enable_system1: bool = False,
+    enable_system1: bool = True,
 ) -> float:
     """Calculate dynamic requirement-based fit score (0.0 - 100.0) and populate explainability fields on Job.
 
@@ -1478,6 +1537,14 @@ def calculate_match_score(
         tech_coverage = 1.0
 
     # 5. Base Score calculation
+    cand_sen = profile.seniority_level if profile else None
+    is_cand_junior = bool(cand_sen and (cand_sen.lower().startswith("junior") or cand_sen in ("Student", "Intern", "Junior")))
+    job_sen = job.seniority_level or detect_seniority_level(job.title, job.description, enable_system1=enable_system1)
+    is_seniority_mismatch = (
+        is_cand_junior
+        and job_sen in ("Senior", "Lead", "Principal", "Staff", "Director", "Architect")
+    )
+
     if not all_desired_tokens:
         score = 100.0
     elif not all_matched_tokens and b_role == 0.0:
@@ -1567,24 +1634,21 @@ def calculate_match_score(
                 if raw_score > 15.0:
                     raw_score = (raw_score * 0.70) + (job.semantic_score * 0.30)
 
-        # Determine seniority alignment and detect hard seniority mismatches
-        cand_sen = (profile.seniority_level if profile else None) or "Junior / Entry-Level"
-        is_cand_junior = cand_sen.lower().startswith("junior") or cand_sen in ("Student", "Intern", "Junior")
-        job_sen = job.seniority_level or detect_seniority_level(job.title, job.description)
+        # Determine seniority alignment and detect hard seniority mismatches via System 1
+        cand_sen = profile.seniority_level if profile else None
+        is_cand_junior = bool(cand_sen and (cand_sen.lower().startswith("junior") or cand_sen in ("Student", "Intern", "Junior")))
+        job_sen = job.seniority_level or detect_seniority_level(job.title, job.description, enable_system1=enable_system1)
         is_seniority_mismatch = (
             is_cand_junior
-            and (
-                job_sen in ("Senior", "Lead", "Principal", "Staff", "Director", "Architect")
-                or bool(re.search(r"\b(senior|staff|principal|lead|director|architect)\b", job.title, re.IGNORECASE))
-            )
+            and job_sen in ("Senior", "Lead", "Principal", "Staff", "Director", "Architect")
         )
 
         # System 1 Neural Ensemble Match Scoring (Phase 3 Upgrade)
         try:
-            from job_mcp.core.system1.engine import LazyLayaEngine
+            from job_mcp.core.system1.factory import get_system1_engine
 
-            s1_engine = LazyLayaEngine.get_instance()
-            if enable_system1 and has_cv_profile and (s1_engine.is_loaded() or s1_engine.load_model() is not None):
+            s1_engine = get_system1_engine()
+            if enable_system1 and has_cv_profile and (s1_engine.is_loaded() or getattr(s1_engine, "load_model", lambda: None)() is not None):
                 s1_res = getattr(job, "_precomputed_system1", None)
                 if s1_res is None:
                     cand_role = target_roles[0] if target_roles else "Software Engineer"
@@ -1596,7 +1660,7 @@ def calculate_match_score(
                         f"Seniority: {cand_sen}."
                     )
                     job_desc = (job.description or f"{job.title} {' '.join(job.tech_stack)}")[:1000]
-                    s1_res = s1_engine.predict_match_scoring_ensemble(job_desc=job_desc, cv_text=cv_summary)
+                    s1_res = s1_engine.predict_match_scoring_ensemble(job_title=job.title, job_desc=job_desc, cv_text=cv_summary)
 
                 skill_val = s1_res.get("skill_match", 2)
                 sen_val = s1_res.get("seniority_fit", 2)
@@ -1606,7 +1670,17 @@ def calculate_match_score(
                 job.system1_confidence = avg_conf
                 job.requires_system2_review = avg_conf < 0.85
 
-                if is_seniority_mismatch:
+                # System 1 neural seniority check:
+                # sen_val: 0 = "Far too junior" (only reject if confidence is high or verified mismatch)
+                sen_conf = s1_res.get("seniority_confidence", 0.5)
+                neural_sen_reject = (
+                    is_cand_junior
+                    and job_sen not in ("Junior", "Student", "Intern")
+                    and sen_val == 0
+                    and sen_conf >= 0.70
+                )
+                if is_seniority_mismatch or neural_sen_reject:
+                    is_seniority_mismatch = True
                     raw_score = min(raw_score, 40.0)
                 else:
                     # Neural-ATS Calibration:
@@ -1713,7 +1787,7 @@ def filter_jobs(
     if enable_semantic is None:
         enable_semantic = os.getenv("ENABLE_SEMANTIC_SCORING", "false").strip().lower() in ("true", "1", "yes")
     if enable_system1 is None:
-        enable_system1 = os.getenv("ENABLE_SYSTEM1_SCORING", "false").strip().lower() in ("true", "1", "yes")
+        enable_system1 = os.getenv("ENABLE_SYSTEM1_SCORING", "true").strip().lower() in ("true", "1", "yes")
     has_explicit_profile = profile is not None
     if profile is None:
         if prefs.cv_path:
@@ -1830,10 +1904,10 @@ def filter_jobs(
     # 5. Batched System 1 Neural Ensemble Pass (Vectorized Tensor Forward Passes)
     if enable_system1 and has_cv_profile and filtered:
         try:
-            from job_mcp.core.system1.engine import LazyLayaEngine
+            from job_mcp.core.system1.factory import get_system1_engine
 
-            s1_engine = LazyLayaEngine.get_instance()
-            if s1_engine.is_loaded() or s1_engine.load_model() is not None:
+            s1_engine = get_system1_engine()
+            if s1_engine.is_loaded() or getattr(s1_engine, "load_model", lambda: None)() is not None:
                 primary_stack = profile.primary_stack if (profile and profile.primary_stack) else (profile.skills if profile else [])
                 target_roles = profile.target_roles if profile else []
                 cand_role = target_roles[0] if target_roles else "Software Engineer"
@@ -1862,7 +1936,8 @@ def filter_jobs(
                     
                     # Preliminary prioritization score for candidate ranking
                     p_score = (primary_matches * 5.0) + (shared_skills * 2.0) + (15.0 if role_match else 0.0)
-                    if is_cand_junior and any(w in j_title_lower for w in ["senior", "sr.", "lead", "staff", "architect", "director", "vp"]):
+                    j_sen = j.seniority_level or ("Senior" if any(w in j_title_lower for w in ["senior", "sr.", "lead", "staff", "architect", "director", "vp"]) else None)
+                    if is_cand_junior and j_sen in ("Senior", "Lead", "Principal", "Staff", "Director", "Architect"):
                         p_score -= 30.0
 
                     scored_candidates.append((p_score, j))
@@ -1875,6 +1950,7 @@ def filter_jobs(
                 if neural_candidates:
                     batch_items = [
                         {
+                            "job_title": j.title,
                             "job_desc": (j.description or f"{j.title} {' '.join(j.tech_stack)}")[:1000],
                             "cv_text": cv_summary,
                         }

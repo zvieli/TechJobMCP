@@ -52,7 +52,12 @@ def test_base_source_get_timeout_validates_positive(monkeypatch: pytest.MonkeyPa
     assert src.get_timeout() == 15.0
 
 
-def test_registered_sources_have_tailored_timeouts():
+def test_registered_sources_have_tailored_timeouts(monkeypatch):
+    import os
+    for k in list(os.environ.keys()):
+        if k.startswith("SOURCE_TIMEOUT_"):
+            monkeypatch.delenv(k, raising=False)
+
     from job_mcp.sources.registry import create_default_registry
 
     reg = create_default_registry()

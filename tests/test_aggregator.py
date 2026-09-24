@@ -301,6 +301,10 @@ class TestJobAggregator(unittest.IsolatedAsyncioTestCase):
 
         agg = JobAggregator(registry=reg, source_timeout=0.5)
 
+        # Pre-warm System 1 weights so cold-start I/O does not pollute network timeout cutoff
+        from job_mcp.core.system1.engine import LazyLayaEngine
+        LazyLayaEngine.get_instance().load_model()
+
         start_time = time.monotonic()
         jobs = await agg.fetch_all_jobs(force_refresh=True)
         elapsed = time.monotonic() - start_time
