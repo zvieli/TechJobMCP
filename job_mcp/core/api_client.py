@@ -1883,10 +1883,12 @@ def filter_jobs(
             job_loc = job.location.lower()
             is_remote_job = job.work_mode == WorkMode.REMOTE or "remote" in job_loc
             
-            loc_matched = loc_pref in job_loc or loc_pref in job_full_text
+            loc_matched = loc_pref in job_loc
             if loc_pref == "israel" or "israel" in loc_pref:
                 israel_aliases = [", il", " il", "(il)", "- il", "il,", "isr", "ישראל", "tel aviv", "herzliya", "haifa", "petah tikva", "jerusalem", "rehovot", "netanya", "ra'anana", "ramat gan", "holon", "rishon lezion", "yokneam", "beer sheva", "karmiel", "azor"]
-                if any(alias in job_loc or alias in job_full_text for alias in israel_aliases):
+                if any(alias in job_loc for alias in israel_aliases):
+                    loc_matched = True
+                elif not job_loc.strip() and any(alias in job_full_text for alias in israel_aliases):
                     loc_matched = True
 
             if not loc_matched:
