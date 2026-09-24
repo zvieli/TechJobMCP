@@ -1,5 +1,7 @@
 import logging
+import os
 import re
+from difflib import SequenceMatcher
 from typing import Optional
 from job_mcp.models.schemas import Job
 
@@ -336,33 +338,59 @@ def deduplicate_jobs(jobs: list[Job], enable_system1: bool = True) -> list[Job]:
             merged_map[key] = job
 
     current_jobs = list(merged_map.values())
-    if not enable_system1 or len(current_jobs) <= 1:
+    if len(current_jobs) <= 1:
         return current_jobs
 
-    # 2. System 1 Semantic Pass
-    try:
-        from job_mcp.core.system1.engine import LazyLayaEngine
+    # 2. Fuzzy Title & Semantic Dedup Pass within Company Buckets
+    enable_neural = enable_system1 and os.getenv("ENABLE_NEURAL_DEDUP", "true").lower() in ("true", "1", "yes")
+    engine = None
+    if enable_neural:
+        try:
+            from job_mcp.core.system1.engine import LazyLayaEngine
 
-        engine = LazyLayaEngine.get_instance()
-        if not engine.is_loaded() and engine.load_model() is None:
-            return current_jobs
+            eng = LazyLayaEngine.get_instance()
+            if eng.is_loaded() or eng.load_model() is not None:
+                engine = eng
+        except Exception as exc:
+            logger.debug("LazyLayaEngine unavailable for dedup: %s", exc)
 
-        # Group by normalized company
-        company_buckets: dict[str, list[Job]] = {}
-        for j in current_jobs:
-            c_norm = normalize_company(j.company) or "unknown"
-            company_buckets.setdefault(c_norm, []).append(j)
+    # Group by normalized company
+    company_buckets: dict[str, list[Job]] = {}
+    for j in current_jobs:
+        c_norm = normalize_company(j.company) or "unknown"
+        company_buckets.setdefault(c_norm, []).append(j)
 
-        final_jobs: list[Job] = []
-        for c_norm, bucket in company_buckets.items():
-            if len(bucket) <= 1 or c_norm == "unknown":
-                final_jobs.extend(bucket)
-                continue
+    final_jobs: list[Job] = []
+    for c_norm, bucket in company_buckets.items():
+        if len(bucket) <= 1 or c_norm == "unknown":
+            final_jobs.extend(bucket)
+            continue
 
-            merged_bucket: list[Job] = []
-            for candidate in bucket:
-                merged = False
-                for idx, existing in enumerate(merged_bucket):
+        merged_bucket: list[Job] = []
+        for candidate in bucket:
+            merged = False
+            cand_norm = normalize_title(candidate.title)
+            cand_words = set(cand_norm.split())
+
+            for idx, existing in enumerate(merged_bucket):
+                exist_norm = normalize_title(existing.title)
+                exist_words = set(exist_norm.split())
+
+                ratio = SequenceMatcher(None, exist_norm, cand_norm).ratio()
+                token_overlap = (
+                    len(exist_words & cand_words) / max(len(exist_words), len(cand_words))
+                    if exist_words and cand_words
+                    else 0.0
+                )
+
+                # Fast heuristic merge for near-identical titles at the same company (when system1 is enabled or not)
+                if ratio >= 0.95:
+                    merged_bucket[idx] = merge_job_entities(existing, candidate)
+                    merged = True
+                    break
+
+                # Neural disambiguation for candidate duplicates (require either sequence ratio >= 0.60 or token overlap >= 0.50)
+                if engine is not None and (ratio >= 0.60 or token_overlap >= 0.50):
                     state = (
                         f"Job A:\n"
                         f"Title: {existing.title}\n"
@@ -374,23 +402,25 @@ def deduplicate_jobs(jobs: list[Job], enable_system1: bool = True) -> list[Job]:
                         f"Location: {candidate.location}"
                     )
                     options = ["Different jobs", "Duplicate jobs"]
-                    pred_idx, conf = engine.predict_score(
-                        state,
-                        "Determine whether Job A and Job B describe the exact same underlying job posting.",
-                        options,
-                    )
-                    if pred_idx == 1 and conf >= 0.80:
-                        merged_bucket[idx] = merge_job_entities(existing, candidate)
-                        merged = True
-                        break
-                if not merged:
-                    merged_bucket.append(candidate)
-            final_jobs.extend(merged_bucket)
+                    try:
+                        pred_idx, conf = engine.predict_score(
+                            state,
+                            "Determine whether Job A and Job B describe the exact same underlying job posting.",
+                            options,
+                        )
+                        if pred_idx == 1 and conf >= 0.80:
+                            merged_bucket[idx] = merge_job_entities(existing, candidate)
+                            merged = True
+                            break
+                    except Exception as exc:
+                        logger.debug("Dedup neural scoring error: %s", exc)
 
-        if engine.auto_release_after_batch:
-            engine.unload_model()
+            if not merged:
+                merged_bucket.append(candidate)
+        final_jobs.extend(merged_bucket)
 
-        return final_jobs
-    except Exception as exc:
-        logger.debug("System 1 semantic deduplication skipped: %s", exc)
-        return current_jobs
+    if engine is not None and getattr(engine, "auto_release_after_batch", False):
+        engine.unload_model()
+
+    return final_jobs
+

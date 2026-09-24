@@ -528,7 +528,7 @@ class WorkdaySource(BaseEnterpriseSource):
 
         # Preferences filtering
         if preferences:
-            tagged_jobs = filter_jobs(tagged_jobs, preferences, enable_semantic=False)
+            tagged_jobs = filter_jobs(tagged_jobs, preferences, enable_semantic=False, enable_system1=False)
 
         # Truncate
         if limit and len(tagged_jobs) > limit:

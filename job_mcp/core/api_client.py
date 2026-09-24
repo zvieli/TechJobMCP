@@ -1944,16 +1944,20 @@ def filter_jobs(
 
                     scored_candidates.append((p_score, j))
 
-                scored_candidates.sort(key=lambda x: x[0], reverse=True)
-                max_neural_eval = 40
-                neural_candidates = [j for _, j in scored_candidates[:max_neural_eval]]
-                unselected_candidates = [j for _, j in scored_candidates[max_neural_eval:]]
+                # Filter out candidates that already have precomputed System 1 scores
+                unscored_scored_candidates = [
+                    (score, j) for score, j in scored_candidates
+                    if not hasattr(j, "_precomputed_system1") or getattr(j, "_precomputed_system1") is None
+                ]
+                max_neural_eval = int(os.getenv("MAX_NEURAL_EVAL", "15"))
+                neural_candidates = [j for _, j in unscored_scored_candidates[:max_neural_eval]]
+                unselected_candidates = [j for _, j in unscored_scored_candidates[max_neural_eval:]]
 
                 if neural_candidates:
                     batch_items = [
                         {
                             "job_title": j.title,
-                            "job_desc": (j.description or f"{j.title} {' '.join(j.tech_stack)}")[:1000],
+                            "job_desc": (j.description or f"{j.title} {' '.join(j.tech_stack)}")[:800],
                             "cv_text": cv_summary,
                         }
                         for j in neural_candidates

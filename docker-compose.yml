@@ -28,8 +28,10 @@ services:
       - JOB_TRACKER_PATH=/app/data/job_tracker.json
       - LAYA_MODEL_PATH=/app/data/models/laya-techjob
       - OLLAMA_URL=http://ollama:11434/api/generate
-      # Source timeouts are adaptive by default (10s-25s per source).
-      # Optional override: SOURCE_TIMEOUT_SECONDS
+      - SOURCE_TIMEOUT_SECONDS=15.0
+      - ENABLE_INT8_QUANTIZATION=true
+      - TORCH_NUM_THREADS=4
+      - MAX_NEURAL_EVAL=15
     extra_hosts:
       - "host.docker.internal:host-gateway"
     dns:
@@ -43,8 +45,8 @@ services:
     image: ollama/ollama:latest
     container_name: techjob-ollama
     restart: unless-stopped
-    ports:
-      - "11434:11434"
+    expose:
+      - "11434"
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:

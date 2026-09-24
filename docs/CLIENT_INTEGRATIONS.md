@@ -23,6 +23,9 @@ Gemini Spark supports connecting Custom MCP Apps and running autonomous schedule
 
 Save the following skill in Gemini (e.g. `/job-opportunity-scout`):
 
+The eleven registered MCP source badges are:
+`[HireMeTech]`, `[Comeet]`, `[Greenhouse]`, `[Lever]`, `[Workday]`, `[Eightfold]`, `[DirectTech]`, `[LinkedIn]`, `[Jobify]`, `[GotFriends]`, and `[AllJobs]`.
+
 ```text
 Run the /job-opportunity-scout skill now and explicitly use the connected
 @TechJobMCP custom app. Control the tools in English, but write the complete
@@ -32,7 +35,7 @@ Call `run_job_scout` exactly once with `action_mode="autonomous"`,
 `/app/cv.pdf`, `location="Israel"`, the configured seniority,
 five-or-more-years, foreign-work, and university-only exclusions,
 `force_refresh=false`, `detail_level="summary"`, `limit=30`, thresholds
-`85/70/50`, and `max_applications=3` (omit `sources` so all registered
+`85/70/50`, and `max_applications=3` (omit `sources` so all 11 registered
 sources are dynamically queried). Do not call `set_operation_mode`,
 `list_job_sources`, `get_job_matches`, or `filter_jobs_by_preferences`
 separately. Treat the server's scores, actions, blocks, counts, and trace IDs as
@@ -40,8 +43,11 @@ authoritative.
 
 Process MCP results in descending score order. Preserve every returned
 `trace_id` and show a source badge beside every job. A server-side preview or
-submission block is final for this run. Bookmark and report jobs from sources
-without MCP submission support with their direct application URLs.
+submission block is final for this run. For submitted applications, display the
+verification receipt details (screenshot path, confirmation text, HTTP status).
+For high matches, present the System 2 interview preparation questions and custom
+cover letter summary. Bookmark and report jobs from sources without MCP submission
+support with their direct application URLs.
 
 Never use Google Search, a browser, another app, or a fallback tool. Never retry
 an autonomous scout after a timeout or ambiguous failure unless its structured
@@ -59,6 +65,7 @@ MCP ראשי: הצליח|נכשל
 נעשה שימוש בגיבוי: לא
 מזהי מעקב של MCP: <מזהים מופרדים בפסיקים, או "אין">
 הוגשו: <מספר מהשרת, או "לא ידוע" אם לא התקבלה תשובת MCP מובנית>
+קבלה ומספרי אישור: <מזהי קבלות/קובצי צילום מסך או "אין">
 נשמרו כסימנייה: <מספר מהשרת, או "לא ידוע">
 הוסרו ממקור תומך: <מספר מהשרת, או "לא ידוע">
 הוסרו ממטמון MCP: <מספר מהשרת, או "לא ידוע">
@@ -85,12 +92,15 @@ Add to your Claude Desktop configuration file:
 {
   "mcpServers": {
     "TechJobMCP": {
-      "command": "/path/to/TechJobMCP/.venv/bin/python",
-      "args": ["-m", "job_mcp", "--transport", "stdio"],
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/TechJobMCP", "python", "-m", "job_mcp", "--transport", "stdio"],
       "env": {
         "DEFAULT_CV_PATH": "/path/to/TechJobMCP/cv.pdf",
         "CANDIDATE_EMAIL": "your.email@example.com",
         "CANDIDATE_NAME": "Your Name",
+        "SYSTEM1_ENGINE": "laya",
+        "LAYA_MODEL_PATH": "/path/to/TechJobMCP/data/models/laya-techjob",
+        "ENABLE_SYSTEM2_AUTO_TAILOR": "true",
         "LOG_LEVEL": "INFO"
       }
     }
@@ -140,7 +150,12 @@ In your IDE settings (`~/.cursor/mcp.json` or Antigravity MCP settings):
   "mcpServers": {
     "TechJobMCP": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/TechJobMCP", "python", "-m", "job_mcp", "--transport", "stdio"]
+      "args": ["run", "--directory", "/path/to/TechJobMCP", "python", "-m", "job_mcp", "--transport", "stdio"],
+      "env": {
+        "SYSTEM1_ENGINE": "laya",
+        "LAYA_MODEL_PATH": "/path/to/TechJobMCP/data/models/laya-techjob",
+        "ENABLE_SYSTEM2_AUTO_TAILOR": "true"
+      }
     }
   }
 }
@@ -166,7 +181,9 @@ To verify that your connected client can run the full scout pipeline, ask your a
 
 Expected response telemetry:
 - **`mcp_status`**: `"success"`
-- **`top_tier_jobs`**: List of jobs with match score $\ge 85$.
+- **`top_tier_jobs`**: List of jobs with match score $\ge 85$ (scored via System 1 LAYA).
 - **`strong_match_jobs`**: List of jobs with match score $70 - 84$.
 - **`bookmarked`**: IDs of saved positions.
+- **`applied`**: Submitted applications with 4-layer verification receipts (screenshot paths, confirmation text, HTTP statuses).
+- **`interview_prep`**: System 2 generated interview questions and talking points for top matches.
 - **`summary_text`**: Complete audit report.

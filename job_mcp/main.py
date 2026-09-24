@@ -331,9 +331,10 @@ class GeminiProbeMiddleware(BaseHTTPMiddleware):
                 },
             )
 
-        # Handle GET probes on /mcp or /sse when no active session ID is provided
+        # Handle GET probes on /mcp or /sse when no active session ID is provided and not an SSE stream request
         has_session = bool(request.headers.get("mcp-session-id") or request.query_params.get("session_id"))
-        if method == "GET" and path in ("/mcp", "/sse") and not has_session:
+        is_sse_stream = "text/event-stream" in request.headers.get("accept", "")
+        if method == "GET" and path in ("/mcp", "/sse") and not has_session and not is_sse_stream:
             return Response(
                 b"MCP Server Active",
                 status_code=200,
@@ -2004,14 +2005,14 @@ async def run_job_scout(
         has_targeted_cache = False
         if cached_jobs:
             test_terms = [t.lower() for t in (effective_target_roles + effective_keywords)[:3] if t]
-            if not test_terms:
+            if not test_terms or len(cached_jobs) >= 5:
                 has_targeted_cache = True
             else:
                 matches_in_cache = sum(
                     1 for j in cached_jobs
                     if any(t in f"{j.title} {j.description} {' '.join(j.tech_stack)}".lower() for t in test_terms)
                 )
-                if matches_in_cache >= 3:
+                if matches_in_cache >= 1:
                     has_targeted_cache = True
 
         if has_targeted_cache:

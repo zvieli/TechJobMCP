@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-DEFAULT_SOURCE_TIMEOUT: float = float(os.getenv("SOURCE_TIMEOUT_SECONDS", "25.0"))
+DEFAULT_SOURCE_TIMEOUT: float = float(os.getenv("SOURCE_TIMEOUT_SECONDS", "15.0"))
 
 
 def _normalize_category_to_str(cat: SourceCategory | str) -> str:
@@ -91,9 +91,11 @@ class JobAggregator:
         else:
             raw_timeout = DEFAULT_SOURCE_TIMEOUT
 
+        global_cap = float(os.getenv("SOURCE_TIMEOUT_SECONDS", "15.0"))
+        effective = min(raw_timeout, global_cap)
         if self._explicit_timeout is not None:
-            return min(raw_timeout, float(self._explicit_timeout))
-        return raw_timeout
+            return min(effective, float(self._explicit_timeout))
+        return effective
 
     def get_max_timeout(self, sources: Optional[list[IJobSource]] = None) -> float:
         """Compute the maximum effective timeout across the given sources or all active sources.

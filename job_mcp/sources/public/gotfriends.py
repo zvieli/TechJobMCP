@@ -35,7 +35,7 @@ GOTFRIENDS_CATEGORIES: dict[str, str] = {
     "data_scientist": "/jobslobby/algorithm/data-scientist/",
     "deep_learning": "/jobslobby/algorithm/deep-learning-engineer/",
     "software": "/jobslobby/software/",
-    "backend": "/jobslobby/backend/",
+    "backend": "/jobslobby/software/backend-developer/",
 }
 
 REQUEST_HEADERS: dict[str, str] = {
@@ -296,7 +296,7 @@ class GotFriendsSource(BasePublicSource):
 
         # Filter using candidate preferences if provided
         if preferences:
-            unique_jobs = filter_jobs(unique_jobs, preferences, enable_semantic=False)
+            unique_jobs = filter_jobs(unique_jobs, preferences, enable_semantic=False, enable_system1=False)
 
         self._last_fetch_time = time.time()
         logger.info("GotFriends: fetched %d unique jobs (limit=%d)", len(unique_jobs), limit)

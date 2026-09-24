@@ -88,8 +88,8 @@ class LazyLayaEngine:
                         except Exception:
                             pass
 
-                        # Optional INT8 Dynamic Quantization for 2x CPU speedup
-                        if os.getenv("ENABLE_INT8_QUANTIZATION", "false").strip().lower() in ("true", "1", "yes"):
+                        # Optional INT8 Dynamic Quantization for 2x-3x CPU speedup
+                        if os.getenv("ENABLE_INT8_QUANTIZATION", "true").strip().lower() in ("true", "1", "yes"):
                             try:
                                 self._model = torch.quantization.quantize_dynamic(
                                     self._model, {torch.nn.Linear}, dtype=torch.qint8
