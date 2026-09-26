@@ -43,3 +43,11 @@ job-mcp-setup = "job_mcp.setup:main"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "evaluation: model evaluation gates requiring holdout data and fine-tuned Laya weights",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.9",
+]

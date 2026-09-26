@@ -1,6 +1,18 @@
+import sys
+import types
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent
+_SCRIPTS_DIR = _ROOT / ".scripts"
+if _SCRIPTS_DIR.is_dir() and "scripts" not in sys.modules:
+    _pkg = types.ModuleType("scripts")
+    _pkg.__path__ = [str(_SCRIPTS_DIR)]
+    sys.modules["scripts"] = _pkg
+
 """Pytest configuration and environment isolation fixtures."""
 
 import os
+
 import pytest
 
 

@@ -1,19 +1,19 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 """Comprehensive unit and integration tests for the visual CLI runner script.
 
 Validates argument parsing, observation summarization, Rich UI rendering,
 step callbacks, JSON mode, remote client integration, and CLI entry points.
 """
 
-from __future__ import annotations
 
-import argparse
 import io
 import json
-import os
 import subprocess
 import sys
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from rich.console import Console
@@ -639,13 +639,15 @@ class TestExecuteCliPipeline:
         mock_client.__aenter__.return_value = mock_client
         mock_client.__aexit__.return_value = None
 
-        with patch("fastmcp.client.Client", return_value=mock_client):
-            with patch.object(MockLLMAgent, "run_pipeline", new_callable=AsyncMock) as mock_run:
-                mock_run.return_value = mock_result
-                res = await execute_cli_pipeline(args, console=console)
+        with (
+            patch("fastmcp.client.Client", return_value=mock_client),
+            patch.object(MockLLMAgent, "run_pipeline", new_callable=AsyncMock) as mock_run,
+        ):
+            mock_run.return_value = mock_result
+            res = await execute_cli_pipeline(args, console=console)
 
-                assert res == mock_result
-                mock_run.assert_called_once()
+            assert res == mock_result
+            mock_run.assert_called_once()
 
 
 class TestMainCliEntryPoint:
@@ -689,7 +691,7 @@ class TestSubprocessExecution:
 
     def test_cli_help_flag(self):
         result = subprocess.run(
-            [sys.executable, "scripts/run_mock_llm_pipeline.py", "--help"],
+            [sys.executable, "scripts/run_mock_llm_pipeline.py" if Path("scripts/run_mock_llm_pipeline.py").exists() else ".scripts/run_mock_llm_pipeline.py", "--help"],
             capture_output=True,
             text=True,
             check=False,
