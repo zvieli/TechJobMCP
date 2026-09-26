@@ -1,6 +1,3 @@
-הנה מסמך ה-`SPEC_PRODUCTION_ENHANCEMENT.md` המתוקן, הכולל את התיקונים ההנדסיים הנדרשים: בידוד התקנת PyTorch ל-CPU בלבד ב-CI, פתרון התלויות של Playwright, יצירה מוגדרת מראש של קובץ ה-Evaluation Gate, והחרגת נתיב ה-`/metrics` מ-Middleware הפרוטוקול.
-
-```markdown
 # Master Specification: TechJobMCP Production Enhancement
 **Architecture & Implementation Blueprint for Multi-Agent Collaboration (AGY, Freebuff, Pi)**
 
@@ -41,7 +38,7 @@ flowchart TD
     
     subgraph Core Engine
         Server --> Tools["16 Registered MCP Tools"]
-        Tools --> S1["System 1: Laya INT8 Engine (<15ms, CPU)"]
+        Tools --> S1["System 1: Laya INT8 CPU Engine"]
         Tools --> S2["System 2: Application Tailoring & Dispatcher"]
         Tools --> Sources["11 Job Sources (Aggregator + Adaptive Timeouts)"]
     end
@@ -57,7 +54,7 @@ flowchart TD
         GH["GitHub Actions Pipeline"]
         GH --> Lint["Ruff Check & Format"]
         GH --> UnitTests["Pytest (948+ Tests)"]
-        GH --> EvalGate["Model Evaluation Gate (ECE <= 3.5%, Holdout Check)"]
+        GH --> EvalGate["Evaluation Framework + Artifact-Backed Model Diagnostics"]
     end
 
 ```
@@ -69,7 +66,7 @@ flowchart TD
 ### Milestone 1: Automated CI/CD & Evaluation Gates — COMPLETE
 
 **Completion date:** 2026-09-26  
-**Closing commit:** `TBD (not created at time of specification update)`  
+**Implementation history:** see Git history  
 **Independent review:** GPT-5.6 Sol — `Merge verdict: OK`
 
 **Verified implementation state:** Full suite: **951 passed, 2 xfailed**. Artifact-free evaluation plumbing: **5 passed, 5 skipped**. Local real-model evaluation: **8 passed, 2 xfailed**. Scoped Milestone-1 Ruff gate: **PASS**.
@@ -234,17 +231,12 @@ This artifact-free PR-CI step does not claim a real-model evaluation. A pinned a
 
 
 * **Specification:**
-* Formalize an empirical report covering:
-1. **Dual-Engine Architecture Latency:** Compare cold multi-source aggregation (16.5s) vs warm cache execution (0.14s–0.43s).
+* Formalize an empirical report that publishes only metrics reproduced by the benchmark harness:
+1. **Dual-Engine Architecture Latency:** Reproduce cold and warm end-to-end latency under a documented benchmark protocol; treat prior figures as historical claims until reproduced.
+2. **Local INT8 Quantization:** Measure throughput, latency, and memory under fixed hardware and software conditions; do not claim a latency target before measurement.
+3. **Calibration & Reliability:** Reconcile training/calibration metadata with current end-to-end ECE and seniority-mismatch measurements. Document only reproduced holdout results.
 
-
-2. **Local INT8 Quantization:** Show throughput, memory usage, and sub-10ms CPU inference time vs 800ms+ for cloud LLM APIs.
-3. **Calibration & Reliability:** Document the 2.95% ECE score at $T=0.75$ and explain why it prevents senior-role false inflation (e.g., Optibus 91.9 anomaly resolved to 40.0).
-
-
-
-
-* Provide exact CLI reproduction commands.
+* Provide exact CLI reproduction commands and the benchmark environment definition.
 
 
 
@@ -304,8 +296,3 @@ Before any agent marks a milestone or task as complete, it MUST verify:
 
 * [ ] Git commit message follows Conventional Commits format (`ci:`, `feat:`, `fix:`, `docs:`).
 
-
-
-```
-
-```
