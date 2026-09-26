@@ -41,6 +41,31 @@ services:
       ollama:
         condition: service_healthy
 
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: techjob-prometheus
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - techjob-mcp
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: techjob-grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
   ollama:
     image: ollama/ollama:latest
     container_name: techjob-ollama
@@ -86,6 +111,8 @@ services:
 
 volumes:
   ollama_data:
+  prometheus_data:
+  grafana_data:
 
 
 

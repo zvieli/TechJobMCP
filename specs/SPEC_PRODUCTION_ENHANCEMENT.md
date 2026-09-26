@@ -46,8 +46,8 @@ flowchart TD
     subgraph Observability
         Server --> Metrics["Prometheus Metrics Endpoint (/metrics)"]
         Server --> Logs["Structlog JSON + Trace IDs (Sanitized)"]
-        Metrics --> Prom["Prometheus Container"]
-        Prom --> Grafana["Grafana Dashboards"]
+        Metrics --> Prom["Prometheus Container (5-second scrape)"]
+        Prom --> Grafana["Provisioned Grafana Dashboard"]
     end
 
     subgraph Automation & CI/CD
@@ -158,68 +158,33 @@ This artifact-free PR-CI step does not claim a real-model evaluation. A pinned a
 
 ---
 
-### Milestone 2: Enterprise Observability & Telemetry
+### Milestone 2: Enterprise Observability & Telemetry — COMPLETE
 
-#### 2.1 Prometheus Metrics Instrumentation
+**Completion date:** 2026-09-26
+**Independent review:** GPT-5.6 Sol — `Merge verdict: OK`
 
-* **Target File:** `job_mcp/utils/metrics.py`
+**Verified implementation state:**
 
-* **Specification:**
-* Define Prometheus counters and histograms using `prometheus_client`:
-* `mcp_tool_execution_duration_seconds`: Histogram with buckets `[0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 15.0]`, labeled by `tool_name` and `status` (`success`, `error`).
+* `ToolMetricsMiddleware` centralizes FastMCP tool telemetry for all registered tools. It records bounded tool/status latency metrics without changing tool results or errors.
+* Source-fetch latency is recorded for source attempts with bounded source labels; cache hits are excluded.
+* System 1 decision counters observe the authoritative existing production scout decisions only. They record final `local_accept`, `escalate_system2`, and `disqualified` outcomes, excluding score gaps and already-applied jobs.
+* `Job` keeps System 1 inference provenance private. Only real inference contributes to triage metrics; fallback, error, and synthetic paths remain distinct and are not serialized in MCP output.
+* `mcp_estimated_cost_saved_usd` has zero-default semantics and increases only when configured positive savings apply to a real local acceptance.
+* Prometheus is exposed through an isolated endpoint. Both `/metrics` and `/metrics/` return direct HTTP 200 Prometheus text exposition. The endpoint bypasses Gemini probe, SSE, and MCP-session semantics.
+* Prometheus scrapes `techjob-mcp:8000/metrics` every 5 seconds. Docker Compose provisions a Prometheus datasource and the `TechJobMCP Overview` Grafana dashboard automatically.
+* The dashboard covers tool P95/P99 latency, System 1 decision distribution, source latency, and estimated savings.
 
+**Final verification:**
 
-* `mcp_system1_triage_total`: Counter labeled by `decision` (`local_accept`, `escalate_system2`, `disqualified`).
+* Focused telemetry/server verification: **PASS**.
+* Full test suite: **963 passed, 2 xfailed**.
+* `docker compose config --quiet`: **PASS**.
+* Clean baseline `uv build`: **PASS**.
+* Clean Milestone-2 source-tree `uv build`: **PASS**.
+* A prior developer-checkout build failure was classified as **LOCAL WORKSPACE CONTAMINATION** caused by ignored local browser-profile state; it is not a Milestone-2 packaging regression.
+* Ruff for new Milestone-2 Python files and tests: **PASS**. Previously existing touched files retain legacy Ruff debt; repository-wide Ruff is not represented as green.
 
-
-* `mcp_source_fetch_duration_seconds`: Histogram labeled by `source_name`.
-
-
-* `mcp_estimated_cost_saved_usd`: Counter tracking cumulative cost avoided via local System 1 triage.
-
-
-
-
-* Provide a timing decorator `@track_tool_metrics("tool_name")`.
-
-
-
-#### 2.2 Endpoint Exposure & FastMCP Middleware Isolation
-
-* **Target File:** `job_mcp/main.py`
-
-* **Specification:**
-* Expose `/metrics` using `prometheus_client.make_asgi_app()`.
-* **Crucial Rule:** In `GeminiProbeMiddleware`, explicitly bypass the `/metrics` path. It must NEVER be subject to session ID checks, SSE stream headers, or client probe responses.
-
-
-
-
-
-#### 2.3 Prometheus & Grafana Docker Infrastructure
-
-* **Target Files:**
-* `docker-compose.yml`
-
-* `deploy/prometheus/prometheus.yml`
-
-* `deploy/grafana/provisioning/datasources/datasource.yml`
-* `deploy/grafana/provisioning/dashboards/dashboard_provider.yml`
-* `deploy/grafana/dashboards/techjob_overview.json`
-
-
-
-* **Specification:**
-* Prometheus configured with a 5-second scrape interval targeting `techjob-mcp:8000`.
-* Grafana provisioned automatically with a Prometheus datasource and a clean, valid dashboard JSON displaying:
-* MCP Tool execution latency (P95 / P99).
-* System 1 Triage Ratio (%) vs System 2 Escalations.
-* Source Latency Heatmap (Comeet, Greenhouse, Lever, etc.).
-* Estimated LLM API cost savings.
-
-
-
-
+**Deferred:** Milestone 2 does not include Milestone 3 benchmark reproduction or model-quality work, repository-wide Ruff cleanup, Kubernetes, cloud observability, OpenTelemetry, alerting, or Milestone 4 Docker-network redesign.
 
 ---
 
@@ -288,10 +253,10 @@ Before any agent marks a milestone or task as complete, it MUST verify:
 * [ ] For Milestone 1 PR CI, the scoped Milestone-1 Ruff gate passes. Record repository-wide Ruff debt separately; do not represent it as green.
 
 
-* [ ] `/metrics` endpoint is isolated and does not interfere with FastMCP SSE or Gemini probe requests.
+* [x] Milestone 2 `/metrics` is isolated and does not interfere with FastMCP SSE, Gemini probe, or MCP-session requests; both `/metrics` and `/metrics/` return direct HTTP 200 Prometheus text.
 
 
-* [ ] `docker compose config` evaluates without warnings or schema errors.
+* [x] Milestone 2 `docker compose config --quiet` evaluates without warnings or schema errors.
 
 
 * [ ] Git commit message follows Conventional Commits format (`ci:`, `feat:`, `fix:`, `docs:`).

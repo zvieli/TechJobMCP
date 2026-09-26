@@ -9,8 +9,16 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastmcp import Context, FastMCP
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import make_asgi_app as prometheus_make_asgi_app
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
+
+from job_mcp.utils.metrics import (
+    SYSTEM1_TRIAGE_TOTAL,
+    ToolMetricsMiddleware,
+    record_local_accept_cost_saving,
+)
 
 from job_mcp.core.api_client import (
     JobCache,
@@ -285,6 +293,7 @@ mcp = FastMCP(
     instructions=SERVER_INSTRUCTIONS.strip(),
     lifespan=browser_lifespan,
 )
+mcp.add_middleware(ToolMetricsMiddleware())
 
 
 class GeminiProbeMiddleware(BaseHTTPMiddleware):
@@ -293,6 +302,10 @@ class GeminiProbeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.url.path
         method = request.method
+
+        # Prometheus must bypass every MCP/probe/session/SSE handling branch.
+        if path == "/metrics" or path.startswith("/metrics/"):
+            return await call_next(request)
 
         # Handle CORS OPTIONS preflight
         if method == "OPTIONS":
@@ -404,6 +417,19 @@ class GeminiProbeMiddleware(BaseHTTPMiddleware):
 
         return response
 
+
+
+def make_asgi_app(transport: str = "http"):
+    """Build the HTTP ASGI application with isolated Prometheus metrics."""
+    app = mcp.http_app(transport=transport)
+
+    async def direct_metrics_endpoint(request):
+        return Response(generate_latest(), headers={"Content-Type": CONTENT_TYPE_LATEST})
+
+    app.add_route("/metrics", direct_metrics_endpoint, methods=["GET"])
+    app.mount("/metrics", prometheus_make_asgi_app())
+    app.add_middleware(GeminiProbeMiddleware)
+    return app
 
 
 @mcp.custom_route("/health", methods=["GET", "HEAD"])
@@ -2052,17 +2078,31 @@ async def run_job_scout(
     ledger = _get_ledger(ctx)
     for job in scored_jobs:
         # Check if already applied to prevent surfacing previously submitted jobs
+        real_system1 = job._system1_inference_origin == "real"
         if job.job_id and ledger.is_applied(job.job_id, company=job.company, job_title=job.title):
             disqualified_jobs.append(job)
             continue
 
         score = job.match_score if job.match_score is not None else 0.0
+        categorized = False
         if score >= top_tier_threshold:
             top_tier_jobs.append(job)
+            categorized = True
         elif score >= strong_match_threshold:
             strong_match_jobs.append(job)
+            categorized = True
         elif score < disqualify_threshold:
             disqualified_jobs.append(job)
+            if real_system1:
+                SYSTEM1_TRIAGE_TOTAL.labels(decision="disqualified").inc()
+            continue
+
+        if categorized and real_system1:
+            if job.requires_system2_review:
+                SYSTEM1_TRIAGE_TOTAL.labels(decision="escalate_system2").inc()
+            else:
+                SYSTEM1_TRIAGE_TOTAL.labels(decision="local_accept").inc()
+                record_local_accept_cost_saving()
 
     # Any raw jobs filtered out completely are also disqualified
     for job in all_jobs:

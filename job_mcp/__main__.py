@@ -6,7 +6,7 @@ import os
 import sys
 import uvicorn
 
-from job_mcp.main import GeminiProbeMiddleware, mcp
+from job_mcp.main import make_asgi_app, mcp
 from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,8 +35,7 @@ def main() -> None:
         http_transport = "sse" if transport == "sse" else "http"
         if transport == "https":
             logger.info("Transport 'https' detected; running internal HTTP listener for reverse proxy / tunnel.")
-        app = mcp.http_app(transport=http_transport)
-        app.add_middleware(GeminiProbeMiddleware)
+        app = make_asgi_app(transport=http_transport)
         uvicorn.run(app, host=host, port=port)
     elif transport == "stdio":
         mcp.run(transport="stdio")

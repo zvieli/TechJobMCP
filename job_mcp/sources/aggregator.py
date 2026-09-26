@@ -12,6 +12,7 @@ from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
 from job_mcp.sources.contracts import IJobSource, SourceCategory
 from job_mcp.sources.dedup import deduplicate_jobs
 from job_mcp.utils.logger import get_logger
+from job_mcp.utils.metrics import SOURCE_FETCH_DURATION, canonical_source_name
 
 if TYPE_CHECKING:
     from job_mcp.sources import SourceRegistry
@@ -285,6 +286,10 @@ class JobAggregator:
             except Exception as exc:
                 logger.warning("Source '%s' fetch failed: %s", src.source_id, exc)
                 return []
+            finally:
+                SOURCE_FETCH_DURATION.labels(source_name=canonical_source_name(src.source_id)).observe(
+                    time.perf_counter() - t0
+                )
 
         results = await asyncio.gather(
             *[_fetch_with_timeout(s) for s in active_sources],

@@ -2,7 +2,8 @@
 
 from enum import Enum
 from typing import Any, Optional
-from pydantic import BaseModel, Field, model_validator
+
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 class WorkMode(str, Enum):
@@ -48,6 +49,7 @@ class Job(BaseModel):
     semantic_score: Optional[float] = None
     system1_confidence: Optional[float] = None
     requires_system2_review: bool = False
+    _system1_inference_origin: Optional[str] = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _sync_sources(self) -> "Job":

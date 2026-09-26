@@ -220,6 +220,7 @@ class LazyLayaEngine:
             "seniority_fit": 2,
             "seniority_confidence": 0.50,
             "recruiter_fit_probability": 0.50,
+            "_system1_inference_origin": "fallback",
         }
 
     def predict_match_scoring_batch(
@@ -245,6 +246,7 @@ class LazyLayaEngine:
                     "seniority_fit": 2,
                     "seniority_confidence": 0.50,
                     "recruiter_fit_probability": 0.50,
+                    "_system1_inference_origin": "fallback",
                 }
                 for _ in items
             ]
@@ -310,6 +312,7 @@ class LazyLayaEngine:
                         "seniority_fit": sen_idx[i],
                         "seniority_confidence": float(sen_confs[i]),
                         "recruiter_fit_probability": float(rec_p_true[i]),
+                        "_system1_inference_origin": "real",
                     })
 
         except Exception as exc:
@@ -321,6 +324,7 @@ class LazyLayaEngine:
                     "seniority_fit": 2,
                     "seniority_confidence": 0.50,
                     "recruiter_fit_probability": 0.50,
+                    "_system1_inference_origin": "error",
                 })
 
         if self.auto_release_after_batch:

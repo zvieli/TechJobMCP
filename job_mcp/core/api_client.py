@@ -1661,6 +1661,7 @@ def calculate_match_score(
                     )
                     job_desc = (job.description or f"{job.title} {' '.join(job.tech_stack)}")[:1000]
                     s1_res = s1_engine.predict_match_scoring_ensemble(job_title=job.title, job_desc=job_desc, cv_text=cv_summary)
+                    job._system1_inference_origin = s1_res.pop("_system1_inference_origin", None)
 
                 skill_val = s1_res.get("skill_match", 2)
                 sen_val = s1_res.get("seniority_fit", 2)
@@ -1964,9 +1965,11 @@ def filter_jobs(
                     ]
                     batch_results = s1_engine.predict_match_scoring_batch(batch_items)
                     for j, s1_res in zip(neural_candidates, batch_results):
+                        j._system1_inference_origin = s1_res.pop("_system1_inference_origin", None)
                         setattr(j, "_precomputed_system1", s1_res)
 
                 for j in unselected_candidates:
+                    j._system1_inference_origin = "synthetic"
                     setattr(j, "_precomputed_system1", {
                         "skill_match": 1,
                         "skill_confidence": 0.60,

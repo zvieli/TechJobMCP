@@ -1,0 +1,15 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "panels": [
+    {"id": 1, "title": "Tool latency P95 / P99", "type": "timeseries", "targets": [{"expr": "histogram_quantile(0.95, sum(rate(mcp_tool_execution_duration_seconds_bucket[5m])) by (le, tool_name))", "legendFormat": "P95 {{tool_name}}"}, {"expr": "histogram_quantile(0.99, sum(rate(mcp_tool_execution_duration_seconds_bucket[5m])) by (le, tool_name))", "legendFormat": "P99 {{tool_name}}"}]},
+    {"id": 2, "title": "System 1 triage distribution", "type": "piechart", "targets": [{"expr": "100 * sum(increase(mcp_system1_triage_total{decision=\"local_accept\"}[24h])) / sum(increase(mcp_system1_triage_total{decision=~\"local_accept|escalate_system2\"}[24h]))", "legendFormat": "Local accept"}, {"expr": "100 * sum(increase(mcp_system1_triage_total{decision=\"escalate_system2\"}[24h])) / sum(increase(mcp_system1_triage_total{decision=~\"local_accept|escalate_system2\"}[24h]))", "legendFormat": "Escalate System 2"}]},
+    {"id": 3, "title": "Source fetch latency", "type": "heatmap", "targets": [{"expr": "sum(rate(mcp_source_fetch_duration_seconds_bucket[5m])) by (le, source_name)", "legendFormat": "{{source_name}}"}]},
+    {"id": 4, "title": "Estimated LLM API cost savings", "type": "stat", "targets": [{"expr": "mcp_estimated_cost_saved_usd_total", "legendFormat": "USD saved"}]}
+  ],
+  "schemaVersion": 39,
+  "tags": ["techjob-mcp"],
+  "title": "TechJobMCP Overview",
+  "uid": "techjob-overview",
+  "version": 1
+}

@@ -17,6 +17,7 @@ dependencies = [
     "tenacity>=8.0",
     "pypdf>=4.0",
     "structlog>=24.0",
+    "prometheus-client>=0.26.0",
 ]
 
 [project.optional-dependencies]
