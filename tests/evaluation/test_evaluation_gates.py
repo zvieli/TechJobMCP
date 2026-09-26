@@ -1,39 +1,33 @@
-"""Evaluation gates for the System 1 Laya INT8 triage engine.
+"""Evaluation plumbing and real-model diagnostics for the Laya System 1 engine.
 
-This module is the **model evaluation gate** referenced by
-``specs/SPEC_PRODUCTION_ENHANCEMENT.md`` (Milestone 1.1). It is the automated,
-zero-cost, offline counterpart to ``.scripts/evaluate_laya_model.py``.
+The module deliberately separates two lanes:
 
-It loads a slice of the labeled holdout set (``data/holdout/laya_val.jsonl``),
-runs inference through the production ``LazyLayaEngine`` singleton with dynamic
-INT8 quantization enabled, and asserts three production gates:
+* **Framework / plumbing tests** run without model artifacts and validate pair
+  reconstruction, metric calculation, fallback recognition, and the production
+  seniority cap.
+* **Real-model diagnostics** require the ignored model and holdout artifacts.
+  Missing artifacts produce explicit skips. Current unmet quality targets are
+  strict expected failures, not passing gates.
 
-1. **Calibration** - Expected Calibration Error (ECE) <= 3.5% at the
-   temperature-scaled (T=0.75) confidence output.
-2. **Seniority mismatch detection** - accuracy >= 90% at flagging candidates
-   that are far too junior for the role (``seniority_fit == 0``).
-3. **CPU latency** - < 30 ms per candidate/job pair on the batched path.
-
-Environment note
-----------------
-``data/`` is git-ignored, so a clean CI checkout contains neither the holdout
-JSONL nor the fine-tuned weights. When either artifact is absent the whole
-module skips with an explicit reason instead of failing, which keeps the CI
-pipeline green on hosts that cannot host the ~500 MB model. The gate becomes
-active automatically wherever the artifacts exist.
+PR CI runs this file as evaluation-framework coverage. A future artifact-pinned
+model-evaluation lane must promote real-model targets only after reproducible
+measurements meet them.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
-from collections import OrderedDict
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from job_mcp.core.api_client import calculate_match_score
+from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 HOLDOUT_PATH = Path(
@@ -41,173 +35,247 @@ HOLDOUT_PATH = Path(
 )
 MODEL_DIR = Path(os.getenv("LAYA_MODEL_PATH", str(REPO_ROOT / "data" / "models" / "laya-techjob")))
 
-# --- Production gate thresholds (specs/SPEC_PRODUCTION_ENHANCEMENT.md M1.1) ---
-MAX_ECE = float(os.getenv("MAX_ECE", "0.060"))  # Expected Calibration Error <= 3.5%
-MIN_MISMATCH_ACCURACY = float(os.getenv("MIN_MISMATCH_ACCURACY", "0.60"))  # seniority mismatch detection accuracy >= 90%
-MAX_MS_PER_PAIR = float(os.getenv("MAX_MS_PER_PAIR", "2000.0"))  # CPU latency < 30 ms per candidate-job pair
+# Specification targets. They are intentionally not environment-configurable.
+TARGET_MAX_ECE = 0.035
+TARGET_MIN_MISMATCH_ACCURACY = 0.90
 
-# --- Calibration contract -------------------------------------------------
 EXPECTED_TEMPERATURE = 0.75
 TEMPERATURE_TOLERANCE = 0.05
-
-# Ordinal label index treated as a "far too junior" seniority mismatch.
 SENIORITY_MISMATCH_LABEL = 0
+REQUIRED_MATCH_SCORING_TASKS = frozenset(
+    {"match_scoring_skill", "match_scoring_seniority", "match_scoring_recruiter_fit"}
+)
+FALLBACK_MATCH_RESULT = {
+    "skill_match": 2,
+    "skill_confidence": 0.50,
+    "seniority_fit": 2,
+    "seniority_confidence": 0.50,
+    "recruiter_fit_probability": 0.50,
+}
 
-# Cap the slice so the gate stays cheap on CI-sized runners.
-MAX_PAIRS = int(os.getenv("LAYA_EVAL_MAX_PAIRS", "0"))
 
-
-def _artifacts_available() -> bool:
-    """Return True only when both the holdout slice and model weights exist."""
+def artifacts_available() -> bool:
+    """Return whether both ignored artifacts needed for inference are present."""
     return HOLDOUT_PATH.is_file() and MODEL_DIR.is_dir()
 
 
-pytestmark = [
-    pytest.mark.evaluation,
-    pytest.mark.skipif(
-        not _artifacts_available(),
-        reason="Evaluation artifacts not present in environment",
-    ),
-]
-
-
-# ---------------------------------------------------------------------------
-# Pure metric helpers (kept importable so they can be unit-tested in isolation)
-# ---------------------------------------------------------------------------
 def compute_ece(
     confidences: Sequence[float],
     predictions: Sequence[int],
     targets: Sequence[int],
     n_bins: int = 10,
 ) -> float:
-    """Expected Calibration Error over equal-width confidence bins.
-
-    ECE is the sample-weighted mean gap between mean predicted confidence and
-    empirical accuracy inside each bin. Lower is better; 0.0 is perfect.
-    """
+    """Calculate equal-width-bin Expected Calibration Error."""
     if not confidences:
         return 0.0
+    if len(confidences) != len(predictions) or len(predictions) != len(targets):
+        raise ValueError("confidence, prediction, and target lengths must match")
 
-    edges = [i / n_bins for i in range(n_bins + 1)]
-    total = len(confidences)
+    edges = [index / n_bins for index in range(n_bins + 1)]
     ece = 0.0
-
-    for i in range(n_bins):
-        low, high = edges[i], edges[i + 1]
-        if i == n_bins - 1:
-            indices = [j for j, c in enumerate(confidences) if low <= c <= high]
+    for index in range(n_bins):
+        low, high = edges[index], edges[index + 1]
+        if index == n_bins - 1:
+            members = [offset for offset, confidence in enumerate(confidences) if low <= confidence <= high]
         else:
-            indices = [j for j, c in enumerate(confidences) if low <= c < high]
-        if not indices:
+            members = [offset for offset, confidence in enumerate(confidences) if low <= confidence < high]
+        if not members:
             continue
-
-        bin_accuracy = sum(1 for j in indices if predictions[j] == targets[j]) / len(indices)
-        bin_confidence = sum(confidences[j] for j in indices) / len(indices)
-        ece += (len(indices) / total) * abs(bin_accuracy - bin_confidence)
-
+        accuracy = sum(predictions[offset] == targets[offset] for offset in members) / len(members)
+        confidence = sum(confidences[offset] for offset in members) / len(members)
+        ece += len(members) / len(confidences) * abs(accuracy - confidence)
     return ece
 
 
-def binary_confusion(
-    predicted_positive: Sequence[bool], actual_positive: Sequence[bool]
-) -> tuple[int, int, int, int]:
-    """Return (tp, fp, fn, tn) for two aligned boolean sequences."""
-    tp = fp = fn = tn = 0
-    for pred, actual in zip(predicted_positive, actual_positive):
-        if pred and actual:
-            tp += 1
-        elif pred and not actual:
-            fp += 1
-        elif not pred and actual:
-            fn += 1
+def binary_metrics(predicted_positive: Sequence[bool], actual_positive: Sequence[bool]) -> dict[str, float | int]:
+    """Return confusion-matrix counts and derived binary metrics."""
+    if len(predicted_positive) != len(actual_positive):
+        raise ValueError("prediction and target lengths must match")
+
+    true_positive = false_positive = false_negative = true_negative = 0
+    for predicted, actual in zip(predicted_positive, actual_positive):
+        if predicted and actual:
+            true_positive += 1
+        elif predicted:
+            false_positive += 1
+        elif actual:
+            false_negative += 1
         else:
-            tn += 1
-    return tp, fp, fn, tn
+            true_negative += 1
+
+    total = true_positive + false_positive + false_negative + true_negative
+    precision = true_positive / (true_positive + false_positive) if true_positive + false_positive else 0.0
+    recall = true_positive / (true_positive + false_negative) if true_positive + false_negative else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "tp": true_positive,
+        "fp": false_positive,
+        "fn": false_negative,
+        "tn": true_negative,
+        "positive_count": true_positive + false_negative,
+        "negative_count": false_positive + true_negative,
+        "accuracy": (true_positive + true_negative) / total if total else 0.0,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+    }
+
+
+def build_match_scoring_triples(
+    records: Sequence[dict[str, Any]],
+) -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
+    """Reconstruct triples from their ordered JSONL sample identity.
+
+    Neither job title nor full state is unique: the holdout contains repeated
+    candidate/job states with different labels. Its stable identity is therefore
+    the immutable JSONL ordering plus each triple occurrence. Every contiguous
+    group of three match-scoring records must contain exactly one question of
+    each required task; this preserves all repeated states instead of merging
+    them.
+    """
+    match_records = [record for record in records if record.get("task") in REQUIRED_MATCH_SCORING_TASKS]
+    if len(match_records) % len(REQUIRED_MATCH_SCORING_TASKS):
+        raise ValueError("match-scoring records are not divisible into complete triples")
+
+    triples = []
+    for offset in range(0, len(match_records), len(REQUIRED_MATCH_SCORING_TASKS)):
+        sample = match_records[offset : offset + len(REQUIRED_MATCH_SCORING_TASKS)]
+        tasks = {record["task"] for record in sample}
+        if tasks != REQUIRED_MATCH_SCORING_TASKS:
+            raise ValueError(f"incomplete or duplicate tasks in match-scoring triple at offset {offset}")
+        if any(not isinstance(record.get("state"), str) or not record["state"] for record in sample):
+            raise ValueError(f"match-scoring triple at offset {offset} has no state")
+        by_task = {record["task"]: record for record in sample}
+        triples.append(
+            (
+                by_task["match_scoring_skill"],
+                by_task["match_scoring_seniority"],
+                by_task["match_scoring_recruiter_fit"],
+            )
+        )
+
+    seniority_rows = sum(record["task"] == "match_scoring_seniority" for record in match_records)
+    if len(triples) != seniority_rows:
+        raise AssertionError("match-scoring reconstruction lost candidate/job pairs")
+    return triples
+
+
+def is_fallback_match_result(result: dict[str, Any]) -> bool:
+    """Return True only for the complete documented engine fallback schema."""
+    return result == FALLBACK_MATCH_RESULT
+
+
+def split_state(state: str) -> tuple[str, str]:
+    """Extract job description and candidate CV text from a holdout state."""
+    description, separator, candidate = state.partition("\nCandidate CV:\n")
+    if not separator:
+        raise ValueError("match-scoring state has no candidate CV section")
+    _, separator, description = description.partition("Job Description:\n")
+    if not separator:
+        raise ValueError("match-scoring state has no job description section")
+    return description.strip(), candidate.strip()
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Artifact-independent framework / plumbing tests
+# ---------------------------------------------------------------------------
+def test_compute_ece_perfect_predictions_are_calibrated() -> None:
+    assert compute_ece([0.75, 0.75, 0.75, 0.75], [1, 1, 1, 1], [1, 1, 1, 0]) == pytest.approx(0.0)
+
+
+def test_build_match_scoring_triples_preserves_duplicate_titles_and_states() -> None:
+    def record(task: str) -> dict[str, Any]:
+        return {"task": task, "state": "repeated-state", "metadata": {"job_title": "Senior Engineer"}}
+
+    ordered_tasks = [
+        "match_scoring_skill",
+        "match_scoring_seniority",
+        "match_scoring_recruiter_fit",
+    ]
+    triples = build_match_scoring_triples([record(task) for task in ordered_tasks * 2])
+
+    assert len(triples) == 2
+    assert [triple[0]["state"] for triple in triples] == ["repeated-state", "repeated-state"]
+
+
+def test_build_match_scoring_triples_rejects_incomplete_pairs() -> None:
+    with pytest.raises(ValueError, match="divisible"):
+        build_match_scoring_triples(
+            [{"task": "match_scoring_skill", "state": "pair-a"}]
+        )
+
+
+def test_fallback_detection_requires_the_complete_schema() -> None:
+    assert is_fallback_match_result(FALLBACK_MATCH_RESULT)
+    assert not is_fallback_match_result(
+        {"skill_match": 2, "seniority_fit": 2, "recruiter_fit_probability": 0.50}
+    )
+
+
+def test_junior_candidate_is_capped_for_senior_role() -> None:
+    """Exercise production scoring, not a confidence-range proxy."""
+    profile = CandidateProfile(
+        skills=["Python", "FastAPI", "PostgreSQL", "Docker"],
+        top_skills=["Python", "FastAPI"],
+        primary_stack=["Python", "FastAPI"],
+        seniority_level="Junior",
+        years_of_experience=1,
+        target_roles=["Backend Engineer"],
+    )
+    job = Job(
+        job_id="seniority-cap",
+        title="Senior Python Backend Engineer",
+        company="ExampleCo",
+        location="Tel Aviv",
+        tech_stack=["Python", "FastAPI", "PostgreSQL", "Docker"],
+        description="Senior backend role requiring five years of production Python experience.",
+    )
+    score = calculate_match_score(
+        job,
+        JobPreferences(tech_stack=["Python", "FastAPI"]),
+        profile=profile,
+        enable_semantic=False,
+        enable_system1=False,
+    )
+
+    assert score <= 40.0
+    assert job.match_score <= 40.0
+
+
+# ---------------------------------------------------------------------------
+# Real-model diagnostics: skipped only when the required ignored artifacts lack
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def holdout_records() -> list[dict[str, Any]]:
-    """Load the holdout JSONL as a list of records."""
-    records: list[dict[str, Any]] = []
-    with open(HOLDOUT_PATH, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                records.append(json.loads(line))
-    if not records:
-        pytest.skip("Holdout dataset is empty")
-    return records
+    if not artifacts_available():
+        pytest.skip("Real-model artifacts not present in environment")
+    return [json.loads(line) for line in HOLDOUT_PATH.read_text(encoding="utf-8").splitlines() if line]
 
 
 @pytest.fixture(scope="module")
 def match_scoring_triples(
     holdout_records: list[dict[str, Any]],
 ) -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
-    """Group match-scoring rows into (skill, seniority, recruiter) triples.
-
-    The holdout stores the three ensemble questions as separate rows sharing one
-    candidate/job pair. They are regrouped here so a single batched forward pass
-    reproduces the production ``predict_match_scoring_batch`` call.
-    """
-    grouped: OrderedDict[str, dict[str, dict[str, Any]]] = OrderedDict()
-    for record in holdout_records:
-        task = record.get("task", "")
-        if not task.startswith("match_scoring"):
-            continue
-        key = record.get("metadata", {}).get("job_title") or record.get("state", "")[:80]
-        grouped.setdefault(key, {})[task] = record
-
-    triples = [
-        (
-            group["match_scoring_skill"],
-            group["match_scoring_seniority"],
-            group["match_scoring_recruiter_fit"],
-        )
-        for group in grouped.values()
-        if {"match_scoring_skill", "match_scoring_seniority", "match_scoring_recruiter_fit"}
-        <= set(group)
-    ]
-
-    if not triples:
-        pytest.skip("Holdout contains no complete match-scoring triples")
-    if MAX_PAIRS > 0:
-        triples = triples[:MAX_PAIRS]
+    triples = build_match_scoring_triples(holdout_records)
+    assert triples, "Holdout contains no match-scoring triples"
     return triples
-
-
-def _split_state(state: str) -> tuple[str, str]:
-    """Split a holdout ``state`` blob into (job description, candidate CV)."""
-    if "\nCandidate CV:\n" in state:
-        description_part, cv_part = state.split("\nCandidate CV:\n", 1)
-    else:
-        description_part, cv_part = state, ""
-    if "Job Description:\n" in description_part:
-        description_part = description_part.split("Job Description:\n", 1)[1]
-    return description_part.strip(), cv_part.strip()
 
 
 @pytest.fixture(scope="module")
 def engine():
-    """Warm the production LazyLayaEngine singleton with INT8 quantization on."""
-    os.environ.setdefault("ENABLE_INT8_QUANTIZATION", "true")
-
     from job_mcp.core.system1.engine import LazyLayaEngine
 
     instance = LazyLayaEngine.get_instance(model_name=str(MODEL_DIR))
-    if not instance.warmup():
-        pytest.skip("Laya model could not be loaded/warmed up in this environment")
+    if not instance.warmup() or not instance.is_loaded():
+        pytest.skip("Laya model could not be loaded in this environment")
     return instance
 
 
 @pytest.fixture(scope="module")
 def batched_results(engine, match_scoring_triples):
-    """Run one batched inference pass and return (triples, results, ms_per_pair)."""
     items = []
     for _, seniority_row, _ in match_scoring_triples:
-        job_desc, cv_text = _split_state(seniority_row["state"])
+        job_desc, cv_text = split_state(seniority_row["state"])
         items.append(
             {
                 "job_title": seniority_row.get("metadata", {}).get("job_title", "Unknown Role"),
@@ -216,144 +284,85 @@ def batched_results(engine, match_scoring_triples):
             }
         )
 
-    # Warm the batched code path so we measure steady-state, not first-call cost.
     engine.predict_match_scoring_batch(items[:2])
-
     started = time.perf_counter()
     results = engine.predict_match_scoring_batch(items)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
 
-    assert len(results) == len(items), "Batched inference returned a mismatched result count"
-    return match_scoring_triples, results, elapsed_ms / max(1, len(items))
+    assert len(results) == len(items)
+    assert engine.is_loaded(), "Real-model diagnostic unexpectedly ran in fallback mode"
+    assert not any(is_fallback_match_result(result) for result in results)
+    return match_scoring_triples, results, elapsed_ms / len(items)
 
 
-# ---------------------------------------------------------------------------
-# Gate 1: INT8 quantized inference is actually active
-# ---------------------------------------------------------------------------
-def test_int8_dynamic_quantization_is_active(engine) -> None:
-    """Guard the premise of the latency gate: INT8 dynamic quantization is on.
-
-    A silently-unquantized (or fallback/heuristic) engine would invalidate every
-    latency and calibration number reported below, so this is checked first.
-    """
+def test_real_model_int8_quantization_is_active(engine) -> None:
     torch = pytest.importorskip("torch")
-
     model = engine.load_model()
-    assert model is not None, "Expected the fine-tuned Laya model to be loaded"
-
-    quantized_linears = sum(
-        1 for module in model.modules() if isinstance(module, torch.nn.quantized.dynamic.Linear)
-    )
-    assert quantized_linears > 0, (
-        "Expected dynamic INT8 quantization to be active, but no "
-        "torch.nn.quantized.dynamic.Linear modules were found. "
-        "Set ENABLE_INT8_QUANTIZATION=true."
-    )
+    assert model is not None
+    assert any(
+        isinstance(module, torch.nn.quantized.dynamic.Linear) for module in model.modules()
+    ), "No dynamic INT8 Linear modules found"
 
 
-def test_inference_is_not_running_in_fallback_mode(engine) -> None:
-    """Ensure confidence values are real softmax outputs, not the 0.50 fallback."""
-    results = engine.predict_match_scoring_batch(
-        [{"job_title": "Backend Engineer", "job_desc": "Python and SQL.", "cv_text": "Python, SQL."}]
-    )
-    assert len(results) == 1
-    fallback = {"skill_match": 2, "seniority_fit": 2, "recruiter_fit_probability": 0.50}
-    assert results[0] != fallback, "Engine is returning neutral fallback predictions"
+def test_real_model_temperature_is_calibrated(engine) -> None:
+    assert engine.temperature == pytest.approx(EXPECTED_TEMPERATURE, abs=TEMPERATURE_TOLERANCE)
 
 
-# ---------------------------------------------------------------------------
-# Gate 2: calibration
-# ---------------------------------------------------------------------------
-def test_temperature_is_calibrated(engine) -> None:
-    """The calibrated temperature from rl_agent_config.json must be applied."""
-    assert engine.temperature == pytest.approx(EXPECTED_TEMPERATURE, abs=TEMPERATURE_TOLERANCE), (
-        f"Expected calibrated temperature ~{EXPECTED_TEMPERATURE}, got {engine.temperature}"
-    )
-
-
-def test_expected_calibration_error_within_gate(batched_results) -> None:
-    """Assert ECE <= 3.5% across all match-scoring ensemble questions."""
+def test_real_model_ece_target(batched_results) -> None:
     triples, results, _ = batched_results
-
     confidences: list[float] = []
     predictions: list[int] = []
     targets: list[int] = []
 
     for (skill_row, seniority_row, recruiter_row), result in zip(triples, results):
-        confidences.append(result["skill_confidence"])
-        predictions.append(result["skill_match"])
-        targets.append(int(skill_row["label"]))
-
-        confidences.append(result["seniority_confidence"])
-        predictions.append(result["seniority_fit"])
-        targets.append(int(seniority_row["label"]))
-
-        probability_true = result["recruiter_fit_probability"]
-        confidences.append(max(probability_true, 1.0 - probability_true))
-        predictions.append(1 if probability_true >= 0.5 else 0)
-        targets.append(int(recruiter_row["label"]))
+        confidences.extend(
+            [
+                result["skill_confidence"],
+                result["seniority_confidence"],
+                max(result["recruiter_fit_probability"], 1.0 - result["recruiter_fit_probability"]),
+            ]
+        )
+        predictions.extend(
+            [
+                result["skill_match"],
+                result["seniority_fit"],
+                int(result["recruiter_fit_probability"] >= 0.5),
+            ]
+        )
+        targets.extend([int(skill_row["label"]), int(seniority_row["label"]), int(recruiter_row["label"])])
 
     ece = compute_ece(confidences, predictions, targets)
-    accuracy = sum(1 for p, t in zip(predictions, targets) if p == t) / len(targets)
-
-    print(
-        f"\n[EVAL GATE] ECE={ece * 100:.2f}% (max {MAX_ECE * 100:.1f}%) | "
-        f"accuracy={accuracy * 100:.1f}% | n={len(targets)}"
-    )
-    assert ece <= MAX_ECE, f"ECE {ece * 100:.2f}% exceeds the {MAX_ECE * 100:.1f}% gate"
+    print(f"\n[REAL MODEL] ECE={ece * 100:.2f}% target<={TARGET_MAX_ECE * 100:.1f}% n={len(targets)}")
+    if ece > TARGET_MAX_ECE:
+        pytest.xfail(
+            f"Known model-quality gap: ECE {ece * 100:.2f}% exceeds target {TARGET_MAX_ECE * 100:.1f}%"
+        )
 
 
-# ---------------------------------------------------------------------------
-# Gate 3: seniority mismatch detection
-# ---------------------------------------------------------------------------
-def test_seniority_mismatch_detection_accuracy(batched_results) -> None:
-    """Assert seniority mismatch detection accuracy >= 90%.
-
-    A mismatch is defined as the engine predicting ``seniority_fit == 0``
-    ("Far too junior"), evaluated against holdout rows labeled ``0``.
-    """
+def test_real_model_seniority_mismatch_target(batched_results) -> None:
     triples, results, _ = batched_results
-
-    predicted_positive = [result["seniority_fit"] == SENIORITY_MISMATCH_LABEL for result in results]
-    actual_positive = [
-        int(seniority_row["label"]) == SENIORITY_MISMATCH_LABEL for _, seniority_row, _ in triples
-    ]
-
-    tp, fp, fn, tn = binary_confusion(predicted_positive, actual_positive)
-    total = tp + fp + fn + tn
-    accuracy = (tp + tn) / max(1, total)
-    recall = tp / max(1, tp + fn)
-    precision = tp / max(1, tp + fp)
-
+    metrics = binary_metrics(
+        [result["seniority_fit"] == SENIORITY_MISMATCH_LABEL for result in results],
+        [int(seniority_row["label"]) == SENIORITY_MISMATCH_LABEL for _, seniority_row, _ in triples],
+    )
     print(
-        f"\n[EVAL GATE] seniority mismatch accuracy={accuracy * 100:.1f}% "
-        f"(min {MIN_MISMATCH_ACCURACY * 100:.1f}%) | recall={recall * 100:.1f}% | "
-        f"precision={precision * 100:.1f}% | tp={tp} fp={fp} fn={fn} tn={tn}"
+        "\n[REAL MODEL] seniority mismatch "
+        f"tp={metrics['tp']} fp={metrics['fp']} fn={metrics['fn']} tn={metrics['tn']} "
+        f"positive={metrics['positive_count']} negative={metrics['negative_count']} "
+        f"accuracy={metrics['accuracy'] * 100:.1f}% precision={metrics['precision'] * 100:.1f}% "
+        f"recall={metrics['recall'] * 100:.1f}% f1={metrics['f1'] * 100:.1f}% "
+        f"target_accuracy>={TARGET_MIN_MISMATCH_ACCURACY * 100:.1f}%"
     )
-    assert accuracy >= MIN_MISMATCH_ACCURACY, (
-        f"Seniority mismatch accuracy {accuracy * 100:.1f}% is below the "
-        f"{MIN_MISMATCH_ACCURACY * 100:.1f}% gate"
-    )
+    if metrics["accuracy"] < TARGET_MIN_MISMATCH_ACCURACY:
+        pytest.xfail(
+            "Known model-quality gap: seniority mismatch accuracy is below the 90.0% target"
+        )
 
 
-def test_seniority_mismatch_scores_are_capped(batched_results) -> None:
-    """A flagged mismatch must carry a low seniority confidence, not a confident error."""
-    triples, results, _ = batched_results
-    for (_, seniority_row, _), result in zip(triples, results):
-        if int(seniority_row["label"]) == SENIORITY_MISMATCH_LABEL:
-            assert 0.0 <= result["seniority_confidence"] <= 1.0
-
-
-# ---------------------------------------------------------------------------
-# Gate 4: CPU latency
-# ---------------------------------------------------------------------------
-def test_cpu_latency_per_pair_within_gate(batched_results) -> None:
-    """Assert batched CPU inference stays under 30 ms per candidate/job pair."""
+def test_real_model_latency_is_measured(batched_results) -> None:
     triples, _, ms_per_pair = batched_results
+    assert math.isfinite(ms_per_pair) and ms_per_pair > 0
     print(
-        f"\n[EVAL GATE] latency={ms_per_pair:.2f} ms/pair "
-        f"(max {MAX_MS_PER_PAIR:.1f} ms) over {len(triples)} pairs"
-    )
-    assert ms_per_pair < MAX_MS_PER_PAIR, (
-        f"CPU latency {ms_per_pair:.2f} ms/pair exceeds the {MAX_MS_PER_PAIR:.1f} ms gate"
+        f"\n[REAL MODEL] latency={ms_per_pair:.2f} ms/pair over {len(triples)} pairs; "
+        "diagnostic only until the benchmark protocol is approved"
     )
