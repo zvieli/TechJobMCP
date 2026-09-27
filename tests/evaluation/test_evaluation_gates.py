@@ -20,13 +20,17 @@ import json
 import math
 import os
 import time
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from job_mcp.core.api_client import calculate_match_score
+from job_mcp.evaluation.benchmark import (
+    binary_metrics,
+    build_match_scoring_triples,
+    compute_ece,
+)
 from job_mcp.models.schemas import CandidateProfile, Job, JobPreferences
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -57,107 +61,6 @@ FALLBACK_MATCH_RESULT = {
 def artifacts_available() -> bool:
     """Return whether both ignored artifacts needed for inference are present."""
     return HOLDOUT_PATH.is_file() and MODEL_DIR.is_dir()
-
-
-def compute_ece(
-    confidences: Sequence[float],
-    predictions: Sequence[int],
-    targets: Sequence[int],
-    n_bins: int = 10,
-) -> float:
-    """Calculate equal-width-bin Expected Calibration Error."""
-    if not confidences:
-        return 0.0
-    if len(confidences) != len(predictions) or len(predictions) != len(targets):
-        raise ValueError("confidence, prediction, and target lengths must match")
-
-    edges = [index / n_bins for index in range(n_bins + 1)]
-    ece = 0.0
-    for index in range(n_bins):
-        low, high = edges[index], edges[index + 1]
-        if index == n_bins - 1:
-            members = [offset for offset, confidence in enumerate(confidences) if low <= confidence <= high]
-        else:
-            members = [offset for offset, confidence in enumerate(confidences) if low <= confidence < high]
-        if not members:
-            continue
-        accuracy = sum(predictions[offset] == targets[offset] for offset in members) / len(members)
-        confidence = sum(confidences[offset] for offset in members) / len(members)
-        ece += len(members) / len(confidences) * abs(accuracy - confidence)
-    return ece
-
-
-def binary_metrics(predicted_positive: Sequence[bool], actual_positive: Sequence[bool]) -> dict[str, float | int]:
-    """Return confusion-matrix counts and derived binary metrics."""
-    if len(predicted_positive) != len(actual_positive):
-        raise ValueError("prediction and target lengths must match")
-
-    true_positive = false_positive = false_negative = true_negative = 0
-    for predicted, actual in zip(predicted_positive, actual_positive):
-        if predicted and actual:
-            true_positive += 1
-        elif predicted:
-            false_positive += 1
-        elif actual:
-            false_negative += 1
-        else:
-            true_negative += 1
-
-    total = true_positive + false_positive + false_negative + true_negative
-    precision = true_positive / (true_positive + false_positive) if true_positive + false_positive else 0.0
-    recall = true_positive / (true_positive + false_negative) if true_positive + false_negative else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return {
-        "tp": true_positive,
-        "fp": false_positive,
-        "fn": false_negative,
-        "tn": true_negative,
-        "positive_count": true_positive + false_negative,
-        "negative_count": false_positive + true_negative,
-        "accuracy": (true_positive + true_negative) / total if total else 0.0,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-    }
-
-
-def build_match_scoring_triples(
-    records: Sequence[dict[str, Any]],
-) -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
-    """Reconstruct triples from their ordered JSONL sample identity.
-
-    Neither job title nor full state is unique: the holdout contains repeated
-    candidate/job states with different labels. Its stable identity is therefore
-    the immutable JSONL ordering plus each triple occurrence. Every contiguous
-    group of three match-scoring records must contain exactly one question of
-    each required task; this preserves all repeated states instead of merging
-    them.
-    """
-    match_records = [record for record in records if record.get("task") in REQUIRED_MATCH_SCORING_TASKS]
-    if len(match_records) % len(REQUIRED_MATCH_SCORING_TASKS):
-        raise ValueError("match-scoring records are not divisible into complete triples")
-
-    triples = []
-    for offset in range(0, len(match_records), len(REQUIRED_MATCH_SCORING_TASKS)):
-        sample = match_records[offset : offset + len(REQUIRED_MATCH_SCORING_TASKS)]
-        tasks = {record["task"] for record in sample}
-        if tasks != REQUIRED_MATCH_SCORING_TASKS:
-            raise ValueError(f"incomplete or duplicate tasks in match-scoring triple at offset {offset}")
-        if any(not isinstance(record.get("state"), str) or not record["state"] for record in sample):
-            raise ValueError(f"match-scoring triple at offset {offset} has no state")
-        by_task = {record["task"]: record for record in sample}
-        triples.append(
-            (
-                by_task["match_scoring_skill"],
-                by_task["match_scoring_seniority"],
-                by_task["match_scoring_recruiter_fit"],
-            )
-        )
-
-    seniority_rows = sum(record["task"] == "match_scoring_seniority" for record in match_records)
-    if len(triples) != seniority_rows:
-        raise AssertionError("match-scoring reconstruction lost candidate/job pairs")
-    return triples
 
 
 def is_fallback_match_result(result: dict[str, Any]) -> bool:
