@@ -20,6 +20,7 @@ from job_mcp.evaluation.benchmark import (
     REQUIRED_MATCH_SCORING_TASKS,
     WARMUP_RUNS,
     audit_holdout_overlap,
+    benchmark_input,
     binary_metrics,
     build_match_scoring_triples,
     calibration_summary,
@@ -87,6 +88,12 @@ def _require_real(origins: list[Any], context: str) -> list[str]:
     return [str(origin) for origin in origins]
 
 
+def _payload_digest(payload: dict[str, str]) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+
+
 def _profile_and_preferences() -> tuple[Any, Any]:
     from job_mcp.models.schemas import CandidateProfile, JobPreferences
 
@@ -108,19 +115,40 @@ def _prepare_operation(
     from job_mcp.core.system1.factory import set_active_engine
 
     boundary = request["boundary"]
+    payloads = request.get(
+        "input_payloads", [request.get("input_payload", benchmark_input(0))]
+    )
+    payload_index = 0
+
+    def next_payload() -> dict[str, str]:
+        nonlocal payload_index
+        payload = payloads[payload_index % len(payloads)]
+        payload_index += 1
+        return payload
+
     set_active_engine(engine)
     if boundary == "model_only_forward":
         model, tokenizer = engine.load_model(), engine._tokenizer
         if model is None or tokenizer is None:
             raise RuntimeError("model-only forward unavailable")
-        size = int(request["input"].split("_")[-1])
-        encoded = tokenizer(
-            ["offline benchmark"] * (size * 3), padding=True, return_tensors="pt"
-        )
+        size = int(request["batch_size"])
+        encoded_by_digest = {}
+        for payload in payloads:
+            digest = _payload_digest(payload)
+            if digest not in encoded_by_digest:
+                encoded_by_digest[digest] = tokenizer(
+                    [
+                        f"{payload['job_title']}\n{payload['job_desc']}\n{payload['cv_text']}"
+                    ]
+                    * (size * 3),
+                    padding=True,
+                    return_tensors="pt",
+                )
+        active_payload_index = 0
 
         class Pretokenized:
             def __call__(self, *args: Any, **kwargs: Any) -> Any:
-                return encoded
+                return encoded_by_digest[_payload_digest(payloads[active_payload_index])]
 
         engine._tokenizer = Pretokenized()
         elapsed_forward_ns: list[int] = []
@@ -135,18 +163,18 @@ def _prepare_operation(
 
         model.register_forward_pre_hook(before_forward)
         model.register_forward_hook(after_forward)
-        items = [
-            {
-                "job_title": "Backend Engineer",
-                "job_desc": "Python FastAPI backend services",
-                "cv_text": "Python backend developer",
-            }
-            for _ in range(size)
+        items_by_payload = [
+            [dict(payload) for _ in range(size)] for payload in payloads
         ]
 
         def model_forward() -> tuple[list[str], int | None]:
+            nonlocal active_payload_index
             elapsed_forward_ns.clear()
-            results = engine.predict_match_scoring_batch(items, chunk_size=size)
+            active_payload_index = payload_index % len(items_by_payload)
+            results = engine.predict_match_scoring_batch(
+                items_by_payload[active_payload_index], chunk_size=size
+            )
+            next_payload()
             origins = _require_real(
                 [result.get("_system1_inference_origin") for result in results],
                 boundary,
@@ -161,8 +189,9 @@ def _prepare_operation(
     if boundary == "warm_ensemble":
 
         def warm_ensemble() -> tuple[list[str], int | None]:
+            payload = next_payload()
             result = engine.predict_match_scoring_ensemble(
-                "Python backend", "Python developer", "Backend Engineer"
+                payload["job_desc"], payload["cv_text"], payload["job_title"]
             )
             origins = _require_real([result.get("_system1_inference_origin")], boundary)
             return origins, None
@@ -175,12 +204,13 @@ def _prepare_operation(
         profile, preferences = _profile_and_preferences()
 
         def match_score() -> tuple[list[str], int | None]:
+            payload = next_payload()
             job = Job(
                 job_id="benchmark",
-                title="Backend Engineer",
+                title=payload["job_title"],
                 company="Fixture",
                 location="Tel Aviv",
-                description="Python FastAPI backend services",
+                description=payload["job_desc"],
                 tech_stack=["Python", "FastAPI"],
             )
             calculate_match_score(
@@ -200,13 +230,14 @@ def _prepare_operation(
         profile, preferences = _profile_and_preferences()
 
         def filtered_jobs() -> tuple[list[str], int | None]:
+            payload = next_payload()
             jobs = [
                 Job(
                     job_id=str(index),
-                    title="Backend Engineer",
+                    title=payload["job_title"],
                     company="Fixture",
                     location="Tel Aviv",
-                    description="Python FastAPI backend services",
+                    description=payload["job_desc"],
                     tech_stack=["Python", "FastAPI"],
                 )
                 for index in range(3)
@@ -230,6 +261,9 @@ def _prepare_operation(
 def _run_timed_request(request: dict[str, Any], engine: Any) -> dict[str, Any]:
     """Run a request against one retained engine for this worker process."""
     boundary = request["boundary"]
+    payloads = request.get(
+        "input_payloads", [request.get("input_payload", benchmark_input(0))]
+    )
     if boundary == "cold_load_first_inference":
         if request.get("warmups") != 0 or request.get("runs") != 1:
             raise RuntimeError("invalid cold protocol")
@@ -240,7 +274,9 @@ def _run_timed_request(request: dict[str, Any], engine: Any) -> dict[str, Any]:
             raise RuntimeError("model cold load failed")
         inference_started = time.perf_counter_ns()
         result = engine.predict_match_scoring_ensemble(
-            "Python backend", "Python developer", "Backend Engineer"
+            payloads[0]["job_desc"],
+            payloads[0]["cv_text"],
+            payloads[0]["job_title"],
         )
         inference_elapsed = time.perf_counter_ns() - inference_started
         origins = _require_real(
@@ -257,6 +293,7 @@ def _run_timed_request(request: dict[str, Any], engine: Any) -> dict[str, Any]:
                     "input": request["input"],
                     "boundary": "cold_load",
                     "elapsed_ns": load_elapsed,
+                    "input_payload_sha256": _payload_digest(payloads[0]),
                 },
                 {
                     "run": 0,
@@ -264,12 +301,15 @@ def _run_timed_request(request: dict[str, Any], engine: Any) -> dict[str, Any]:
                     "boundary": "first_inference",
                     "elapsed_ns": inference_elapsed,
                     "origin": origins[0],
+                    "input_payload_sha256": _payload_digest(payloads[0]),
                 },
             ],
         }
     if request.get("warmups") != WARMUP_RUNS:
         raise RuntimeError("warm workers require exactly five excluded warmups")
-    operation = _prepare_operation(request, engine)
+    operation_request = dict(request)
+    operation_request["input_payloads"] = [payloads[0]] * WARMUP_RUNS + list(payloads)
+    operation = _prepare_operation(operation_request, engine)
     for _ in range(WARMUP_RUNS):
         warmup_origins, _ = operation()
         _require_real(warmup_origins, "warmup")
@@ -292,6 +332,7 @@ def _run_timed_request(request: dict[str, Any], engine: Any) -> dict[str, Any]:
                 "boundary": boundary,
                 "elapsed_ns": elapsed,
                 "origin": origins[0],
+                "input_payload_sha256": _payload_digest(payloads[run % len(payloads)]),
             }
         )
     return {

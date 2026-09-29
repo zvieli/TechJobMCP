@@ -27,7 +27,6 @@ from job_mcp.evaluation.benchmark import (
     execute_protocol,
     percentile_summary,
     primary_and_sensitivity_views,
-    protocol_observation_counts,
     validate_publication,
 )
 
@@ -129,6 +128,11 @@ def _fake_reply(request: dict[str, Any], pid: int = 1) -> dict[str, Any]:
                 "input": request["input"],
                 "boundary": "cold_load",
                 "elapsed_ns": 1,
+                "input_payload_sha256": hashlib.sha256(
+                    benchmark._canonical_json(
+                        request.get("input_payloads", [benchmark.benchmark_input(0)])[0]
+                    )
+                ).hexdigest(),
             },
             {
                 "run": 0,
@@ -136,6 +140,11 @@ def _fake_reply(request: dict[str, Any], pid: int = 1) -> dict[str, Any]:
                 "boundary": "first_inference",
                 "elapsed_ns": 2,
                 "origin": "real",
+                "input_payload_sha256": hashlib.sha256(
+                    benchmark._canonical_json(
+                        request.get("input_payloads", [benchmark.benchmark_input(0)])[0]
+                    )
+                ).hexdigest(),
             },
         ]
     else:
@@ -146,6 +155,11 @@ def _fake_reply(request: dict[str, Any], pid: int = 1) -> dict[str, Any]:
                 "boundary": request["boundary"],
                 "elapsed_ns": 1,
                 "origin": "real",
+                "input_payload_sha256": hashlib.sha256(
+                    benchmark._canonical_json(
+                        request.get("input_payloads", [benchmark.benchmark_input(0)])[run]
+                    )
+                ).hexdigest(),
             }
             for run in range(request["runs"])
         ]
@@ -279,6 +293,78 @@ def test_percentiles_are_type7_and_low_sample_p99_is_labeled() -> None:
     assert summary["p99_label"] == "low-N diagnostic"
 
 
+def test_protocol_materializes_exact_lanes_with_counts_rotation_and_batch_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_call(
+        command: list[str], request: dict[str, Any], timeout: float
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _fake_reply(request, calls)
+
+    monkeypatch.setattr(benchmark, "_worker_call", fake_call)
+    result = execute_protocol(["worker"], deadline_ns=10**30)
+    expected_counts = {
+        "cold_load": 8,
+        "first_inference": 8,
+        "model_forward": 100,
+        "warm_ensemble": 100,
+        "batch_1": 20,
+        "batch_4": 20,
+        "batch_8": 20,
+        "batch_15": 20,
+        "calculate_match_score": 60,
+        "filter_jobs": 10,
+    }
+    assert set(result["lanes"]) == set(expected_counts)
+    for identity, measured_count in expected_counts.items():
+        lane = result["lanes"][identity]
+        assert lane["identity"] == identity
+        assert lane["measured_count"] == measured_count
+        assert len(lane["raw_samples"]) == measured_count
+        assert lane["summary"]["count"] == measured_count
+        assert lane["percentile_resolution"]["sample_count"] == measured_count
+        assert lane["run_ids"] == list(dict.fromkeys(
+            sample["run_id"] for sample in lane["raw_samples"]
+        ))
+        assert all(sample["warmup"] is False for sample in lane["raw_samples"])
+        assert all("input_id" in sample for sample in lane["raw_samples"])
+        assert lane["metadata"]
+
+    assert result["lanes"]["model_forward"]["protocol"] == {
+        "run_count": 2,
+        "samples_per_run": 50,
+        "warmups_excluded_per_run": 5,
+    }
+    assert result["lanes"]["warm_ensemble"]["protocol"] == {
+        "run_count": 2,
+        "samples_per_run": 50,
+        "warmups_excluded_per_run": 5,
+    }
+    model_samples = result["lanes"]["model_forward"]["raw_samples"]
+    first_run = [
+        sample for sample in model_samples if sample["run_id"] == "model_forward-run-0"
+    ]
+    assert [sample["input_id"] for sample in first_run[:17]] == [
+        *(f"pair-{index:02d}" for index in range(16)),
+        "pair-00",
+    ]
+    for size in (1, 4, 8, 15):
+        lane = result["lanes"][f"batch_{size}"]
+        assert lane["metadata"]["batch_size"] == size
+        assert lane["metadata"]["throughput_unit"] == "pairs_per_second"
+        assert lane["throughput"]["count"] == 20
+        assert all(sample["batch_size"] == size for sample in lane["raw_samples"])
+        assert all(
+            sample["throughput_pairs_per_second"]
+            == pytest.approx(size * 1_000_000_000 / sample["elapsed_ns"])
+            for sample in lane["raw_samples"]
+        )
+
+
 def test_protocol_uses_cold_timeout_only_for_cold_and_validates_each_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -293,7 +379,20 @@ def test_protocol_uses_cold_timeout_only_for_cold_and_validates_each_origin(
     monkeypatch.setattr(benchmark, "_worker_call", fake_call)
     time_ns = benchmark.time.monotonic_ns() + 1000 * 1_000_000_000
     result = execute_protocol(["worker"], deadline_ns=time_ns)
-    assert result["observations"] == protocol_observation_counts()
+    assert {
+        name: lane["measured_count"] for name, lane in result["lanes"].items()
+    } == {
+        "cold_load": 8,
+        "first_inference": 8,
+        "model_forward": 100,
+        "warm_ensemble": 100,
+        "batch_1": 20,
+        "batch_4": 20,
+        "batch_8": 20,
+        "batch_15": 20,
+        "calculate_match_score": 60,
+        "filter_jobs": 10,
+    }
     assert all(
         timeout <= COLD_TIMEOUT_SECONDS
         for request, timeout in calls
@@ -304,10 +403,8 @@ def test_protocol_uses_cold_timeout_only_for_cold_and_validates_each_origin(
         for request, timeout in calls
         if request["boundary"] != "cold_load_first_inference"
     )
-    assert any(sample["boundary"] == "cold_load" for sample in result["raw_samples"])
-    assert any(
-        sample["boundary"] == "first_inference" for sample in result["raw_samples"]
-    )
+    assert result["lanes"]["cold_load"]["boundary"] == "cold_load"
+    assert result["lanes"]["first_inference"]["boundary"] == "first_inference"
     assert time_ns > 0
 
     def fallback_call(
@@ -320,6 +417,26 @@ def test_protocol_uses_cold_timeout_only_for_cold_and_validates_each_origin(
 
     monkeypatch.setattr(benchmark, "_worker_call", fallback_call)
     with pytest.raises(RuntimeError, match="origin"):
+        execute_protocol(["worker"], deadline_ns=10**30)
+
+
+def test_protocol_fails_immediately_on_worker_payload_digest_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_call(
+        command: list[str], request: dict[str, Any], timeout: float
+    ) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        reply = _fake_reply(request, calls)
+        if request.get("mode") != "quality":
+            reply["samples"][0]["input_payload_sha256"] = "0" * 64
+        return reply
+
+    monkeypatch.setattr(benchmark, "_worker_call", fake_call)
+    with pytest.raises(RuntimeError, match="mismatched input payload"):
         execute_protocol(["worker"], deadline_ns=10**30)
 
 
@@ -382,6 +499,7 @@ def test_worker_reuses_one_engine_for_exactly_five_warmups_and_pretokenizes_mode
             {
                 "input": "batch_4",
                 "boundary": "model_only_forward",
+                "batch_size": 4,
                 "runs": 2,
                 "warmups": 5,
             },
@@ -582,6 +700,118 @@ def test_runtime_calibration_config_is_required_valid_and_matches_engine(
     }
 
 
+@pytest.mark.parametrize(
+    ("mutate", "expected_error"),
+    [
+        (lambda lanes: lanes.pop("model_forward"), "invalid benchmark lanes"),
+        (
+            lambda lanes: lanes.__setitem__("unexpected", dict(lanes["cold_load"])),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"].__setitem__("measured_count", 99),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["protocol"].__setitem__(
+                "samples_per_run", 49
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"].__setitem__("run_ids", ["wrong"]),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"].pop("raw_samples"),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].__setitem__(
+                "warmup", True
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].pop("input_id"),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].__setitem__(
+                "run_id", "wrong"
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].__setitem__(
+                "sample_index", False
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].__setitem__(
+                "process", True
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["protocol"].__setitem__(
+                "run_count", True
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"].pop("percentile_resolution"),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["batch_4"]["metadata"].__setitem__("batch_size", 1),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["batch_4"]["metadata"].__setitem__("batch_size", True),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["batch_4"]["raw_samples"][0].__setitem__(
+                "batch_size", True
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["batch_4"]["raw_samples"][0].__setitem__(
+                "throughput_pairs_per_second", 1
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["batch_4"].__setitem__(
+                "identity", "batch_1"
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["batch_4"].__setitem__(
+                "boundary", "warm_ensemble"
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["summary"].__setitem__("mean", 0),
+            "invalid benchmark lanes",
+        ),
+    ],
+)
+def test_publication_validation_rejects_malformed_lane_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    mutate: Any,
+    expected_error: str,
+) -> None:
+    valid, artifacts = _valid_result(monkeypatch)
+    mutate(valid["lanes"])
+    assert expected_error in validate_publication(valid, artifacts)
+
+
 def test_publication_validation_is_strict_for_nested_provenance_artifacts_model_and_quality(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -658,6 +888,39 @@ def test_publication_validation_is_strict_for_nested_provenance_artifacts_model_
     )
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result: result["publication"].__setitem__("elapsed_seconds", True),
+        lambda result: result["publication"].__setitem__("elapsed_seconds", "1"),
+        lambda result: result["quality"]["metrics"]["views"]["primary"][
+            "calibration"
+        ].__setitem__("ece", float("nan")),
+        lambda result: result["quality"]["metrics"]["views"]["primary"][
+            "calibration"
+        ]["bins"][0].__setitem__("accuracy", float("inf")),
+        lambda result: result["quality"]["metrics"]["views"]["primary"][
+            "seniority_mismatch"
+        ].__setitem__("tp", True),
+        lambda result: result["quality"]["metrics"]["views"]["primary"][
+            "seniority_mismatch"
+        ].__setitem__("fp", -1),
+        lambda result: result["quality"]["metrics"]["views"]["primary"][
+            "seniority_mismatch"
+        ].__setitem__("fn", 1.5),
+        lambda result: result["quality"]["metrics"]["views"]["primary"][
+            "seniority_mismatch"
+        ].__setitem__("precision", float("-inf")),
+    ],
+)
+def test_publication_validation_rejects_malformed_numeric_values(
+    monkeypatch: pytest.MonkeyPatch, mutate: Any
+) -> None:
+    valid, artifacts = _valid_result(monkeypatch)
+    mutate(valid)
+    assert validate_publication(valid, artifacts)
+
+
 def test_cli_clean_success_rechecks_dirty_state_and_artifacts_with_fakes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -700,7 +963,7 @@ def test_cli_clean_success_rechecks_dirty_state_and_artifacts_with_fakes(
         )
         return {
             key: result[key]
-            for key in ("observations", "raw_samples", "quality", "environment")
+            for key in ("lanes", "quality", "environment")
         } | {"runtime_model": result["model"]}
 
     monkeypatch.setattr(runner, "execute_protocol", fake_protocol)

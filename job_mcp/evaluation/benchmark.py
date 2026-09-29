@@ -21,8 +21,10 @@ BENCHMARK_SCHEMA_VERSION = "m3-benchmark-v1"
 ECE_BINS = 10
 COLD_OBSERVATIONS, COLD_TIMEOUT_SECONDS = 8, 120
 PUBLICATION_BUDGET_SECONDS, WARMUP_RUNS = 75 * 60, 5
+MODEL_FORWARD_PROCESSES, MODEL_FORWARD_RUNS = 2, 50
 WARM_ENSEMBLE_PROCESSES, WARM_ENSEMBLE_RUNS = 2, 50
 BATCH_SIZES, BATCH_PROCESSES, BATCH_RUNS = (1, 4, 8, 15), 2, 10
+INPUT_ROTATION_SIZE = 16
 MATCH_SCORE_PROCESSES, MATCH_SCORE_RUNS = 2, 30
 FILTER_PROCESSES, FILTER_RUNS = 2, 5
 REQUIRED_MATCH_SCORING_TASKS = frozenset(
@@ -32,12 +34,30 @@ REQUIRED_ARTIFACTS = frozenset({"holdout", "training", "model"})
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 REQUIRED_DEPENDENCIES = ("job-mcp", "torch", "transformers")
+FIXED_INPUT_CORPUS = tuple(
+    {
+        "job_title": f"Backend Engineer {index + 1}",
+        "job_desc": f"Python service platform fixture {index + 1}",
+        "cv_text": f"Backend developer with Python experience {index + 1}",
+    }
+    for index in range(INPUT_ROTATION_SIZE)
+)
 
 
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode()
+
+
+def benchmark_input(index: int) -> dict[str, str]:
+    if not 0 <= index < INPUT_ROTATION_SIZE:
+        raise ValueError("benchmark input index is outside the fixed corpus")
+    return dict(FIXED_INPUT_CORPUS[index])
+
+
+def benchmark_input_digest(index: int) -> str:
+    return hashlib.sha256(_canonical_json(benchmark_input(index))).hexdigest()
 
 
 def calibration_summary(
@@ -346,14 +366,18 @@ def percentile_summary(
     }
 
 
-def protocol_observation_counts() -> dict[str, Any]:
+def protocol_observation_counts() -> dict[str, int]:
     return {
         "cold_load": COLD_OBSERVATIONS,
         "first_inference": COLD_OBSERVATIONS,
-        "warm_ensemble": 100,
-        "batch": {str(size): 20 for size in BATCH_SIZES},
-        "calculate_match_score": 60,
-        "filter_jobs": 10,
+        "model_forward": MODEL_FORWARD_PROCESSES * MODEL_FORWARD_RUNS,
+        "warm_ensemble": WARM_ENSEMBLE_PROCESSES * WARM_ENSEMBLE_RUNS,
+        **{
+            f"batch_{size}": BATCH_PROCESSES * BATCH_RUNS
+            for size in BATCH_SIZES
+        },
+        "calculate_match_score": MATCH_SCORE_PROCESSES * MATCH_SCORE_RUNS,
+        "filter_jobs": FILTER_PROCESSES * FILTER_RUNS,
     }
 
 
@@ -423,6 +447,7 @@ def empty_manifest(artifacts: Mapping[str, str] | None = None) -> dict[str, Any]
             "cold_timeout_seconds": 120,
             "publication_budget_seconds": 4500,
             "warmups_excluded": 5,
+            "model_forward": [2, 50],
             "warm_ensemble": [2, 50],
             "batch": [2, 10, [1, 4, 8, 15]],
             "match_score": [2, 30],
@@ -474,6 +499,107 @@ def _validated_origins(values: Any, context: str) -> set[str]:
     return set(values)
 
 
+def _lane_specs() -> dict[str, tuple[str, int, int, int, int | None]]:
+    """Return boundary, run count, samples/run, warmups/run, and batch size."""
+    return {
+        "cold_load": ("cold_load", COLD_OBSERVATIONS, 1, 0, None),
+        "first_inference": ("first_inference", COLD_OBSERVATIONS, 1, 0, None),
+        "model_forward": (
+            "model_only_forward",
+            MODEL_FORWARD_PROCESSES,
+            MODEL_FORWARD_RUNS,
+            WARMUP_RUNS,
+            1,
+        ),
+        "warm_ensemble": (
+            "warm_ensemble",
+            WARM_ENSEMBLE_PROCESSES,
+            WARM_ENSEMBLE_RUNS,
+            WARMUP_RUNS,
+            None,
+        ),
+        **{
+            f"batch_{size}": (
+                "model_only_forward",
+                BATCH_PROCESSES,
+                BATCH_RUNS,
+                WARMUP_RUNS,
+                size,
+            )
+            for size in BATCH_SIZES
+        },
+        "calculate_match_score": (
+            "calculate_match_score",
+            MATCH_SCORE_PROCESSES,
+            MATCH_SCORE_RUNS,
+            WARMUP_RUNS,
+            None,
+        ),
+        "filter_jobs": (
+            "filter_jobs",
+            FILTER_PROCESSES,
+            FILTER_RUNS,
+            WARMUP_RUNS,
+            None,
+        ),
+    }
+
+
+def _lane_metadata(identity: str, batch_size: int | None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "latency_unit": "ns",
+        "input_rotation": {
+            "size": INPUT_ROTATION_SIZE,
+            "strategy": "round_robin_wrap",
+            "corpus_digests": [
+                benchmark_input_digest(index) for index in range(INPUT_ROTATION_SIZE)
+            ],
+        },
+    }
+    if identity == "model_forward":
+        metadata["batch_size"] = 1
+    elif identity.startswith("batch_"):
+        metadata.update(
+            {"batch_size": batch_size, "throughput_unit": "pairs_per_second"}
+        )
+    return metadata
+
+
+def _build_lanes(raw: Mapping[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    lanes: dict[str, Any] = {}
+    for identity, (boundary, run_count, samples_per_run, warmups, batch_size) in (
+        _lane_specs().items()
+    ):
+        samples = raw[identity]
+        summary = percentile_summary([sample["elapsed_ns"] for sample in samples])
+        lane: dict[str, Any] = {
+            "identity": identity,
+            "boundary": boundary,
+            "protocol": {
+                "run_count": run_count,
+                "samples_per_run": samples_per_run,
+                "warmups_excluded_per_run": warmups,
+            },
+            "raw_samples": samples,
+            "measured_count": len(samples),
+            "run_ids": [f"{identity}-run-{index}" for index in range(run_count)],
+            "summary": summary,
+            "percentile_resolution": {
+                "method": "Hyndman-Fan type 7 linear interpolation",
+                "sample_count": len(samples),
+                "p99": summary["p99_label"],
+            },
+            "metadata": _lane_metadata(identity, batch_size),
+        }
+        if identity.startswith("batch_"):
+            lane["throughput"] = percentile_summary(
+                [sample["throughput_pairs_per_second"] for sample in samples],
+                "pairs_per_second",
+            )
+        lanes[identity] = lane
+    return lanes
+
+
 def execute_protocol(
     worker_command: Sequence[str], deadline_ns: int | None = None
 ) -> dict[str, Any]:
@@ -481,70 +607,131 @@ def execute_protocol(
     deadline_ns = (
         deadline_ns or time.monotonic_ns() + PUBLICATION_BUDGET_SECONDS * 1_000_000_000
     )
-    raw: list[dict[str, Any]] = []
+    raw: dict[str, list[dict[str, Any]]] = {
+        identity: [] for identity in _lane_specs()
+    }
     origins: set[str] = set()
     devices: set[str] = set()
-    plans = [("cold_load", "cold_load_first_inference", 1, COLD_OBSERVATIONS, True)]
-    plans += [
+    plans = [
+        ("cold", "cold_load_first_inference", 1, COLD_OBSERVATIONS, True, None),
+        (
+            "model_forward",
+            "model_only_forward",
+            MODEL_FORWARD_RUNS,
+            MODEL_FORWARD_PROCESSES,
+            False,
+            1,
+        ),
         (
             "warm_ensemble",
             "warm_ensemble",
             WARM_ENSEMBLE_RUNS,
             WARM_ENSEMBLE_PROCESSES,
             False,
-        )
-    ]
-    plans += [
-        (f"batch_{size}", "model_only_forward", BATCH_RUNS, BATCH_PROCESSES, False)
-        for size in BATCH_SIZES
-    ]
-    plans += [
+            None,
+        ),
+        *[
+            (
+                f"batch_{size}",
+                "model_only_forward",
+                BATCH_RUNS,
+                BATCH_PROCESSES,
+                False,
+                size,
+            )
+            for size in BATCH_SIZES
+        ],
         (
             "calculate_match_score",
             "calculate_match_score",
             MATCH_SCORE_RUNS,
             MATCH_SCORE_PROCESSES,
             False,
+            None,
         ),
-        ("filter_jobs", "filter_jobs", FILTER_RUNS, FILTER_PROCESSES, False),
+        ("filter_jobs", "filter_jobs", FILTER_RUNS, FILTER_PROCESSES, False, None),
     ]
-    for input_name, boundary, runs, processes, cold in plans:
-        for process_index in range(processes):
+    for identity, boundary, samples_per_run, run_count, cold, batch_size in plans:
+        for run_index in range(run_count):
             remaining = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
             if remaining <= 0:
                 raise TimeoutError("publication hard budget exceeded")
             timeout = min(COLD_TIMEOUT_SECONDS, remaining) if cold else remaining
             request = {
-                "input": input_name,
+                "input": identity,
                 "boundary": boundary,
-                "runs": runs,
+                "runs": samples_per_run,
                 "warmups": 0 if cold else WARMUP_RUNS,
             }
+            if batch_size is not None:
+                request["batch_size"] = batch_size
+            request["input_payload"] = benchmark_input(
+                (run_index * samples_per_run) % INPUT_ROTATION_SIZE
+            )
+            request["input_payloads"] = [
+                benchmark_input(
+                    (run_index * samples_per_run + sample_index)
+                    % INPUT_ROTATION_SIZE
+                )
+                for sample_index in range(samples_per_run)
+            ]
             reply = _worker_call(worker_command, request, timeout)
             devices.add(str(reply.get("device")).lower())
             samples = reply.get("samples")
-            expected_count = 2 if cold else runs
+            expected_count = 2 if cold else samples_per_run
             if not isinstance(samples, list) or len(samples) != expected_count:
                 raise RuntimeError("benchmark worker returned invalid sample count")
-            for sample in samples:
-                expected_boundaries = (
-                    {"cold_load", "first_inference"} if cold else {boundary}
+            for worker_sample in samples:
+                lane_identity = (
+                    str(worker_sample.get("boundary")) if cold else identity
                 )
+                expected_boundary = _lane_specs().get(lane_identity, (None,))[0]
                 if (
-                    sample.get("boundary") not in expected_boundaries
-                    or sample.get("input") != input_name
+                    lane_identity not in raw
+                    or worker_sample.get("boundary") != expected_boundary
+                    or worker_sample.get("input") != identity
                 ):
                     raise RuntimeError("benchmark worker returned invalid boundary")
-                if sample.get("boundary") != "cold_load":
-                    origins.update(_validated_origins([sample.get("origin")], "timed"))
-                raw.append(
-                    {
-                        **sample,
-                        "process": reply.get("pid"),
-                        "process_index": process_index,
-                        "warmups_excluded": 0 if cold else WARMUP_RUNS,
-                    }
-                )
+                if lane_identity != "cold_load":
+                    origins.update(
+                        _validated_origins([worker_sample.get("origin")], "timed")
+                    )
+                sample_index = worker_sample.get("run")
+                if (
+                    type(sample_index) is not int
+                    or sample_index < 0
+                    or sample_index >= samples_per_run
+                ):
+                    raise RuntimeError("benchmark worker returned invalid sample index")
+                ordinal = run_index * samples_per_run + sample_index
+                input_index = ordinal % INPUT_ROTATION_SIZE
+                sample = {
+                    "lane": lane_identity,
+                    "boundary": expected_boundary,
+                    "run_id": f"{lane_identity}-run-{run_index}",
+                    "sample_index": sample_index,
+                    "input_id": f"pair-{input_index:02d}",
+                    "input_payload_sha256": worker_sample.get(
+                        "input_payload_sha256"
+                    ),
+                    "elapsed_ns": worker_sample.get("elapsed_ns"),
+                    "warmup": False,
+                    "warmups_excluded": 0 if cold else WARMUP_RUNS,
+                    "process": reply.get("pid"),
+                }
+                if sample["input_payload_sha256"] != benchmark_input_digest(input_index):
+                    raise RuntimeError("benchmark worker returned mismatched input payload")
+                if lane_identity != "cold_load":
+                    sample["origin"] = worker_sample.get("origin")
+                if identity.startswith("batch_"):
+                    elapsed_ns = sample["elapsed_ns"]
+                    if not isinstance(elapsed_ns, int) or elapsed_ns <= 0:
+                        raise RuntimeError("benchmark worker returned invalid elapsed time")
+                    sample["batch_size"] = batch_size
+                    sample["throughput_pairs_per_second"] = (
+                        batch_size * 1_000_000_000 / elapsed_ns
+                    )
+                raw[lane_identity].append(sample)
     remaining = (deadline_ns - time.monotonic_ns()) / 1_000_000_000
     if remaining <= 0:
         raise TimeoutError("publication hard budget exceeded")
@@ -564,8 +751,7 @@ def execute_protocol(
     if devices != {"cpu"}:
         raise RuntimeError("GPU is not permitted")
     return {
-        "observations": protocol_observation_counts(),
-        "raw_samples": raw,
+        "lanes": _build_lanes(raw),
         "quality": {
             "inference_origins": sorted(origins),
             "metrics": quality_reply.get("metrics", {}),
@@ -575,63 +761,163 @@ def execute_protocol(
     }
 
 
-def _valid_raw_samples(samples: Any) -> bool:
-    """Verify every boundary, process partition, origin, and warmup count."""
-    if not isinstance(samples, list):
+def _valid_lanes(value: Any) -> bool:
+    """Fail closed over lane identity, protocol, raw samples, and summaries."""
+    specs = _lane_specs()
+    if not isinstance(value, Mapping) or set(value) != set(specs):
         return False
-    expected: dict[tuple[str, str], tuple[int, int, int, bool]] = {
-        ("cold_load", "cold_load"): (8, 1, 0, False),
-        ("cold_load", "first_inference"): (8, 1, 0, True),
-        ("warm_ensemble", "warm_ensemble"): (2, 50, 5, True),
-        ("calculate_match_score", "calculate_match_score"): (2, 30, 5, True),
-        ("filter_jobs", "filter_jobs"): (2, 5, 5, True),
+    common_keys = {
+        "identity",
+        "boundary",
+        "protocol",
+        "raw_samples",
+        "measured_count",
+        "run_ids",
+        "summary",
+        "percentile_resolution",
+        "metadata",
     }
-    expected.update(
-        {
-            (f"batch_{size}", "model_only_forward"): (2, 10, 5, True)
-            for size in BATCH_SIZES
+    for identity, (boundary, run_count, samples_per_run, warmups, batch_size) in (
+        specs.items()
+    ):
+        lane = value.get(identity)
+        expected_keys = common_keys | (
+            {"throughput"} if identity.startswith("batch_") else set()
+        )
+        if not isinstance(lane, Mapping) or set(lane) != expected_keys:
+            return False
+        expected_protocol = {
+            "run_count": run_count,
+            "samples_per_run": samples_per_run,
+            "warmups_excluded_per_run": warmups,
         }
-    )
-    grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = defaultdict(list)
-    for sample in samples:
-        if not isinstance(sample, Mapping):
+        if any(
+            type(expected_protocol[key]) is not int
+            or expected_protocol[key] < 0
+            for key in expected_protocol
+        ):
             return False
-        grouped[(str(sample.get("input")), str(sample.get("boundary")))].append(sample)
-    if set(grouped) != set(expected):
-        return False
-    for key, (processes, runs, warmups, needs_origin) in expected.items():
-        rows = grouped[key]
-        if len(rows) != processes * runs:
+        protocol = lane.get("protocol")
+        if (
+            not isinstance(protocol, Mapping)
+            or set(protocol) != set(expected_protocol)
+            or any(
+                type(protocol[key]) is not int or protocol[key] < 0
+                for key in expected_protocol
+            )
+        ):
             return False
-        process_ids = {row.get("process") for row in rows}
-        if None in process_ids or len(process_ids) != processes:
+        expected_run_ids = [f"{identity}-run-{index}" for index in range(run_count)]
+        samples = lane.get("raw_samples")
+        if (
+            lane.get("identity") != identity
+            or lane.get("boundary") != boundary
+            or lane.get("protocol") != expected_protocol
+            or lane.get("measured_count") != run_count * samples_per_run
+            or lane.get("run_ids") != expected_run_ids
+            or lane.get("metadata") != _lane_metadata(identity, batch_size)
+            or not isinstance(samples, list)
+            or len(samples) != run_count * samples_per_run
+        ):
             return False
-        for process_index in range(processes):
-            partition = [
-                row for row in rows if row.get("process_index") == process_index
-            ]
-            if len(partition) != runs or {row.get("run") for row in partition} != set(
-                range(runs)
+        if identity.startswith("batch_") and type(
+            lane["metadata"].get("batch_size")
+        ) is not int:
+            return False
+        if any(not isinstance(sample, Mapping) for sample in samples):
+            return False
+        expected_sample_keys = {
+            "lane",
+            "boundary",
+            "run_id",
+            "sample_index",
+            "input_id",
+            "input_payload_sha256",
+            "elapsed_ns",
+            "warmup",
+            "warmups_excluded",
+            "process",
+        }
+        if identity != "cold_load":
+            expected_sample_keys.add("origin")
+        if identity.startswith("batch_"):
+            expected_sample_keys.update(
+                {"batch_size", "throughput_pairs_per_second"}
+            )
+        run_processes: list[Any] = []
+        for run_index, run_id in enumerate(expected_run_ids):
+            partition = [sample for sample in samples if sample.get("run_id") == run_id]
+            process_ids = {sample.get("process") for sample in partition}
+            if (
+                len(partition) != samples_per_run
+                or None in process_ids
+                or len(process_ids) != 1
             ):
                 return False
-            if any(
-                row.get("warmups_excluded") != warmups
-                or not isinstance(row.get("elapsed_ns"), int)
-                or row["elapsed_ns"] < 0
-                or (needs_origin and row.get("origin") != "real")
-                or (not needs_origin and "origin" in row)
-                for row in partition
-            ):
-                return False
+            run_processes.extend(process_ids)
+            for sample_index, sample in enumerate(partition):
+                ordinal = run_index * samples_per_run + sample_index
+                input_index = ordinal % INPUT_ROTATION_SIZE
+                if set(sample) != expected_sample_keys:
+                    return False
+                if (
+                    sample.get("lane") != identity
+                    or sample.get("boundary") != boundary
+                    or type(sample.get("sample_index")) is not int
+                    or sample.get("sample_index") != sample_index
+                    or sample.get("input_id")
+                    != f"pair-{input_index:02d}"
+                    or sample.get("input_payload_sha256")
+                    != benchmark_input_digest(input_index)
+                    or sample.get("warmup") is not False
+                    or sample.get("warmups_excluded") != warmups
+                    or type(sample.get("elapsed_ns")) is not int
+                    or sample["elapsed_ns"] <= 0
+                    or type(sample.get("process")) is not int
+                    or sample.get("process") <= 0
+                    or (identity != "cold_load" and sample.get("origin") != "real")
+                ):
+                    return False
+                throughput = sample.get("throughput_pairs_per_second")
+                if identity.startswith("batch_") and (
+                    type(sample.get("batch_size")) is not int
+                    or sample.get("batch_size") != batch_size
+                    or isinstance(throughput, bool)
+                    or not isinstance(throughput, (int, float))
+                    or not math.isclose(
+                        throughput,
+                        batch_size * 1_000_000_000 / sample["elapsed_ns"],
+                        rel_tol=1e-12,
+                    )
+                ):
+                    return False
+        if len(set(run_processes)) != run_count:
+            return False
+        expected_summary = percentile_summary(
+            [sample["elapsed_ns"] for sample in samples]
+        )
+        expected_resolution = {
+            "method": "Hyndman-Fan type 7 linear interpolation",
+            "sample_count": len(samples),
+            "p99": expected_summary["p99_label"],
+        }
+        if (
+            lane.get("summary") != expected_summary
+            or lane.get("percentile_resolution") != expected_resolution
+        ):
+            return False
+        if identity.startswith("batch_") and lane.get("throughput") != percentile_summary(
+            [sample["throughput_pairs_per_second"] for sample in samples],
+            "pairs_per_second",
+        ):
+            return False
     return True
 
 
 def _valid_calibration(value: Any) -> bool:
     if not isinstance(value, Mapping) or set(value) != {"n_bins", "ece", "bins"}:
         return False
-    if value.get("n_bins") != ECE_BINS or not isinstance(
-        value.get("ece"), (int, float)
-    ):
+    if value.get("n_bins") != ECE_BINS or not _finite_number(value.get("ece")):
         return False
     bins = value.get("bins")
     if not isinstance(bins, list) or len(bins) != ECE_BINS:
@@ -645,14 +931,26 @@ def _valid_calibration(value: Any) -> bool:
             or item.get("high") != (index + 1) / ECE_BINS
         ):
             return False
-        if not isinstance(item.get("count"), int) or item["count"] < 0:
+        if not _non_negative_int(item.get("count")):
             return False
         if any(
-            not isinstance(item.get(key), (int, float)) or not 0 <= item[key] <= 1
+            not _finite_number(item.get(key)) or not 0 <= item[key] <= 1
             for key in ("mean_confidence", "accuracy")
         ):
             return False
     return 0 <= value["ece"] <= 1
+
+
+def _finite_number(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+    )
+
+
+def _non_negative_int(value: Any) -> bool:
+    return type(value) is int and value >= 0
 
 
 def _valid_binary_metrics(value: Any) -> bool:
@@ -674,14 +972,14 @@ def _valid_binary_metrics(value: Any) -> bool:
         return False
     counts = {"tp", "fp", "fn", "tn", "positive_count", "negative_count"}
     rates = required - counts
-    if not all(isinstance(value[key], int) and value[key] >= 0 for key in counts):
+    if not all(_non_negative_int(value[key]) for key in counts):
         return False
     if value["positive_count"] != value["tp"] + value["fn"]:
         return False
     if value["negative_count"] != value["fp"] + value["tn"]:
         return False
     return all(
-        isinstance(value[key], (int, float)) and 0 <= value[key] <= 1 for key in rates
+        _finite_number(value[key]) and 0 <= value[key] <= 1 for key in rates
     )
 
 
@@ -727,10 +1025,8 @@ def _valid_quality(value: Any) -> bool:
         if view.get("name") != name or view.get("hierarchy") != hierarchy:
             return False
         if (
-            not isinstance(view.get("pair_count"), int)
-            or view["pair_count"] < 0
-            or not isinstance(view.get("record_count"), int)
-            or view["record_count"] < 0
+            not _non_negative_int(view.get("pair_count"))
+            or not _non_negative_int(view.get("record_count"))
         ):
             return False
         if view["record_count"] != view["pair_count"] * 3:
@@ -778,8 +1074,7 @@ def validate_publication(
         "protocol",
         "publication",
         "quality",
-        "observations",
-        "raw_samples",
+        "lanes",
     }
     for key in sorted(required_keys - set(result)):
         errors.append(f"missing required manifest key: {key}")
@@ -850,7 +1145,7 @@ def validate_publication(
     if (
         not isinstance(publication, Mapping)
         or set(publication) != {"elapsed_seconds"}
-        or not isinstance(publication.get("elapsed_seconds"), (int, float))
+        or not _finite_number(publication.get("elapsed_seconds"))
         or not 0 <= publication["elapsed_seconds"] <= PUBLICATION_BUDGET_SECONDS
     ):
         errors.append("publication hard budget exceeded")
@@ -921,10 +1216,8 @@ def validate_publication(
         or (parent is not None and not SHA256_PATTERN.fullmatch(str(parent)))
     ):
         errors.append("invalid lineage schema")
-    if result.get("observations") != protocol_observation_counts():
-        errors.append("invalid benchmark observation counts")
-    if not _valid_raw_samples(result.get("raw_samples")):
-        errors.append("invalid raw benchmark samples")
+    if not _valid_lanes(result.get("lanes")):
+        errors.append("invalid benchmark lanes")
     artifacts = result.get("artifacts")
     if not isinstance(artifacts, Mapping) or set(artifacts) != REQUIRED_ARTIFACTS:
         errors.append("invalid artifact schema")
