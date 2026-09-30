@@ -31,6 +31,7 @@ from job_mcp.evaluation.benchmark import (
     environment_capture,
     execute_protocol,
     primary_and_sensitivity_views,
+    quality_delta_b_minus_a,
     source_revision,
     validate_publication,
 )
@@ -452,12 +453,14 @@ def _quality_views(
         name="overlap_excluded_sensitivity",
         hierarchy="B-sensitivity",
     )
+    views = {"primary": primary_metrics, "sensitivity_b": sensitivity_metrics}
     return {
         "source": {
             "total_record_count": len(records),
             "match_scoring_record_count": len(match_records),
         },
-        "views": {"primary": primary_metrics, "sensitivity_b": sensitivity_metrics},
+        "views": views,
+        "delta_b_minus_a": quality_delta_b_minus_a(views),
     }, sorted(set(primary_origins + sensitivity_origins))
 
 

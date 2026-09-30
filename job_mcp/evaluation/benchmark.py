@@ -17,7 +17,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-BENCHMARK_SCHEMA_VERSION = "m3-benchmark-v1"
+BENCHMARK_SCHEMA_VERSION = "m3-benchmark-v2"
 ECE_BINS = 10
 COLD_OBSERVATIONS, COLD_TIMEOUT_SECONDS = 8, 120
 PUBLICATION_BUDGET_SECONDS, WARMUP_RUNS = 75 * 60, 5
@@ -34,6 +34,13 @@ REQUIRED_ARTIFACTS = frozenset({"holdout", "training", "model"})
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 REQUIRED_DEPENDENCIES = ("job-mcp", "torch", "transformers")
+MAX_PUBLICATION_COUNT = 1_000_000_000
+# Latency is a duration, not a count, so it must never inherit count bounds.
+# No legitimate raw sample can outlast the whole publication run, so durations
+# are capped at the benchmark's own execution limit (4.5e12 ns = 75 minutes),
+# which comfortably exceeds the 120s cold subprocess timeout while still
+# rejecting pathological JSON integers that would break float conversion.
+MAX_LATENCY_NS = PUBLICATION_BUDGET_SECONDS * 1_000_000_000
 FIXED_INPUT_CORPUS = tuple(
     {
         "job_title": f"Backend Engineer {index + 1}",
@@ -238,8 +245,11 @@ def audit_holdout_overlap(
         for state, values in sorted(pair_states.items())
         if len(values) > 1
     ]
-    conflicts = []
-    for state, values in sorted(pair_states.items()):
+    # Canonical conflict provenance: approved match-scoring tasks only, aggregated
+    # by (task, state) into one entry with a merged sorted-unique label set, so the
+    # publication output can never contradict the fail-closed validator.
+    conflict_labels: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for state, values in pair_states.items():
         for task_index, task in enumerate(
             (
                 "match_scoring_skill",
@@ -247,32 +257,23 @@ def audit_holdout_overlap(
                 "match_scoring_recruiter_fit",
             )
         ):
-            labels = {
-                _canonical_json(pair[task_index].get("label")).decode()
-                for pair in values
-            }
-            if len(labels) > 1:
-                conflicts.append(
-                    {
-                        "task": task,
-                        "state_sha256": _state_digest(state),
-                        "labels": sorted(labels),
-                    }
-                )
-    # Training often lacks complete triples; still identify task/state conflicts deterministically.
-    by_task_state: dict[tuple[str, str], set[str]] = defaultdict(set)
+            conflict_labels[(task, _state_digest(state))].update(
+                _canonical_json(pair[task_index].get("label")).decode() for pair in values
+            )
+    # Training often lacks complete triples; still identify task/state conflicts
+    # deterministically from the combined corpus.
     for row in [*training, *holdout]:
-        by_task_state[(str(row.get("task")), str(row.get("state")))].add(
+        task = str(row.get("task"))
+        if task not in REQUIRED_MATCH_SCORING_TASKS:
+            continue
+        conflict_labels[(task, _state_digest(str(row.get("state"))))].add(
             _canonical_json(row.get("label")).decode()
         )
-    for (task, state), labels in sorted(by_task_state.items()):
-        entry = {
-            "task": task,
-            "state_sha256": _state_digest(state),
-            "labels": sorted(labels),
-        }
-        if len(labels) > 1 and entry not in conflicts:
-            conflicts.append(entry)
+    conflicts = [
+        {"task": task, "state_sha256": state_sha256, "labels": sorted(labels)}
+        for (task, state_sha256), labels in sorted(conflict_labels.items())
+        if len(labels) > 1
+    ]
     return {
         "exact_overlap_count": len(exact),
         "task_state_overlap_count": len(overlap),
@@ -316,6 +317,31 @@ def primary_and_sensitivity_views(
     )
     sensitivity["excluded_pairs"] = primary["pair_count"] - sensitivity["pair_count"]
     return {"primary": primary, "sensitivity_b": sensitivity}
+
+
+DELTA_METRICS = (
+    "ece",
+    "accuracy",
+    "precision",
+    "recall",
+    "f1",
+    "specificity",
+    "balanced_accuracy",
+)
+
+
+def quality_delta_b_minus_a(views: Mapping[str, Any]) -> dict[str, float]:
+    primary = views["primary"]
+    sensitivity = views["sensitivity_b"]
+    return {
+        metric: (
+            sensitivity["calibration"]["ece"] - primary["calibration"]["ece"]
+            if metric == "ece"
+            else sensitivity["seniority_mismatch"][metric]
+            - primary["seniority_mismatch"][metric]
+        )
+        for metric in DELTA_METRICS
+    }
 
 
 def canonical_file_checksum(path: Path) -> str:
@@ -847,12 +873,13 @@ def _valid_lanes(value: Any) -> bool:
         run_processes: list[Any] = []
         for run_index, run_id in enumerate(expected_run_ids):
             partition = [sample for sample in samples if sample.get("run_id") == run_id]
-            process_ids = {sample.get("process") for sample in partition}
-            if (
-                len(partition) != samples_per_run
-                or None in process_ids
-                or len(process_ids) != 1
-            ):
+            # Process identity must be validated before it is ever hashed, so
+            # unhashable hostile JSON is rejected rather than raising TypeError.
+            process_values = [sample.get("process") for sample in partition]
+            if any(not _valid_process_id(value) for value in process_values):
+                return False
+            process_ids = set(process_values)
+            if len(partition) != samples_per_run or len(process_ids) != 1:
                 return False
             run_processes.extend(process_ids)
             for sample_index, sample in enumerate(partition):
@@ -871,9 +898,8 @@ def _valid_lanes(value: Any) -> bool:
                     != benchmark_input_digest(input_index)
                     or sample.get("warmup") is not False
                     or sample.get("warmups_excluded") != warmups
-                    or type(sample.get("elapsed_ns")) is not int
-                    or sample["elapsed_ns"] <= 0
-                    or type(sample.get("process")) is not int
+                    or not _latency_ns(sample.get("elapsed_ns"))
+                    or not _non_negative_int(sample.get("process"))
                     or sample.get("process") <= 0
                     or (identity != "cold_load" and sample.get("origin") != "real")
                 ):
@@ -882,8 +908,7 @@ def _valid_lanes(value: Any) -> bool:
                 if identity.startswith("batch_") and (
                     type(sample.get("batch_size")) is not int
                     or sample.get("batch_size") != batch_size
-                    or isinstance(throughput, bool)
-                    or not isinstance(throughput, (int, float))
+                    or not _finite_number(throughput)
                     or not math.isclose(
                         throughput,
                         batch_size * 1_000_000_000 / sample["elapsed_ns"],
@@ -942,15 +967,26 @@ def _valid_calibration(value: Any) -> bool:
 
 
 def _finite_number(value: Any) -> bool:
-    return (
-        not isinstance(value, bool)
-        and isinstance(value, (int, float))
-        and math.isfinite(value)
-    )
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except (OverflowError, ValueError):
+        return False
 
 
 def _non_negative_int(value: Any) -> bool:
-    return type(value) is int and value >= 0
+    return type(value) is int and 0 <= value <= MAX_PUBLICATION_COUNT
+
+
+def _latency_ns(value: Any) -> bool:
+    """Strict positive duration bound, deliberately separate from count bounds."""
+    return type(value) is int and 0 < value <= MAX_LATENCY_NS
+
+
+def _valid_process_id(value: Any) -> bool:
+    """Hashable, bounded, strictly positive process identifier."""
+    return _non_negative_int(value) and value > 0
 
 
 def _valid_binary_metrics(value: Any) -> bool:
@@ -983,10 +1019,8 @@ def _valid_binary_metrics(value: Any) -> bool:
     )
 
 
-def _valid_quality(value: Any) -> bool:
-    if not isinstance(value, Mapping) or set(value) != {"source", "views"}:
-        return False
-    source = value.get("source")
+def _valid_source_counts(source: Any) -> bool:
+    """Canonical, non-raising validation of quality source counts."""
     if not isinstance(source, Mapping) or set(source) != {
         "total_record_count",
         "match_scoring_record_count",
@@ -994,15 +1028,21 @@ def _valid_quality(value: Any) -> bool:
         return False
     total_count = source.get("total_record_count")
     match_count = source.get("match_scoring_record_count")
-    if (
-        type(total_count) is not int
-        or total_count < 0
-        or type(match_count) is not int
-        or match_count < 0
-        or match_count > total_count
-        or match_count % 3
-    ):
+    return (
+        _non_negative_int(total_count)
+        and _non_negative_int(match_count)
+        and match_count <= total_count
+        and not match_count % 3
+    )
+
+
+def _valid_quality(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {"source", "views", "delta_b_minus_a"}:
         return False
+    source = value.get("source")
+    if not _valid_source_counts(source):
+        return False
+    match_count = source["match_scoring_record_count"]
     views = value.get("views")
     if not isinstance(views, Mapping) or set(views) != {"primary", "sensitivity_b"}:
         return False
@@ -1048,6 +1088,158 @@ def _valid_quality(value: Any) -> bool:
             != view["pair_count"]
         ):
             return False
+    delta = value.get("delta_b_minus_a")
+    if not isinstance(delta, Mapping) or set(delta) != set(DELTA_METRICS):
+        return False
+    if any(not _finite_number(delta.get(metric)) for metric in DELTA_METRICS):
+        return False
+    expected_delta = quality_delta_b_minus_a(views)
+    return all(
+        math.isclose(
+            delta[metric], expected_delta[metric], rel_tol=1e-12, abs_tol=1e-12
+        )
+        for metric in DELTA_METRICS
+    )
+
+
+def _valid_audit_views(
+    audit: Any, views: Any, source: Any
+) -> bool:
+    """Self-contained audit/view provenance check; never raises on malformed JSON."""
+    if not _valid_source_counts(source):
+        return False
+    total_count = source["total_record_count"]
+    match_count = source["match_scoring_record_count"]
+    audit_keys = {
+        "exact_overlap_count",
+        "task_state_overlap_count",
+        "duplicate_shared_state_clusters",
+        "conflicting_labels",
+        "conflicting_label_count",
+        "overlap_state_sha256",
+    }
+    if not isinstance(audit, Mapping) or set(audit) != audit_keys:
+        return False
+    count_keys = {
+        "exact_overlap_count",
+        "task_state_overlap_count",
+        "conflicting_label_count",
+    }
+    if not all(_non_negative_int(audit.get(key)) for key in count_keys):
+        return False
+    digests = audit.get("overlap_state_sha256")
+    if not isinstance(digests, list) or any(
+        not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value)
+        for value in digests
+    ) or len(set(digests)) != len(digests):
+        return False
+    duplicates = audit.get("duplicate_shared_state_clusters")
+    if not isinstance(duplicates, list):
+        return False
+    duplicate_digests: set[str] = set()
+    for item in duplicates:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"state_sha256", "pair_count"}
+            or not isinstance(item.get("state_sha256"), str)
+            or not SHA256_PATTERN.fullmatch(item["state_sha256"])
+            or not _non_negative_int(item.get("pair_count"))
+            or item["pair_count"] < 2
+            or item["state_sha256"] in duplicate_digests
+        ):
+            return False
+        duplicate_digests.add(item["state_sha256"])
+    conflicts = audit.get("conflicting_labels")
+    if not isinstance(conflicts, list) or audit["conflicting_label_count"] != len(conflicts):
+        return False
+    conflict_keys: set[tuple[str, str]] = set()
+    for item in conflicts:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"task", "state_sha256", "labels"}
+            or not isinstance(item.get("task"), str)
+            or item["task"] not in REQUIRED_MATCH_SCORING_TASKS
+            or not isinstance(item.get("state_sha256"), str)
+            or not SHA256_PATTERN.fullmatch(item["state_sha256"])
+            or not isinstance(item.get("labels"), list)
+            or len(item["labels"]) < 2
+            or any(not isinstance(label, str) for label in item["labels"])
+            or (item["task"], item["state_sha256"]) in conflict_keys
+        ):
+            return False
+        conflict_keys.add((item["task"], item["state_sha256"]))
+    expected_views = {"primary", "sensitivity_b"}
+    if not isinstance(views, Mapping) or set(views) != expected_views:
+        return False
+    required_view_keys = {
+        "name",
+        "diagnostic",
+        "independence",
+        "pair_count",
+        "record_count",
+        "excluded_clusters",
+        "excluded_pairs",
+        "remaining_checksum",
+    }
+    for key, name in (("primary", "primary_reproduction"), ("sensitivity_b", "sensitivity_b")):
+        view = views.get(key)
+        if (
+            not isinstance(view, Mapping)
+            or set(view) != required_view_keys
+            or view.get("name") != name
+            or view.get("diagnostic") is not True
+            or view.get("independence") != "diagnostic/not independent"
+            or not _non_negative_int(view.get("pair_count"))
+            or not _non_negative_int(view.get("record_count"))
+            or not _non_negative_int(view.get("excluded_clusters"))
+            or not _non_negative_int(view.get("excluded_pairs"))
+            or not isinstance(view.get("remaining_checksum"), str)
+            or not SHA256_PATTERN.fullmatch(view["remaining_checksum"])
+            or view["record_count"] != view["pair_count"] * 3
+        ):
+            return False
+    primary = views["primary"]
+    sensitivity = views["sensitivity_b"]
+    return not (
+        audit["exact_overlap_count"] > total_count
+        # Overlap counts holdout rows across every task, so its denominator must
+        # be the all-task record count, never the match-scoring-only count.
+        or audit["task_state_overlap_count"] > total_count
+        or audit["exact_overlap_count"] > audit["task_state_overlap_count"]
+        or audit["task_state_overlap_count"] < len(digests)
+        or primary["pair_count"] * 3 != match_count
+        or primary["record_count"] != match_count
+        or primary["excluded_clusters"] != 0
+        or primary["excluded_pairs"] != 0
+        or sensitivity["excluded_clusters"] != len(digests)
+        or sensitivity["excluded_pairs"] != primary["pair_count"] - sensitivity["pair_count"]
+        or sensitivity["record_count"]
+        != primary["record_count"] - sensitivity["excluded_pairs"] * 3
+    )
+
+
+def _quality_views_match_provenance(
+    quality_metrics: Any, provenance_views: Any
+) -> bool:
+    if not isinstance(quality_metrics, Mapping) or not isinstance(
+        provenance_views, Mapping
+    ):
+        return False
+    metric_views = quality_metrics.get("views")
+    if not isinstance(metric_views, Mapping):
+        return False
+    for key in ("primary", "sensitivity_b"):
+        metric_view = metric_views.get(key)
+        provenance_view = provenance_views.get(key)
+        if not isinstance(metric_view, Mapping) or not isinstance(
+            provenance_view, Mapping
+        ):
+            return False
+        if (
+            metric_view.get("pair_count") != provenance_view.get("pair_count")
+            or metric_view.get("record_count") != provenance_view.get("record_count")
+        ):
+            return False
     return True
 
 
@@ -1075,6 +1267,8 @@ def validate_publication(
         "publication",
         "quality",
         "lanes",
+        "audit",
+        "views",
     }
     for key in sorted(required_keys - set(result)):
         errors.append(f"missing required manifest key: {key}")
@@ -1120,9 +1314,9 @@ def validate_publication(
     if (
         not isinstance(threads, Mapping)
         or set(threads) != {"requested", "effective"}
-        or type(threads.get("requested")) is not int
+        or not _non_negative_int(threads.get("requested"))
         or threads["requested"] <= 0
-        or type(threads.get("effective")) is not int
+        or not _non_negative_int(threads.get("effective"))
         or threads["effective"] <= 0
         or threads["effective"] != threads["requested"]
     ):
@@ -1158,6 +1352,14 @@ def validate_publication(
         "source"
     ) != dict(expected_source_counts):
         errors.append("quality source count mismatch")
+    quality_metrics = quality.get("metrics") if isinstance(quality, Mapping) else None
+    quality_source = quality_metrics.get("source") if isinstance(quality_metrics, Mapping) else None
+    if not isinstance(quality_source, Mapping) or not _valid_audit_views(
+        result.get("audit"), result.get("views"), quality_source
+    ):
+        errors.append("invalid quality audit/view provenance")
+    elif not _quality_views_match_provenance(quality_metrics, result["views"]):
+        errors.append("quality metrics/provenance view mismatch")
     model = result.get("model")
     expected_model_keys = {
         "quantization",
@@ -1176,20 +1378,16 @@ def validate_publication(
             or set(quantization) != {"requested", "effective"}
             or quantization.get("requested") is not True
             or quantization.get("effective") != "dynamic-int8"
-            or type(model.get("int8_linear_modules")) is not int
+            or not _non_negative_int(model.get("int8_linear_modules"))
             or model["int8_linear_modules"] <= 0
         ):
             errors.append("INT8 model inspection failed")
         temperature = model.get("temperature")
         configured_temperature = model.get("temperature_config_value")
         if (
-            isinstance(temperature, bool)
-            or not isinstance(temperature, (int, float))
-            or not math.isfinite(temperature)
+            not _finite_number(temperature)
             or temperature <= 0
-            or isinstance(configured_temperature, bool)
-            or not isinstance(configured_temperature, (int, float))
-            or not math.isfinite(configured_temperature)
+            or not _finite_number(configured_temperature)
             or configured_temperature <= 0
             or temperature != configured_temperature
             or model.get("temperature_source")

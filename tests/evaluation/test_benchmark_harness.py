@@ -7,6 +7,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,6 +18,7 @@ from job_mcp.evaluation import benchmark
 from job_mcp.evaluation.benchmark import (
     COLD_TIMEOUT_SECONDS,
     PUBLICATION_BUDGET_SECONDS,
+    REQUIRED_MATCH_SCORING_TASKS,
     audit_holdout_overlap,
     binary_metrics,
     build_match_scoring_triples,
@@ -27,6 +29,7 @@ from job_mcp.evaluation.benchmark import (
     execute_protocol,
     percentile_summary,
     primary_and_sensitivity_views,
+    quality_delta_b_minus_a,
     validate_publication,
 )
 
@@ -95,6 +98,15 @@ def _fake_reply(request: dict[str, Any], pid: int = 1) -> dict[str, Any]:
                     "match_scoring_record_count": 3,
                 },
                 "views": _quality_views(),
+                "delta_b_minus_a": {
+                    "ece": 0.0,
+                    "accuracy": 0.0,
+                    "precision": 0.0,
+                    "recall": 0.0,
+                    "f1": 0.0,
+                    "specificity": 0.0,
+                    "balanced_accuracy": 0.0,
+                },
             },
             "runtime_model": {
                 "quantization": {
@@ -174,6 +186,7 @@ def _fake_reply(request: dict[str, Any], pid: int = 1) -> dict[str, Any]:
 
 def _valid_result(
     monkeypatch: pytest.MonkeyPatch,
+    latency_ns: int | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     calls = 0
 
@@ -182,7 +195,11 @@ def _valid_result(
     ) -> dict[str, Any]:
         nonlocal calls
         calls += 1
-        return _fake_reply(request, calls)
+        reply = _fake_reply(request, calls)
+        if latency_ns is not None:
+            for sample in reply.get("samples", []):
+                sample["elapsed_ns"] = latency_ns
+        return reply
 
     monkeypatch.setattr(benchmark, "_worker_call", fake_call)
     protocol = execute_protocol(["worker"], deadline_ns=10**30)
@@ -201,6 +218,36 @@ def _valid_result(
         **protocol,
         "status": "success",
         "publication": {"elapsed_seconds": 1.0},
+        "audit": {
+            "exact_overlap_count": 0,
+            "task_state_overlap_count": 0,
+            "duplicate_shared_state_clusters": [],
+            "conflicting_labels": [],
+            "conflicting_label_count": 0,
+            "overlap_state_sha256": [],
+        },
+        "views": {
+            "primary": {
+                "name": "primary_reproduction",
+                "diagnostic": True,
+                "independence": "diagnostic/not independent",
+                "pair_count": 1,
+                "record_count": 3,
+                "excluded_clusters": 0,
+                "excluded_pairs": 0,
+                "remaining_checksum": "d" * 64,
+            },
+            "sensitivity_b": {
+                "name": "sensitivity_b",
+                "diagnostic": True,
+                "independence": "diagnostic/not independent",
+                "pair_count": 1,
+                "record_count": 3,
+                "excluded_clusters": 0,
+                "excluded_pairs": 0,
+                "remaining_checksum": "e" * 64,
+            },
+        },
     }
     return result, artifacts
 
@@ -755,6 +802,36 @@ def test_runtime_calibration_config_is_required_valid_and_matches_engine(
             "invalid benchmark lanes",
         ),
         (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].__setitem__(
+                "process", 10**400
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].__setitem__(
+                "elapsed_ns", True
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].__setitem__(
+                "elapsed_ns", 10**400
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["model_forward"]["raw_samples"][0].__setitem__(
+                "elapsed_ns", 1.0
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
+            lambda lanes: lanes["warm_ensemble"]["raw_samples"][0].__setitem__(
+                "process", 10**400
+            ),
+            "invalid benchmark lanes",
+        ),
+        (
             lambda lanes: lanes["model_forward"]["protocol"].__setitem__(
                 "run_count", True
             ),
@@ -848,6 +925,38 @@ def test_publication_validation_is_strict_for_nested_provenance_artifacts_model_
     assert "invalid model calibration configuration" in validate_publication(
         mismatched_config, artifacts
     )
+    oversized_temperature = {
+        **valid,
+        "model": {**valid["model"], "temperature": 10**400},
+    }
+    assert "invalid model calibration configuration" in validate_publication(
+        oversized_temperature, artifacts
+    )
+    for invalid_temperature in (
+        True,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        "0.75",
+    ):
+        # Each publication temperature field must route through the canonical
+        # finite-number validator, never an unsafe float()/math.isfinite() cast.
+        for temperature_key in ("temperature", "temperature_config_value"):
+            unsafe_model = {**valid["model"], temperature_key: invalid_temperature}
+            assert validate_publication(
+                {**valid, "model": unsafe_model}, artifacts
+            ), (temperature_key, invalid_temperature)
+        paired = {
+            **valid,
+            "model": {
+                **valid["model"],
+                "temperature": invalid_temperature,
+                "temperature_config_value": invalid_temperature,
+            },
+        }
+        assert "invalid model calibration configuration" in validate_publication(
+            paired, artifacts
+        ), invalid_temperature
     assert "calibration config checksum mismatch" in validate_publication(
         valid, artifacts, expected_config_checksum="d" * 64
     )
@@ -888,37 +997,223 @@ def test_publication_validation_is_strict_for_nested_provenance_artifacts_model_
     )
 
 
+def test_quality_delta_is_derived_from_primary_and_sensitivity_views() -> None:
+    from job_mcp.evaluation.benchmark import quality_delta_b_minus_a
+
+    views = _quality_views()
+    primary = deepcopy(views["primary"])
+    sensitivity = deepcopy(views["sensitivity_b"])
+    sensitivity["calibration"]["ece"] += 0.1
+    sensitivity["seniority_mismatch"]["accuracy"] += 0.1
+    sensitivity["seniority_mismatch"]["precision"] += 0.1
+    sensitivity["seniority_mismatch"]["recall"] += 0.1
+    sensitivity["seniority_mismatch"]["f1"] += 0.1
+    sensitivity["seniority_mismatch"]["specificity"] += 0.1
+    sensitivity["seniority_mismatch"]["balanced_accuracy"] += 0.1
+    delta = quality_delta_b_minus_a({"primary": primary, "sensitivity_b": sensitivity})
+    assert delta == {
+        "ece": pytest.approx(0.1),
+        "accuracy": pytest.approx(0.1),
+        "precision": pytest.approx(0.1),
+        "recall": pytest.approx(0.1),
+        "f1": pytest.approx(0.1),
+        "specificity": pytest.approx(0.1),
+        "balanced_accuracy": pytest.approx(0.1),
+    }
+
+
 @pytest.mark.parametrize(
-    "mutate",
+    ("mutate", "expected_error"),
     [
-        lambda result: result["publication"].__setitem__("elapsed_seconds", True),
-        lambda result: result["publication"].__setitem__("elapsed_seconds", "1"),
-        lambda result: result["quality"]["metrics"]["views"]["primary"][
-            "calibration"
-        ].__setitem__("ece", float("nan")),
-        lambda result: result["quality"]["metrics"]["views"]["primary"][
-            "calibration"
-        ]["bins"][0].__setitem__("accuracy", float("inf")),
-        lambda result: result["quality"]["metrics"]["views"]["primary"][
-            "seniority_mismatch"
-        ].__setitem__("tp", True),
-        lambda result: result["quality"]["metrics"]["views"]["primary"][
-            "seniority_mismatch"
-        ].__setitem__("fp", -1),
-        lambda result: result["quality"]["metrics"]["views"]["primary"][
-            "seniority_mismatch"
-        ].__setitem__("fn", 1.5),
-        lambda result: result["quality"]["metrics"]["views"]["primary"][
-            "seniority_mismatch"
-        ].__setitem__("precision", float("-inf")),
+        (
+            lambda result: result["quality"]["metrics"].pop("delta_b_minus_a"),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["delta_b_minus_a"].__setitem__(
+                "ece", 1.0
+            ),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["delta_b_minus_a"].__setitem__(
+                "ece", "0.0"
+            ),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["delta_b_minus_a"].__setitem__(
+                "ece", True
+            ),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["delta_b_minus_a"].__setitem__(
+                "ece", float("nan")
+            ),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["delta_b_minus_a"].__setitem__(
+                "ece", float("inf")
+            ),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["delta_b_minus_a"].__setitem__(
+                "ece", 10**400
+            ),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["views"]["primary"].__setitem__(
+                "pair_count", 10**400
+            ),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["source"].__setitem__(
+                "total_record_count", 10**400
+            ),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["environment"]["torch_num_threads"].__setitem__(
+                "requested", 10**400
+            ),
+            "invalid torch thread configuration",
+        ),
+        (
+            lambda result: result["model"].__setitem__("int8_linear_modules", 10**400),
+            "INT8 model inspection failed",
+        ),
     ],
 )
-def test_publication_validation_rejects_malformed_numeric_values(
-    monkeypatch: pytest.MonkeyPatch, mutate: Any
+def test_publication_validation_rejects_invalid_quality_delta(
+    monkeypatch: pytest.MonkeyPatch, mutate: Any, expected_error: str
 ) -> None:
     valid, artifacts = _valid_result(monkeypatch)
     mutate(valid)
-    assert validate_publication(valid, artifacts)
+    assert expected_error in validate_publication(valid, artifacts)
+
+
+def test_publication_validation_rejects_invalid_audit_view_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provenance = "invalid quality audit/view provenance"
+    mismatch = "quality metrics/provenance view mismatch"
+    mutations = [
+        (
+            lambda result: result["views"]["sensitivity_b"].__setitem__("pair_count", 2),
+            provenance,
+        ),
+        (
+            lambda result: result["views"]["sensitivity_b"].__setitem__("excluded_pairs", 1),
+            provenance,
+        ),
+        (
+            lambda result: result["views"]["sensitivity_b"].__setitem__("record_count", 6),
+            provenance,
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["views"]["sensitivity_b"].__setitem__(
+                "pair_count", 2
+            ),
+            mismatch,
+        ),
+        (lambda result: result["audit"].__setitem__("task_state_overlap_count", 4), provenance),
+        (lambda result: result["audit"].__setitem__("exact_overlap_count", True), provenance),
+        (
+            lambda result: result["audit"].__setitem__(
+                "overlap_state_sha256", ["f" * 64, "f" * 64]
+            ),
+            provenance,
+        ),
+        (
+            lambda result: result["audit"].__setitem__(
+                "duplicate_shared_state_clusters",
+                [{"state_sha256": "f" * 64, "pair_count": 1}],
+            ),
+            provenance,
+        ),
+        (
+            lambda result: result["audit"].__setitem__(
+                "conflicting_labels",
+                [
+                    {
+                        "task": "not-a-match-task",
+                        "state_sha256": "f" * 64,
+                        "labels": ["0", "1"],
+                    }
+                ],
+            ),
+            provenance,
+        ),
+        (lambda result: result["audit"].pop("overlap_state_sha256"), provenance),
+        (lambda result: result["views"]["primary"].pop("remaining_checksum"), provenance),
+    ]
+    for index, (mutate, expected_error) in enumerate(mutations):
+        valid, artifacts = _valid_result(monkeypatch)
+        mutate(valid)
+        errors = validate_publication(valid, artifacts)
+        assert expected_error in errors, (index, errors)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_error"),
+    [
+        (
+            lambda result: result["publication"].__setitem__("elapsed_seconds", True),
+            "publication hard budget exceeded",
+        ),
+        (
+            lambda result: result["publication"].__setitem__("elapsed_seconds", "1"),
+            "publication hard budget exceeded",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["views"]["primary"][
+                "calibration"
+            ].__setitem__("ece", float("nan")),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["views"]["primary"][
+                "calibration"
+            ]["bins"][0].__setitem__("accuracy", float("inf")),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["views"]["primary"][
+                "seniority_mismatch"
+            ].__setitem__("tp", True),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["views"]["primary"][
+                "seniority_mismatch"
+            ].__setitem__("fp", -1),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["views"]["primary"][
+                "seniority_mismatch"
+            ].__setitem__("fn", 1.5),
+            "invalid quality metrics schema",
+        ),
+        (
+            lambda result: result["quality"]["metrics"]["views"]["primary"][
+                "seniority_mismatch"
+            ].__setitem__("precision", float("-inf")),
+            "invalid quality metrics schema",
+        ),
+    ],
+)
+def test_publication_validation_rejects_malformed_numeric_values(
+    monkeypatch: pytest.MonkeyPatch, mutate: Any, expected_error: str
+) -> None:
+    valid, artifacts = _valid_result(monkeypatch)
+    mutate(valid)
+    assert expected_error in validate_publication(valid, artifacts)
 
 
 def test_cli_clean_success_rechecks_dirty_state_and_artifacts_with_fakes(
@@ -1011,3 +1306,330 @@ def test_cli_rejects_dirty_override_and_missing_artifacts_offline() -> None:
 def test_protocol_constants_are_fixed() -> None:
     assert COLD_TIMEOUT_SECONDS == 120
     assert PUBLICATION_BUDGET_SECONDS == 75 * 60
+
+
+def _metrics_view(name: str, hierarchy: str, pairs: int) -> dict[str, Any]:
+    """Canonical multi-pair metrics view built only from the public helpers."""
+    confidences: list[float] = []
+    predictions: list[int] = []
+    targets: list[int] = []
+    for _ in range(pairs):
+        confidences.extend([0.9, 0.8, 0.7])
+        predictions.extend([4, 2, 1])
+        targets.extend([4, 2, 1])
+    return {
+        "name": name,
+        "hierarchy": hierarchy,
+        "pair_count": pairs,
+        "record_count": pairs * 3,
+        "calibration": calibration_summary(confidences, predictions, targets),
+        "seniority_mismatch": binary_metrics([False] * pairs, [False] * pairs),
+    }
+
+
+def _consistent_result(
+    monkeypatch: pytest.MonkeyPatch, latency_ns: int
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Build a result whose every derived field comes from the given duration.
+
+    The candidate latency is injected at the worker boundary, so
+    ``execute_protocol`` recomputes each lane summary, percentile-resolution
+    metadata, per-sample throughput, and throughput summary from it. A rejection
+    therefore cannot be an artefact of stale metadata.
+    """
+    return _valid_result(monkeypatch, latency_ns=latency_ns)
+
+
+def _hostile_latency_result(
+    monkeypatch: pytest.MonkeyPatch, hostile: Any
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """One fully consistent 3.5s result with a single hostile measured duration."""
+    result, artifacts = _valid_result(monkeypatch, latency_ns=3_500_000_000)
+    result["lanes"]["warm_ensemble"]["raw_samples"][0]["elapsed_ns"] = hostile
+    return result, artifacts
+
+
+def test_hostile_latency_is_rejected_before_any_float_conversion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No OverflowError/TypeError may escape validation of a hostile duration."""
+    for hostile in (10**400, -(10**400), None, "3500000000", 1.0, True, 0, -1):
+        result, artifacts = _hostile_latency_result(monkeypatch, hostile)
+        errors = validate_publication(result, artifacts)
+        assert "invalid benchmark lanes" in errors, hostile
+
+
+def test_publication_validation_accepts_realistic_multi_second_latencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Durations must never inherit count bounds: real cold loads exceed 3s."""
+    result, artifacts = _consistent_result(monkeypatch, 3_500_000_000)
+    assert validate_publication(result, artifacts) == []
+    cold = result["lanes"]["cold_load"]["raw_samples"]
+    assert all(sample["elapsed_ns"] > benchmark.MAX_PUBLICATION_COUNT for sample in cold)
+    batch_sample = result["lanes"]["batch_15"]["raw_samples"][0]
+    assert batch_sample["elapsed_ns"] > benchmark.MAX_PUBLICATION_COUNT
+    assert batch_sample["throughput_pairs_per_second"] == pytest.approx(
+        15 * 1_000_000_000 / batch_sample["elapsed_ns"]
+    )
+
+
+def test_latency_ceiling_is_derived_from_the_publication_budget() -> None:
+    assert benchmark.MAX_LATENCY_NS == PUBLICATION_BUDGET_SECONDS * 1_000_000_000
+    assert benchmark.MAX_LATENCY_NS > COLD_TIMEOUT_SECONDS * 1_000_000_000
+    assert benchmark.MAX_LATENCY_NS != benchmark.MAX_PUBLICATION_COUNT
+
+
+@pytest.mark.parametrize("latency_ns", [3_500_000_000, benchmark.MAX_LATENCY_NS])
+def test_latency_policy_accepts_every_consistent_duration_up_to_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch, latency_ns: int
+) -> None:
+    result, artifacts = _consistent_result(monkeypatch, latency_ns)
+    assert validate_publication(result, artifacts) == []
+    assert all(
+        sample["elapsed_ns"] >= latency_ns
+        for sample in result["lanes"]["model_forward"]["raw_samples"]
+    )
+
+
+def test_latency_ceiling_rejection_is_attributable_to_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prove the bound itself rejects, not incidental summary staleness."""
+    over = benchmark.MAX_LATENCY_NS + 1
+    result, artifacts = _consistent_result(monkeypatch, over)
+    lane = result["lanes"]["model_forward"]
+    assert lane["measured_count"] == len(lane["raw_samples"]) == 100
+    assert lane["summary"] == benchmark.percentile_summary(
+        [sample["elapsed_ns"] for sample in lane["raw_samples"]]
+    )
+    assert lane["percentile_resolution"]["sample_count"] == 100
+    assert "invalid benchmark lanes" in validate_publication(result, artifacts)
+
+    # A policy that accepts any positive int must accept the identical fixture,
+    # so the rejection above can only come from the latency ceiling.
+    monkeypatch.setattr(
+        benchmark, "_latency_ns", lambda value: type(value) is int and value > 0
+    )
+    loosened, loosened_artifacts = _consistent_result(monkeypatch, over)
+    assert validate_publication(loosened, loosened_artifacts) == []
+
+
+@pytest.mark.parametrize(
+    "lane_identity",
+    ["cold_load", "model_forward", "warm_ensemble", "batch_4", "batch_15"],
+)
+@pytest.mark.parametrize(
+    "invalid_process",
+    [[], {}, "123", (1, 2), set(), True, 1.0, None, -1, 0, 10**400],
+)
+def test_process_field_fails_closed_before_hashing(
+    monkeypatch: pytest.MonkeyPatch, lane_identity: str, invalid_process: Any
+) -> None:
+    """Unhashable process values must be rejected, never raise TypeError."""
+    result, artifacts = _valid_result(monkeypatch)
+    result["lanes"][lane_identity]["raw_samples"][0]["process"] = invalid_process
+    errors = validate_publication(result, artifacts)
+    assert "invalid benchmark lanes" in errors, (lane_identity, invalid_process)
+
+
+def test_process_field_accepts_one_valid_pid_per_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One strictly positive integer PID per run must remain valid."""
+    result, artifacts = _valid_result(monkeypatch)
+    assert validate_publication(result, artifacts) == []
+    processes = {
+        sample["process"] for sample in result["lanes"]["batch_8"]["raw_samples"]
+    }
+    assert len(processes) == 2
+    assert all(type(value) is int and value > 0 for value in processes)
+
+
+@pytest.mark.parametrize(
+    "invalid_throughput",
+    [True, "1.0", float("nan"), float("inf"), float("-inf"), 10**400],
+)
+def test_batch_throughput_numeric_validation_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, invalid_throughput: Any
+) -> None:
+    """A pathological throughput must produce an error, never raise OverflowError."""
+    result, artifacts = _valid_result(monkeypatch)
+    result["lanes"]["batch_8"]["raw_samples"][0][
+        "throughput_pairs_per_second"
+    ] = invalid_throughput
+    errors = validate_publication(result, artifacts)
+    assert errors is not None
+    assert "invalid benchmark lanes" in errors, invalid_throughput
+
+
+def test_batch_throughput_finite_mismatch_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, artifacts = _valid_result(monkeypatch)
+    sample = result["lanes"]["batch_4"]["raw_samples"][0]
+    assert sample["throughput_pairs_per_second"] != 0.5
+    sample["throughput_pairs_per_second"] = 0.5
+    assert "invalid benchmark lanes" in validate_publication(result, artifacts)
+
+
+def test_batch_lane_thorough_summary_must_match_its_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, artifacts = _valid_result(monkeypatch)
+    result["lanes"]["batch_1"]["throughput"]["mean"] += 1.0
+    assert "invalid benchmark lanes" in validate_publication(result, artifacts)
+
+
+@pytest.mark.parametrize(
+    "invalid_source",
+    [
+        {},
+        {"total_record_count": "x", "match_scoring_record_count": 3},
+        {"total_record_count": None, "match_scoring_record_count": 3},
+        {"total_record_count": True, "match_scoring_record_count": 3},
+        {"total_record_count": -1, "match_scoring_record_count": 3},
+        {"total_record_count": 10**400, "match_scoring_record_count": 3},
+        {"total_record_count": 3, "match_scoring_record_count": 4},
+        {"total_record_count": 3},
+        None,
+        "source",
+        3,
+    ],
+)
+def test_malformed_quality_source_is_rejected_without_raising(
+    monkeypatch: pytest.MonkeyPatch, invalid_source: Any
+) -> None:
+    """P1-1: audit provenance must never raise KeyError/TypeError on bad JSON."""
+    result, artifacts = _valid_result(monkeypatch)
+    result["quality"]["metrics"]["source"] = invalid_source
+    errors = validate_publication(result, artifacts)
+    assert "invalid quality metrics schema" in errors
+    assert "invalid quality audit/view provenance" in errors
+
+
+def test_delta_mismatch_reports_its_own_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, artifacts = _valid_result(monkeypatch)
+    result["quality"]["metrics"]["delta_b_minus_a"]["ece"] = 0.5
+    assert "invalid quality metrics schema" in validate_publication(result, artifacts)
+
+
+def test_audit_view_provenance_errors_are_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mutations = [
+        lambda result: result["views"]["sensitivity_b"].__setitem__("pair_count", 2),
+        lambda result: result["views"]["sensitivity_b"].__setitem__("excluded_pairs", 1),
+        lambda result: result["views"]["sensitivity_b"].__setitem__("record_count", 6),
+        lambda result: result["audit"].__setitem__("task_state_overlap_count", 4),
+        lambda result: result["audit"].__setitem__("exact_overlap_count", True),
+        lambda result: result["audit"].__setitem__(
+            "overlap_state_sha256", ["f" * 64, "f" * 64]
+        ),
+        lambda result: result["audit"].__setitem__("overlap_state_sha256", "f" * 64),
+        lambda result: result["audit"].pop("overlap_state_sha256"),
+        lambda result: result["views"]["primary"].pop("remaining_checksum"),
+        lambda result: result["audit"].__setitem__(
+            "conflicting_labels",
+            [
+                {"task": "match_scoring_skill", "state_sha256": "f" * 64, "labels": ["0", "1"]},
+                {"task": "match_scoring_skill", "state_sha256": "f" * 64, "labels": ["0", "1", "2"]},
+            ],
+        ),
+    ]
+    for index, mutate in enumerate(mutations):
+        result, artifacts = _valid_result(monkeypatch)
+        mutate(result)
+        assert "invalid quality audit/view provenance" in validate_publication(
+            result, artifacts
+        ), (index, validate_publication(result, artifacts))
+
+
+def test_quality_metrics_provenance_mismatch_reports_its_own_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, artifacts = _valid_result(monkeypatch)
+    result["views"]["primary"]["pair_count"] = 1
+    result["quality"]["metrics"]["views"]["primary"]["pair_count"] = 2
+    errors = validate_publication(result, artifacts)
+    assert "quality metrics/provenance view mismatch" in errors
+
+
+def test_producer_conflicts_round_trip_through_the_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P2: real audit output must validate verbatim, without manual reshaping."""
+    holdout = (
+        _rows("state-a", labels=(4, 2, 1))
+        + _rows("state-a", labels=(4, 5, 1))
+        + _rows("state-b")
+    )
+    training = [
+        # A third skill label plus a task outside the approved match-scoring set.
+        {"task": "match_scoring_skill", "state": holdout[0]["state"], "label": 7},
+        {"task": "other_task", "state": holdout[0]["state"], "label": 8},
+    ]
+    audit = audit_holdout_overlap(training, holdout)
+    keys = [(entry["task"], entry["state_sha256"]) for entry in audit["conflicting_labels"]]
+    assert len(keys) == len(set(keys))
+    assert audit["conflicting_label_count"] == len(keys)
+    assert all(task in REQUIRED_MATCH_SCORING_TASKS for task, _ in keys)
+
+    views = primary_and_sensitivity_views(holdout, audit)
+    match_records = [row for row in holdout if row["task"] in REQUIRED_MATCH_SCORING_TASKS]
+    result, artifacts = _valid_result(monkeypatch)
+    result["audit"] = audit
+    result["views"] = views
+    result["quality"]["metrics"] = {
+        "source": {
+            "total_record_count": len(holdout),
+            "match_scoring_record_count": len(match_records),
+        },
+        "views": {
+            "primary": _metrics_view(
+                "primary_reproduction", "A-primary", views["primary"]["pair_count"]
+            ),
+            "sensitivity_b": _metrics_view(
+                "overlap_excluded_sensitivity", "B-sensitivity", views["sensitivity_b"]["pair_count"]
+            ),
+        },
+    }
+    result["quality"]["metrics"]["delta_b_minus_a"] = quality_delta_b_minus_a(
+        result["quality"]["metrics"]["views"]
+    )
+    assert validate_publication(result, artifacts) == []
+
+
+def test_task_state_overlap_denominator_is_all_task_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overlap counts every holdout row, not only match-scoring rows."""
+    extra = [
+        {"task": "other_task", "state": f"state-{index}", "label": index}
+        for index in range(4)
+    ]
+    holdout = _rows("state-0") + extra
+    training = [
+        {"task": "other_task", "state": f"state-{index}", "label": index}
+        for index in range(4)
+    ]
+    audit = audit_holdout_overlap(training, holdout)
+    match_count = len([row for row in holdout if row["task"] in REQUIRED_MATCH_SCORING_TASKS])
+    assert audit["task_state_overlap_count"] == 4
+    assert audit["task_state_overlap_count"] > match_count
+
+    views = primary_and_sensitivity_views(holdout, audit)
+    result, artifacts = _valid_result(monkeypatch)
+    result["audit"] = audit
+    result["views"] = views
+    result["quality"]["metrics"]["source"] = {
+        "total_record_count": len(holdout),
+        "match_scoring_record_count": match_count,
+    }
+    metrics = result["quality"]["metrics"]["views"]
+    for key, hierarchy in (("primary", "A-primary"), ("sensitivity_b", "B-sensitivity")):
+        metrics[key]["pair_count"] = views[key]["pair_count"]
+        metrics[key]["record_count"] = views[key]["record_count"]
+    assert validate_publication(result, artifacts) == []
