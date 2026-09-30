@@ -190,8 +190,25 @@ This artifact-free PR-CI step does not claim a real-model evaluation. A pinned a
 
 ### Milestone 3: Model Evaluation Artifacts & Benchmark Report
 
-* **Target Files:**
+**Status:** COMPLETE (2026-09-30)
+**Publication commit:** `docs(evaluation): publish milestone 3 benchmarks`
+**Reference artifact:** `docs/benchmarks/m3-reference.json`
+**Report:** `docs/BENCHMARKS.md`
+**Publication harness (authoritative):** `8135c6a581527ee540c4e813769bc9862b42bde2` — `fix(evaluation): validate benchmark quality provenance`
+**Benchmark schema:** `m3-benchmark-v2`
+
+The publication manifest passed the canonical validator after a fresh CPU-only run from a clean checkout of the authoritative harness commit. It records effective dynamic INT8 quantization, exact raw lane counts with per-run separation, deterministic 16-input payload rotation with verified payload digests, artifact/config checksums, the canonical B−A quality delta, and the contaminated primary plus leakage-audited sensitivity quality views. Quality conclusions remain diagnostic only; no unbiased independent test-set estimate is claimed.
+
+An earlier publication attempt produced under harness `1569999c76ee7db7f2052cddbf84837a3a14ca08` / schema `m3-benchmark-v1` is superseded and non-canonical; the published artifact here was regenerated from scratch at `8135c6a`.
+
+* **Target Files / Existing Publication-Gate Implementation:**
 * `docs/BENCHMARKS.md`
+* `job_mcp/evaluation/benchmark.py`
+* `.scripts/benchmark_milestone3.py`
+* `tests/evaluation/test_benchmark_harness.py`
+* `tests/evaluation/test_evaluation_gates.py`
+
+The benchmark harness and validator are part of the publication gate and must be reconciled against the report; `docs/BENCHMARKS.md` is not independently authoritative.
 
 
 
