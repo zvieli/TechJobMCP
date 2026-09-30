@@ -8,7 +8,11 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      # Optional so `docker compose config` validates from a clean checkout.
+      # The Milestone 4 contract values are declared explicitly below instead of
+      # depending on developer-local secrets in .env.
+      - path: .env
+        required: false
     volumes:
       - ./browser_profile:/app/browser_profile
       - ./data:/app/data
@@ -40,6 +44,8 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+      ollama-model-pull:
+        condition: service_completed_successfully
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -75,7 +81,11 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "ollama list | grep -q $${OLLAMA_MODEL:-llama3.2} || exit 1"]
+      # Daemon-readiness probe only. Gating health on a specific model name made
+      # the service permanently unhealthy on any volume without that exact model,
+      # and because ollama-model-pull needs ollama to be healthy first, that
+      # turned into a startup deadlock. Model presence is ollama-model-pull's job.
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1 || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 60
@@ -88,25 +98,57 @@ services:
     environment:
       - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2}
+      # Bounded startup: caps the model transfer so a stalled registry cannot
+      # leave techjob-mcp waiting forever on service_completed_successfully.
+      - OLLAMA_PULL_TIMEOUT_SECONDS=${OLLAMA_PULL_TIMEOUT_SECONDS:-900}
     volumes:
       - ollama_data:/root/.ollama
     depends_on:
       ollama:
-        condition: service_started
+        condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
+    # Compose's service_healthy gate replaces the old unbounded sleep-polling
+    # loop. set -e plus a hard pull deadline make any failure exit non-zero, so
+    # techjob-mcp cannot start against a missing model while reporting green.
+    # Every shell variable below is written with doubled dollars because Compose
+    # un-escapes them into the single-dollar form the container shell expands.
     command:
       - |
-        echo "Waiting for Ollama daemon to respond..."
-        while ! ollama list > /dev/null 2>&1; do
-          sleep 1
-        done
+        set -e
         TARGET_MODEL="$${OLLAMA_MODEL:-llama3.2}"
-        if ollama list | grep -q "$$TARGET_MODEL"; then
+        PULL_DEADLINE="$${OLLAMA_PULL_TIMEOUT_SECONDS:-900}"
+        # GNU `timeout 0` means "no timeout at all", and a non-numeric value
+        # makes timeout fail outright. Normalise any empty, non-numeric or
+        # non-positive setting back to the 900s default so the bound cannot be
+        # silently disabled by configuration. Values of 10+ digits are rejected
+        # because they overflow shell arithmetic comparisons, and any accepted
+        # deadline is clamped to 24h so the bound is always real.
+        case "$${PULL_DEADLINE}" in
+          "" | *[!0-9]*) PULL_DEADLINE=900 ;;
+        esac
+        if [ "$${#PULL_DEADLINE}" -ge 10 ]; then
+          PULL_DEADLINE=900
+        fi
+        if [ "$${PULL_DEADLINE}" -le 0 ]; then
+          PULL_DEADLINE=900
+        fi
+        if [ "$${PULL_DEADLINE}" -gt 86400 ]; then
+          PULL_DEADLINE=86400
+        fi
+        # Exact lookup. The previous `ollama list | grep` form was an unanchored
+        # regex, so a partial name matched an installed model and this helper
+        # exited 0 without the configured model ever being present.
+        if ollama show "$$TARGET_MODEL" > /dev/null 2>&1; then
           echo "Model $$TARGET_MODEL already exists."
         else
-          echo "Pulling model $$TARGET_MODEL..."
-          ollama pull "$$TARGET_MODEL"
+          echo "Pulling model $$TARGET_MODEL (deadline $${PULL_DEADLINE}s)..."
+          # --kill-after escalates to SIGKILL, so a transfer that ignores SIGTERM
+          # cannot outlive the deadline and wedge techjob-mcp indefinitely.
+          timeout --kill-after=10s "$$PULL_DEADLINE" ollama pull "$$TARGET_MODEL"
         fi
+        # Re-verify after the pull so a truncated or failed transfer cannot be
+        # reported as readiness.
+        ollama show "$$TARGET_MODEL" > /dev/null
         echo "Model $$TARGET_MODEL is ready."
 
 volumes:
