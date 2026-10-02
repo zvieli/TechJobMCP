@@ -479,6 +479,40 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
 * No ranking model retraining or System 1 weights modification.
 * No posting observation storage, longitudinal tracking, or repost detection (Milestone 7 scope).
 
+**Implemented Design — M6-A Search Plane Foundation (verified 2026-10-02):**
+
+*Architecture & Contracts (M6-A1):*
+* Established provider-agnostic retrieval and fetch domain models in `job_mcp/core/search_plane/models.py`.
+* `JobSearchRequest`, `JobSearchResultItem`, `JobSearchResultSet` provide clean decoupled search data structures without leaky provider abstractions.
+* `JobRef(version=1, source_family, account, locator)`: Opaque, stateless, versioned token. Uses URL-safe base64-encoded JSON payload (`v1_<base64url>`) with no fragile delimiter joining. Encodes only pure routing coordinates; no local paths, no secrets, no ephemeral cache dependency. Round-trip serialization/deserialization is completely deterministic.
+* `FetchResult` & `FetchStatus`: Strictly represents factual retrieval outcomes (`FOUND`, `NOT_FOUND`, `INVALID_REF`, `UNSUPPORTED_REFETCH`, `UPSTREAM_ERROR`). Expiration, staleness, and liveness conclusions are strictly preserved for Milestone 7 observation semantics.
+* `SourceCapabilities`: Explicit capability declaration matrix covering search, native single-job fetch, URL fetch, query support, company filter, work-mode filter, and pagination.
+
+*Aggregator Adapter & Routing (M6-A2):*
+* `SearchPlaneAdapter` in `job_mcp/core/search_plane/adapter.py` connects the Search Plane interface to the existing `JobAggregator` and `SourceRegistry` without rewriting underlying sources.
+* Declared `SOURCE_CAPABILITY_MAP` covers all 11 active source families:
+  - `linkedin`: supports search, native fetch (`fetch_job_details`), URL fetch, query, work mode.
+  - `greenhouse`, `lever`, `workday`, `eightfold`, `direct_tech`: support search, company filter; native single-job fetch and URL fetch are unsupported.
+  - `alljobs`, `comeet`, `gotfriends`, `jobify`, `hiremetech`: regional sources support search, query; native single-job fetch and URL fetch are unsupported.
+* `get_source_capabilities`: Returns declared capabilities for known families, and fails closed for unknown/dynamic sources with `SourceCapabilities(supports_search=False)` and all other capability flags default `False`.
+* `create_job_ref`: Deterministically extracts routing coordinates from canonical `Job` fields without external lookups.
+* `search`: Maps `JobSearchRequest` (`query`, `location`, `work_mode`, `tech_stack`, `company`, `limit`, `sources`) into `JobPreferences`. Cross-source retrieval and deduplication are strictly owned by `JobAggregator.fetch_all_jobs` (executing the single authoritative `deduplicate_jobs` pass); `SearchPlaneAdapter` does not perform a second deduplication pass. The adapter post-filters by `company`, applies `limit`, and wraps results in `JobSearchResultItem` with encoded opaque `JobRef`s.
+* `fetch`: Factual resolution order:
+  1. Validates and decodes opaque `JobRef`; returns `INVALID_REF` on malformed or unsupported version.
+  2. Cache fast-path: checks `JobCache` for cached posting (`FOUND`).
+  3. Native refetch: if provider supports native fetch (e.g. `LinkedInSource.fetch_job_details`), queries upstream provider; maps detail response to `FOUND`, missing to `NOT_FOUND`, and network exceptions to `UPSTREAM_ERROR`.
+  4. Unsupported refetch: if source lacks single-job endpoint (or is unknown) and posting is not in cache, explicitly returns `UNSUPPORTED_REFETCH`.
+  5. Zero dummy stubs: strictly refuses to synthesize fake `Job(title=f"Job {job_id}", company="Unknown Company")` placeholders.
+
+*Evidence & Quality Gates:*
+* `test_search_plane_models.py`: 53 passed (contracts, serialization, validation, round-trip, error handling).
+* `test_search_plane_adapter.py`: 29 passed (request mapping, filtering, limit, ref stability, cache resolution, LinkedIn success/404/error, explicit unsupported refetch, zero fake job stubs, fail-closed unknown capability fallback, single dedup ownership).
+* Combined search plane focused tests: 82 passed.
+* Backward compatibility suites (server, tools, aggregator, registry, 5 migrated providers): 446 passed.
+* Scoped Ruff check on `job_mcp/core/search_plane/` and search plane tests: 0 errors.
+* Wheel build (`uv build --wheel`): verified `job_mcp/core/search_plane/` (`__init__.py`, `models.py`, `adapter.py`) packaged cleanly.
+* Full test suite: 1438 passed, 2 xfailed (zero regressions against 1409 passed baseline; exactly 1409 + 29 = 1438).
+
 ---
 
 ### Milestone 7: Verified Freshness & Search Quality Evidence
