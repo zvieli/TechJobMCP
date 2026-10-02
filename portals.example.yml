@@ -1,0 +1,64 @@
+# Example Milestone 5 company registry override.
+#
+# Copy to `portals.yml` in the project root (or point COMPANY_REGISTRY_PATH at
+# this file) and edit. This file is NOT loaded automatically.
+#
+# Semantics:
+#   - an entry whose `id` matches a built-in company overrides only the fields
+#     you list; everything else is inherited from the curated defaults
+#   - a new `id` is appended after the built-in companies for that family
+#   - `enabled: false` disables a company without deleting it
+#   - unknown fields, malformed ids/URLs and conflicting duplicates are rejected
+#     at load time, before any network request
+#
+# Only families that already expose a company catalog are supported:
+# greenhouse, lever, eightfold, direct_tech, workday.
+
+version: 1
+
+providers:
+  greenhouse:
+    companies:
+      # Add a company without touching provider code.
+      - id: example-startup
+        name: Example Startup
+        board_token: examplestartup
+        enabled: true
+
+  lever:
+    companies:
+      - id: example-limited
+        name: Example Limited
+        slug: examplelimited
+
+  direct_tech:
+    companies:
+      # Override a narrowing default query that would otherwise apply.
+      - id: google
+        name: Google
+        default_query: software engineer
+      # Constraint: DirectTechSource picks its request strategy from `id` and
+      # falls back to the Amazon-style JSON request for unknown ids. Only add a
+      # new direct_tech company whose endpoint is Amazon-compatible, or it will
+      # be fetched with the wrong protocol even though the config validates.
+      - id: example-direct
+        name: Example Direct
+        search_url: https://careers.example.com/api/jobs
+        default_query: ""          # empty = drop the narrowing query
+        default_location: Israel
+
+  workday:
+    companies:
+      # Disable a curated company that no longer serves jobs.
+      - id: dell
+        enabled: false
+
+  eightfold:
+    companies:
+      - id: example-ai
+        name: Example AI
+        hostname: example.eightfold.ai
+        domain: example.ai
+        locations:
+          - Haifa
+        filter_distance: "25"

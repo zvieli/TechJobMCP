@@ -16,6 +16,29 @@ import os
 import pytest
 
 
+# Hermetic company registry for the whole test session.
+#
+# `job_mcp.sources.registry` constructs provider instances at import time, and
+# Milestone 5 providers resolve their company catalog from the active registry.
+# Without this pin, a developer's own `portals.yml` in the checkout would be
+# discovered while pytest *collects* unrelated test modules, so a typo in a
+# personal config file could abort the entire run with CompanyRegistryError.
+# Production code still fail-fasts on invalid config; only the test session is
+# forced onto the built-in defaults. Individual tests exercise discovery and
+# reload by calling resolve()/configure() explicitly.
+#
+# Discovery is therefore disabled for the session by setting
+# COMPANY_REGISTRY_BUILTINS_ONLY *before* anything under `job_mcp` is imported:
+# importing job_mcp builds the provider registry, and that resolution reads the
+# project config. Setting the flag afterwards is too late.
+def _pin_builtin_company_registry() -> None:
+    os.environ["COMPANY_REGISTRY_BUILTINS_ONLY"] = "1"
+    os.environ.pop("COMPANY_REGISTRY_PATH", None)
+
+
+_pin_builtin_company_registry()
+
+
 @pytest.fixture(autouse=True)
 def isolate_test_environment(monkeypatch):
     """Sanitize ambient container/daemon environment variables during test runs.

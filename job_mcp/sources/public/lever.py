@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import html
 import os
 import re
@@ -16,6 +15,9 @@ from job_mcp.core.api_client import filter_jobs
 from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
+from job_mcp.sources.company_registry import catalog as registry_catalog
+from job_mcp.sources.company_registry.defaults import LEVER_COMPANIES as _BUILTIN_COMPANIES
+from job_mcp.sources.company_registry.entries import LeverCompany as RegistryLeverCompany
 from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,32 +32,12 @@ REQUEST_HEADERS = {
 MAX_CONCURRENT_REQUESTS = 4
 
 
-@dataclass
-class LeverCompany:
-    """Descriptor for a company using Lever ATS."""
+# Company descriptors and the curated default catalog are owned by the
+# configuration-driven company registry; these names are re-exported for
+# backward compatibility.
+LeverCompany = RegistryLeverCompany
+LEVER_COMPANIES: dict[str, LeverCompany] = _BUILTIN_COMPANIES
 
-    name: str
-    slug: str
-    enabled: bool = True
-
-
-# Curated directory of Israeli tech companies and startups using Lever
-LEVER_COMPANIES: dict[str, LeverCompany] = {
-    "drivenets": LeverCompany(name="DriveNets", slug="drivenets", enabled=True),
-    "here": LeverCompany(name="HERE Technologies", slug="here", enabled=True),
-    "yotpo": LeverCompany(name="Yotpo", slug="yotpo", enabled=True),
-    "redis": LeverCompany(name="Redis", slug="redis", enabled=True),
-    "melio": LeverCompany(name="Melio", slug="melio", enabled=True),
-    "papaya_global": LeverCompany(name="Papaya Global", slug="papayaglobal", enabled=True),
-    "hibob": LeverCompany(name="HiBob", slug="hibob", enabled=True),
-    "palo_alto_networks": LeverCompany(name="Palo Alto Networks Israel", slug="paloaltonetworks", enabled=True),
-    "riskified": LeverCompany(name="Riskified", slug="riskified", enabled=True),
-    "k_health": LeverCompany(name="K Health", slug="khealth", enabled=True),
-    "tipalti": LeverCompany(name="Tipalti", slug="tipalti", enabled=True),
-    "deel": LeverCompany(name="Deel Israel", slug="deel", enabled=True),
-    "run_ai": LeverCompany(name="Run:ai", slug="runai", enabled=True),
-    "deci": LeverCompany(name="Deci AI", slug="deci", enabled=True),
-}
 
 
 def _strip_html(raw_html: str) -> str:
@@ -199,7 +181,7 @@ class LeverSource(BasePublicSource):
     timeout: float = 15.0
 
     def __init__(self, companies: Optional[dict[str, LeverCompany]] = None) -> None:
-        self._companies = companies if companies is not None else LEVER_COMPANIES
+        self._companies = companies if companies is not None else registry_catalog('lever')
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         self._last_fetch_time: float = 0.0
 

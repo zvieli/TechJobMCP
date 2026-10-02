@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import html
 import os
 import re
@@ -16,6 +15,9 @@ from job_mcp.core.api_client import filter_jobs
 from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
+from job_mcp.sources.company_registry import catalog as registry_catalog
+from job_mcp.sources.company_registry.defaults import GREENHOUSE_COMPANIES as _BUILTIN_COMPANIES
+from job_mcp.sources.company_registry.entries import GreenhouseCompany as RegistryGreenhouseCompany
 from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,37 +32,11 @@ REQUEST_HEADERS = {
 MAX_CONCURRENT_REQUESTS = 4
 
 
-@dataclass
-class GreenhouseCompany:
-    """Descriptor for a company using Greenhouse ATS."""
-
-    name: str
-    board_token: str
-    enabled: bool = True
-
-
-# Curated directory of Israeli AI/tech companies using Greenhouse
-GREENHOUSE_COMPANIES: dict[str, GreenhouseCompany] = {
-    "lightricks": GreenhouseCompany(name="Lightricks", board_token="lightricks", enabled=True),
-    "appsflyer": GreenhouseCompany(name="AppsFlyer", board_token="appsflyer", enabled=True),
-    "datadog": GreenhouseCompany(name="Datadog Israel", board_token="datadog", enabled=True),
-    "jfrog": GreenhouseCompany(name="JFrog", board_token="jfrog", enabled=True),
-    "orca_security": GreenhouseCompany(name="Orca Security", board_token="orcasecurity", enabled=True),
-    "yotpo": GreenhouseCompany(name="Yotpo", board_token="yotpo", enabled=True),
-    "riskified": GreenhouseCompany(name="Riskified", board_token="riskified", enabled=True),
-    # Companies that migrated off public Greenhouse API (kept for test compatibility)
-    "ai21labs": GreenhouseCompany(name="AI21 Labs", board_token="ai21labs", enabled=False),
-    "tabnine": GreenhouseCompany(name="Tabnine", board_token="tabnine", enabled=False),
-    "bria": GreenhouseCompany(name="Bria AI", board_token="baborstudio", enabled=False),
-    "gong": GreenhouseCompany(name="Gong", board_token="gong", enabled=False),
-    "wiz": GreenhouseCompany(name="Wiz", board_token="wiz", enabled=False),
-    "orcaai": GreenhouseCompany(name="Orca AI", board_token="orcaai", enabled=False),
-    "lemonade": GreenhouseCompany(name="Lemonade", board_token="lemonade", enabled=False),
-    "monday": GreenhouseCompany(name="monday.com", board_token="mondaydotcom", enabled=False),
-    "fiverr": GreenhouseCompany(name="Fiverr", board_token="fiverr", enabled=False),
-    "deepchecks": GreenhouseCompany(name="Deepchecks", board_token="deepchecks", enabled=False),
-    "snyk": GreenhouseCompany(name="Snyk", board_token="snyk", enabled=False),
-}
+# Company descriptors and the curated default catalog are owned by the
+# configuration-driven company registry; these names are re-exported for
+# backward compatibility.
+GreenhouseCompany = RegistryGreenhouseCompany
+GREENHOUSE_COMPANIES: dict[str, GreenhouseCompany] = _BUILTIN_COMPANIES
 
 
 def _strip_html(raw_html: str) -> str:
@@ -151,7 +127,16 @@ class GreenhouseSource(BasePublicSource):
     timeout: float = 20.0
 
     def __init__(self, companies: Optional[dict[str, GreenhouseCompany]] = None) -> None:
-        self._companies = companies if companies is not None else GREENHOUSE_COMPANIES
+        """Initialize GreenhouseSource.
+
+        Args:
+            companies: Optional company catalog. Defaults to the effective
+                company registry, which is the curated built-in set unless
+                project or user configuration overrides it.
+        """
+        self._companies = (
+            companies if companies is not None else registry_catalog("greenhouse")
+        )
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         self._last_fetch_time: float = 0.0
 

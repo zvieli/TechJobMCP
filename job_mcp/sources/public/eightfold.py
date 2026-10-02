@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import hashlib
 import re
 import time
@@ -16,82 +15,21 @@ from job_mcp.core.api_client import filter_jobs
 from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BasePublicSource
+from job_mcp.sources.company_registry import catalog as registry_catalog
+from job_mcp.sources.company_registry.defaults import EIGHTFOLD_COMPANIES as _BUILTIN_COMPANIES
+from job_mcp.sources.company_registry.entries import EightfoldCompany as RegistryEightfoldCompany
 from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class EightfoldCompany:
-    """Descriptor for a company using Eightfold AI ATS."""
-
-    name: str
-    hostname: str
-    domain: str
-    locations: list[str] = field(default_factory=list)
-    filter_distance: Optional[str] = "16"
-    enabled: bool = True
-
-    def get_search_url(self) -> str:
-        """Return the PCSX search endpoint URL."""
-        return f"https://{self.hostname.rstrip('/')}/api/pcsx/search"
-
-    def get_job_url(self, position_url: str) -> str:
-        """Return the public apply / details URL for a job posting."""
-        if not position_url:
-            return f"https://{self.hostname.rstrip('/')}"
-        if position_url.startswith("http://") or position_url.startswith("https://"):
-            return position_url
-        if not position_url.startswith("/"):
-            position_url = f"/{position_url}"
-        return f"https://{self.hostname.rstrip('/')}{position_url}"
-
-
-# Curated directory of tech enterprises using Eightfold AI ATS
-EIGHTFOLD_COMPANIES: dict[str, EightfoldCompany] = {
-    "nvidia": EightfoldCompany(
-        name="NVIDIA",
-        hostname="nvidia.eightfold.ai",
-        domain="nvidia.com",
-        locations=["Yokne'am Illit", "Tel Aviv", "Israel"],
-        filter_distance="16",
-        enabled=True,
-    ),
-    "micron": EightfoldCompany(
-        name="Micron",
-        hostname="micron.eightfold.ai",
-        domain="micron.com",
-        locations=[],
-        filter_distance="16",
-        enabled=True,
-    ),
-    "paypal": EightfoldCompany(
-        name="PayPal",
-        hostname="paypal.eightfold.ai",
-        domain="paypal.com",
-        locations=["Israel", "Tel Aviv"],
-        filter_distance="16",
-        enabled=True,
-    ),
-    "intel": EightfoldCompany(
-        name="Intel",
-        hostname="intel.eightfold.ai",
-        domain="intel.com",
-        locations=["Israel", "Haifa", "Petach Tikva", "Jerusalem"],
-        filter_distance="16",
-        enabled=False,  # Intel careers use Workday (intel.wd1.myworkdayjobs.com)
-    ),
-    "elbit_systems": EightfoldCompany(
-        name="Elbit Systems",
-        hostname="elbitsystems.eightfold.ai",
-        domain="elbitsystems.com",
-        locations=["Israel"],
-        filter_distance="16",
-        enabled=False,  # Elbit Systems does not use Eightfold AI public PCSX
-    ),
-}
-
+# Company descriptors and the curated default catalog are owned by the
+# configuration-driven company registry; these names are re-exported for
+# backward compatibility.
+EightfoldCompany = RegistryEightfoldCompany
+EIGHTFOLD_COMPANIES: dict[str, EightfoldCompany] = _BUILTIN_COMPANIES
 DEFAULT_EIGHTFOLD_COMPANIES: list[EightfoldCompany] = list(EIGHTFOLD_COMPANIES.values())
+
 
 
 def parse_eightfold_position(raw: dict[str, Any], company: EightfoldCompany | str) -> Job:
@@ -338,7 +276,7 @@ class EightfoldAISource(BasePublicSource):
         self._cache: dict[str, tuple[float, list[Job]]] = {}
 
         if companies is None:
-            init_companies = list(EIGHTFOLD_COMPANIES.values())
+            init_companies = list(registry_catalog('eightfold').values())
         elif isinstance(companies, dict):
             init_companies = list(companies.values())
         else:

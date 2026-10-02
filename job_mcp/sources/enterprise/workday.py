@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import hashlib
 import re
 import time
@@ -15,123 +14,21 @@ from job_mcp.core.api_client import filter_jobs
 from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BaseEnterpriseSource
+from job_mcp.sources.company_registry import catalog as registry_catalog
+from job_mcp.sources.company_registry.defaults import WORKDAY_COMPANIES as _BUILTIN_COMPANIES
+from job_mcp.sources.company_registry.entries import WorkdayCompany as RegistryWorkdayCompany
 from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class WorkdayCompany:
-    """Descriptor for a company using Workday ATS."""
-
-    name: str
-    wd_company: str
-    wd_version: int = 1
-    wd_suffix: str = "External"
-    wd_locations: list[str] = field(default_factory=list)
-    base_url: Optional[str] = None
-    enabled: bool = True
-
-    def get_base_url(self) -> str:
-        """Return the base URL for the company's Workday portal."""
-        if self.base_url:
-            return self.base_url.rstrip("/")
-        return f"https://{self.wd_company}.wd{self.wd_version}.myworkdayjobs.com"
-
-    def get_cxs_url(self) -> str:
-        """Return the CXS search endpoint URL."""
-        base = self.get_base_url()
-        return f"{base}/wday/cxs/{self.wd_company}/{self.wd_suffix}/jobs"
-
-    def get_job_url(self, external_path: str) -> str:
-        """Return the public apply / details URL for a job posting."""
-        base = self.get_base_url()
-        if not external_path:
-            return f"{base}/en-US/{self.wd_suffix}"
-        if external_path.startswith("http://") or external_path.startswith("https://"):
-            return external_path
-        if not external_path.startswith("/"):
-            external_path = f"/{external_path}"
-        return f"{base}/en-US/{self.wd_suffix}{external_path}"
-
-
-# Curated directory of tech enterprises using Workday ATS
-WORKDAY_COMPANIES: dict[str, WorkdayCompany] = {
-    "intel": WorkdayCompany(
-        name="Intel",
-        wd_company="intel",
-        wd_version=1,
-        wd_suffix="External",
-        wd_locations=[],
-        enabled=True,
-    ),
-    "nvidia": WorkdayCompany(
-        name="NVIDIA",
-        wd_company="nvidia",
-        wd_version=5,
-        wd_suffix="NVIDIAExternalCareerSite",
-        wd_locations=[],
-        enabled=True,
-    ),
-    "cisco": WorkdayCompany(
-        name="Cisco",
-        wd_company="cisco",
-        wd_version=5,
-        wd_suffix="Cisco_Careers",
-        wd_locations=[],
-        enabled=True,
-    ),
-    "philips": WorkdayCompany(
-        name="Philips",
-        wd_company="philips",
-        wd_version=3,
-        wd_suffix="jobs-and-careers",
-        wd_locations=[],
-        enabled=True,
-    ),
-    "dell": WorkdayCompany(
-        name="Dell",
-        wd_company="dell",
-        wd_version=1,
-        wd_suffix="External",
-        wd_locations=[],
-        enabled=False,  # Dell manages careers via custom portal (jobs.dell.com)
-    ),
-    "autodesk": WorkdayCompany(
-        name="Autodesk",
-        wd_company="autodesk",
-        wd_version=1,
-        wd_suffix="Ext",
-        wd_locations=[],
-        enabled=True,
-    ),
-    "microsoft": WorkdayCompany(
-        name="Microsoft",
-        wd_company="microsoft",
-        wd_version=2,
-        wd_suffix="External",
-        wd_locations=[],
-        enabled=False,  # Microsoft uses careers.microsoft.com custom portal
-    ),
-    "qualcomm": WorkdayCompany(
-        name="Qualcomm",
-        wd_company="qualcomm",
-        wd_version=5,
-        wd_suffix="External",
-        wd_locations=[],
-        enabled=False,  # Qualcomm Workday blocks direct automated POSTs
-    ),
-    "ptc": WorkdayCompany(
-        name="PTC",
-        wd_company="ptc",
-        wd_version=1,
-        wd_suffix="External",
-        wd_locations=[],
-        enabled=False,  # PTC endpoint changed
-    ),
-}
-
+# Company descriptors and the curated default catalog are owned by the
+# configuration-driven company registry; these names are re-exported for
+# backward compatibility.
+WorkdayCompany = RegistryWorkdayCompany
+WORKDAY_COMPANIES: dict[str, WorkdayCompany] = _BUILTIN_COMPANIES
 DEFAULT_WORKDAY_COMPANIES: list[WorkdayCompany] = list(WORKDAY_COMPANIES.values())
+
 
 
 def parse_workday_position(raw: dict[str, Any], company: WorkdayCompany | str) -> Job:
@@ -325,7 +222,7 @@ class WorkdaySource(BaseEnterpriseSource):
         self._cache: dict[str, tuple[float, list[Job]]] = {}
 
         if companies is None:
-            init_companies = list(WORKDAY_COMPANIES.values())
+            init_companies = list(registry_catalog('workday').values())
         elif isinstance(companies, dict):
             init_companies = list(companies.values())
         else:

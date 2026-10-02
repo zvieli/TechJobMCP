@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import hashlib
 import json
 import re
@@ -16,6 +15,9 @@ from job_mcp.core.api_client import filter_jobs
 from job_mcp.core.section_parser import extract_clean_job_tech_stack, parse_job_sections
 from job_mcp.models.schemas import Job, JobPreferences, WorkMode
 from job_mcp.sources.base import BaseEnterpriseSource
+from job_mcp.sources.company_registry import catalog as registry_catalog
+from job_mcp.sources.company_registry.defaults import DIRECT_TECH_COMPANIES as _BUILTIN_COMPANIES
+from job_mcp.sources.company_registry.entries import DirectTechCompany as RegistryDirectTechCompany
 from job_mcp.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,51 +27,11 @@ USER_AGENT = (
 )
 
 
-@dataclass
-class DirectTechCompany:
-    """Descriptor for a direct tech company career endpoint."""
-
-    provider_id: str
-    name: str
-    search_url: str
-    default_query: str = "student"
-    default_location: str = ""
-    locations: list[str] = field(default_factory=list)
-    enabled: bool = True
-
-
-# Curated directory of direct tech company career endpoints
-DIRECT_TECH_COMPANIES: dict[str, DirectTechCompany] = {
-    "google": DirectTechCompany(
-        provider_id="google",
-        name="Google",
-        search_url="https://www.google.com/about/careers/applications/jobs/results/",
-        default_query="student",
-        default_location="Haifa, Israel",
-    ),
-    "amazon": DirectTechCompany(
-        provider_id="amazon",
-        name="Amazon",
-        search_url="https://www.amazon.jobs/api/jobs/search",
-        default_query="student",
-        locations=["Haifa"],
-    ),
-    "apple": DirectTechCompany(
-        provider_id="apple",
-        name="Apple",
-        search_url="https://jobs.apple.com/api/v1/search",
-        default_query="student",
-        locations=["postLocation-state1312"],
-    ),
-    "ibm": DirectTechCompany(
-        provider_id="ibm",
-        name="IBM",
-        search_url="https://www-api.ibm.com/search/api/v2",
-        default_query="student",
-        default_location="Israel",
-    ),
-}
-
+# Company descriptors and the curated default catalog are owned by the
+# configuration-driven company registry; these names are re-exported for
+# backward compatibility.
+DirectTechCompany = RegistryDirectTechCompany
+DIRECT_TECH_COMPANIES: dict[str, DirectTechCompany] = _BUILTIN_COMPANIES
 DEFAULT_DIRECT_TECH_COMPANIES: list[DirectTechCompany] = list(DIRECT_TECH_COMPANIES.values())
 
 
@@ -632,7 +594,7 @@ class DirectTechSource(BaseEnterpriseSource):
         self._cache: dict[str, tuple[float, list[Job]]] = {}
 
         if companies is None:
-            init_companies = list(DIRECT_TECH_COMPANIES.values())
+            init_companies = list(registry_catalog('direct_tech').values())
         elif isinstance(companies, dict):
             init_companies = list(companies.values())
         else:
@@ -642,15 +604,22 @@ class DirectTechSource(BaseEnterpriseSource):
             if isinstance(comp, DirectTechCompany):
                 self.add_company(comp)
             elif isinstance(comp, dict):
+                # Optional fields are forwarded only when supplied, so their
+                # defaults come from the typed registry entry rather than from a
+                # duplicated literal here. The narrowing `default_query` is
+                # therefore configured in exactly one place (SPEC Milestone 5
+                # requirement 10).
+                optional = {
+                    key: value
+                    for key, value in comp.items()
+                    if key in ("default_query", "default_location", "locations", "enabled")
+                }
                 self.add_company(
                     DirectTechCompany(
                         provider_id=comp["provider_id"],
                         name=comp["name"],
                         search_url=comp["search_url"],
-                        default_query=comp.get("default_query", "student"),
-                        default_location=comp.get("default_location", ""),
-                        locations=comp.get("locations", []),
-                        enabled=comp.get("enabled", True),
+                        **optional,
                     )
                 )
 
