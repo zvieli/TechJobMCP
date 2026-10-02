@@ -429,57 +429,55 @@ Data flow is one-directional: `portals.yml` → `schema.py` (typed validation) �
 
 ---
 
-### Milestone 6: ATS Discovery & Coverage Expansion
+### Milestone 6: Unified Search Plane, ATS Discovery & Coverage Expansion
 
-**Objective:** Move from known-company scanning toward open-ended discovery by adding high-value ATS families and deterministic board/company resolution.
+**Objective:** Transform TechJobMCP into a provider-agnostic employment search plane by establishing unified search and fetch contracts, integrating high-value modern ATS families (Ashby, SmartRecruiters, Workable), and enabling bounded, deterministic company career discovery.
+
+**Intended Product Direction (North Star):**
+TechJobMCP operates for an AI agent like WebSearch + WebFetch, specialized for employment/job data. The agent expresses search intent (`job_search`) and fetches specific postings (`job_fetch`) without requiring provider-specific knowledge. TechJobMCP owns routing, strategy selection, discovery, normalization, deduplication, and refetch retrieval.
 
 **Initial Provider Priority:**
-1. Ashby
-2. SmartRecruiters
-3. Workable
+1. Ashby (`ashbyhq.com`) — Verified public board endpoint: `GET https://api.ashbyhq.com/posting-api/job-board/{JOB_BOARD_NAME}`.
+2. SmartRecruiters (`smartrecruiters.com`) — Verified public postings API: `GET /v1/companies/{companyIdentifier}/postings` and `/postings/{postingId}`.
+3. Workable (`workable.com`) — Verified public widget/account jobs surface; authenticated SPI endpoints remain strictly optional enrichment and are not required for baseline search or CI.
 
-Priority may be revised only from evidence about Israeli / AI-market coverage.
+**Delivery Sequence:**
 
-**Definition — Supported ATS Family:**
-An ATS family counts as supported only when it:
-* implements the existing source/provider contract,
-* accepts registry-supplied identifiers rather than hardcoded company lists,
-* emits normalized `Job` models compatible with existing deduplication,
-* exposes a health-check path consistent with the source abstraction where applicable,
-* and has deterministic fixture-backed or mocked-transport tests suitable for zero-cost CI.
+#### M6-A — Unified Search / Fetch Foundation
+Establish the provider-agnostic domain contracts (`JobSearchRequest`, `JobSearchResultItem`, `JobSearchResultSet`, `JobRef`, `FetchResult`, `SourceCapabilities`) and adapter layer, enabling all existing sources to participate in unified retrieval and capability-aware refetching without breaking backward compatibility.
 
-**Internal Delivery Order:**
+#### M6-B — Parametric ATS Backends
+Implement Ashby, SmartRecruiters, and Workable as parametric providers integrated with Milestone 5's typed `CompanyRegistry`.
 
-#### M6a — Parametric ATS Providers
-Implement and validate the new ATS provider families first.
+#### M6-C — Deterministic Discovery
+Implement bounded, deterministic company and board discovery (`discover_companies`), ATS fingerprinting, and structured diagnostic reporting with M5 configuration export.
 
-#### M6b — Deterministic Company / Board Discovery
-Build discovery only after the target provider contracts are stable. M6b is a separately gated sub-deliverable and must not block acceptance of an otherwise complete provider implementation during development.
+#### M6-D — Agent-Facing MCP Integration
+Expose the unified search and fetch surface on the FastMCP server while preserving existing tool signatures as compatibility aliases.
 
 **Specification:**
-1. New provider families follow the existing public-source abstraction and normalization contracts.
-2. Each supported ATS must accept registry-supplied company/board identifiers rather than hardcoded company lists.
-3. Add a discovery capability such as `discover_companies` that accepts company names and/or career URLs and attempts deterministic provider resolution.
-4. Discovery should prefer zero-token/public mechanisms: URL patterns, redirects, public metadata, documented JSON endpoints, and provider fingerprints.
-5. Unsupported or ambiguous companies must return explicit structured diagnostics rather than silently disappearing.
-6. Discovery results must be representable as registry entries and reviewable before persistence.
-7. LLM inference is not required for the default discovery path.
-8. Discovery validation uses a named, versioned fixture set covering successful, ambiguous, unsupported, and malformed cases.
+1. *Unified Retrieval Plane:* Define logical `job_search` and `job_fetch` operations that abstract underlying provider mechanics, returning normalized `Job` objects and stable, opaque references.
+2. *Opaque Versioned References:* Job references must be typed, versioned, and deterministically serializable (`JobRef(version=1, source_family=..., account=..., locator=...)`). They must not use brittle delimiter-separated strings (such as `family:account:id`), must survive process restarts without cache dependencies, must avoid leaking secrets or process-local state, and must provide deterministic round-trip encoding/decoding.
+3. *Strict Retrieval-Only Fetch Statuses:* `job_fetch` outcomes report only factual retrieval states: `FOUND`, `NOT_FOUND`, `INVALID_REF`, `UNSUPPORTED_REFETCH`, and `UPSTREAM_ERROR`. Liveness, staleness, and expiration conclusions (`POSTING_EXPIRED`, `STALE`, `DEAD`) are strictly deferred to Milestone 7 observation semantics.
+4. *Capability Negotiation:* Providers declare their capabilities via `SourceCapabilities` (`supports_search`, `supports_native_fetch`, `supports_url_fetch`, `supports_query`, `supports_company_filter`, `supports_work_mode`, `supports_pagination`). Search participation does not require native refetch support; providers without single-job endpoints participate via search and URL/board fallback or report `UNSUPPORTED_REFETCH`.
+5. *Parametric ATS Providers:* New ATS families follow the existing public-source abstraction, accept registry-supplied company identifiers, emit normalized `Job` models, and expose health checks.
+6. *Bounded Discovery:* `discover_companies` accepts company names or career URLs and performs deterministic classification via URL patterns, HTTP redirects (max 3), and response body fingerprints (max 256KB) within a strict 5.0s budget. No arbitrary recursive spidering or crawling.
+7. *Structured Diagnostics:* Discovery returns explicit statuses (`CONFIRMED`, `AMBIGUOUS`, `UNSUPPORTED`, `NOT_FOUND`, `MALFORMED`) with evidence logs; discovery outputs are reviewable and emit valid Milestone 5 `portals.yml` syntax without silent background persistence.
+8. *Zero-Cost Fixture-Backed CI:* Every provider and discovery branch is covered by versioned offline test fixtures and mocked transport; zero paid search APIs, zero required live-network dependencies in CI, and no LLM inference in the default discovery path.
 
 **Acceptance Criteria:**
-* At least three ATS families satisfy the Supported ATS Family definition above.
-* At least one company per new ATS can be added via configuration and fetched successfully under deterministic mocked-transport or recorded-fixture tests, with zero provider-code modification for that company.
-* Optional live-network verification may be documented separately as a non-gating manual check; it is never required for CI success.
-* `discover_companies` resolves the named supported fixture set into valid registry entries.
-* Ambiguous and unsupported fixture cases return explicit structured diagnostics.
-* Existing normalization/deduplication contracts remain unchanged.
-* Full test suite and scoped quality gates pass.
+* Agent can query jobs across all supported platforms via a unified search interface without specifying provider keys.
+* Returned postings contain stable, opaque, versioned `JobRef` locators that round-trip deterministically and resolve via `job_fetch`.
+* Ashby, SmartRecruiters, and Workable satisfy the parametric ATS requirements and are managed via Milestone 5's `CompanyRegistry`.
+* At least one company per new ATS can be added via configuration and queried under deterministic mocked-transport tests with zero provider code diffs.
+* `discover_companies` correctly classifies test fixtures and outputs valid Milestone 5 configurations.
+* Full existing test suite passes, scoped Ruff passes with zero errors, and build/wheel verification succeeds.
 
 **Non-Goals:**
-* No broad arbitrary-web crawler.
-* No paid search API dependency.
-* No ranking-model retraining.
-* No lifecycle features unrelated to search discovery.
+* No broad, recursive web spidering or arbitrary URL crawling.
+* No paid search API dependencies (e.g. Google Search API, Serper).
+* No ranking model retraining or System 1 weights modification.
+* No posting observation storage, longitudinal tracking, or repost detection (Milestone 7 scope).
 
 ---
 
