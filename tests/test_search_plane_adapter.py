@@ -58,6 +58,7 @@ def test_capability_matrix_completeness() -> None:
         "jobify",
         "hiremetech",
         "ashby",
+        "smartrecruiters",
     }
     assert set(SOURCE_CAPABILITY_MAP.keys()) == expected_sources
 

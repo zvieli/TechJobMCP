@@ -34,6 +34,7 @@ from job_mcp.sources.company_registry.entries import (
     EightfoldCompany,
     GreenhouseCompany,
     LeverCompany,
+    SmartRecruitersCompany,
     WorkdayCompany,
 )
 
@@ -107,6 +108,7 @@ def _require_base_url(value: str | None, field_name: str) -> str | None:
 
 
 ASHBY = "ashby"
+SMARTRECRUITERS = "smartrecruiters"
 GREENHOUSE = "greenhouse"
 LEVER = "lever"
 EIGHTFOLD = "eightfold"
@@ -318,6 +320,20 @@ class AshbyEntry(_EntryBase):
         )
 
 
+class SmartRecruitersEntry(_EntryBase):
+    """A new SmartRecruiters company."""
+
+    name: _RequiredName
+    company_identifier: _PathToken
+    enabled: bool = True
+
+    def to_entry(self) -> SmartRecruitersCompany:
+        """Build the typed provider entry."""
+        return SmartRecruitersCompany(
+            name=self.name, company_identifier=self.company_identifier, enabled=self.enabled
+        )
+
+
 class GreenhouseEntry(_EntryBase):
     """A new Greenhouse company."""
 
@@ -424,6 +440,7 @@ class WorkdayEntry(_EntryBase):
 
 ENTRY_MODELS: dict[str, type[_EntryBase]] = {
     ASHBY: AshbyEntry,
+    SMARTRECRUITERS: SmartRecruitersEntry,
     GREENHOUSE: GreenhouseEntry,
     LEVER: LeverEntry,
     EIGHTFOLD: EightfoldEntry,
@@ -472,6 +489,13 @@ class AshbyOverride(_OverrideBase):
 
     name: _OptionalName = None
     board_name: _OptionalPathToken = None
+
+
+class SmartRecruitersOverride(_OverrideBase):
+    """Partial SmartRecruiters override."""
+
+    name: _OptionalName = None
+    company_identifier: _OptionalPathToken = None
 
 
 class GreenhouseOverride(_OverrideBase):
@@ -544,6 +568,7 @@ class WorkdayOverride(_OverrideBase):
 
 OVERRIDE_MODELS: dict[str, type[_OverrideBase]] = {
     ASHBY: AshbyOverride,
+    SMARTRECRUITERS: SmartRecruitersOverride,
     GREENHOUSE: GreenhouseOverride,
     LEVER: LeverOverride,
     EIGHTFOLD: EightfoldOverride,
@@ -779,10 +804,13 @@ __all__ = [
     "MANAGED_PROVIDERS",
     "OVERRIDE_MODELS",
     "PROVIDER_ID_RE",
+    "SMARTRECRUITERS",
     "AshbyEntry",
     "AshbyOverride",
     "ProviderConfig",
     "RegistryConfig",
+    "SmartRecruitersEntry",
+    "SmartRecruitersOverride",
     "is_builtin_company",
     "parse_company",
     "parse_entry",

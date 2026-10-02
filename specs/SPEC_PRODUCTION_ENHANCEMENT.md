@@ -568,7 +568,66 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
 
 *Known Limitations & Clarifications:*
 * (a) Whole-board retrieval: The Ashby public posting API retrieves all open jobs on a board in a single response; large boards fetch all postings before client-side filtering. (b) Per-call AsyncClient during refetch: `fetch_job_by_ref` instantiates an `httpx.AsyncClient` per call; a shared client session would optimize high-frequency refetches. (c) `supports_native_fetch = True`: Represents provider-native board re-query + exact locator match; not an unauthenticated public single-job detail API. (d) Default enablement: `ENABLE_ASHBY` defaults to `False` in `reset_builtin_providers()` to preserve 10-provider legacy registry expectations in backward-compatibility test suites, while `SearchPlaneAdapter` enables Ashby by default.
-* Note: SmartRecruiters (M6-B2) and Workable (M6-B3) remain pending in subsequent slices.
+
+**Implemented Design — M6-B2 SmartRecruiters ATS Backend (verified 2026-10-03):**
+
+*Public API Contract & Authentication:*
+* Consumes solely SmartRecruiters' unauthenticated public Posting API:
+  - Job List: `GET https://api.smartrecruiters.com/v1/companies/{companyIdentifier}/postings?destination=PUBLIC`
+  - Job Detail: `GET https://api.smartrecruiters.com/v1/companies/{companyIdentifier}/postings/{postingId}`
+* Zero credentials, zero API keys, zero paid endpoints, zero dependence on private or authenticated SmartRecruiters partner APIs.
+
+*Registry Integration & Path Token Validation:*
+* Added `SmartRecruitersCompany(name: str, company_identifier: str, enabled: bool = True)` in `job_mcp/sources/company_registry/entries.py`.
+* In `job_mcp/sources/company_registry/schema.py`, defined `SmartRecruitersEntry` and `SmartRecruitersOverride`.
+* Validated `company_identifier` as a single `_PathToken` (letters, digits, `.`, `_`, `-`, rejecting `/`, `?`, `#`, whitespace, empty strings, and `..` path traversal).
+* Registered `smartrecruiters` in `MANAGED_PROVIDERS`, `ENTRY_MODELS`, and `OVERRIDE_MODELS` with default built-in `smartrecruiters` -> `SmartRecruiters` (`smartrecruiters`).
+
+*Provider Architecture & Normalization:*
+* `SmartRecruitersSource(BasePublicSource)` in `job_mcp/sources/public/smartrecruiters.py`:
+  - Implements native server-side query propagation (`q=`) passing user search keywords to upstream postings query.
+  - Implements bounded server-side pagination loop (`limit=100`, `offset=`) with early termination when exhausted.
+  - Fetches open postings concurrently across enabled catalog companies using `asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)`.
+  - Maps upstream posting fields to canonical `Job`: `job_id=f"smartrecruiters_{company_identifier}_{posting_id}"`, title, company name with precedence (catalog name > raw company name > identifier), location (city, region, country), work mode (`isRemote`), published date (`releasedDate`), structured description from `jobAd.sections` without arbitrary truncation, compensation components, clean tech stack extraction.
+  - Implements bounded `check_health()` pinging the first enabled company's postings endpoint with `limit=1`.
+  - Implements true single-posting detail refetch `fetch_job_by_ref(ref: JobRef) -> FetchResult`.
+
+*Search Plane Integration & True Detail Refetch Seam:*
+* `SOURCE_CAPABILITY_MAP["smartrecruiters"]`: Declared truthful capabilities:
+  - `supports_search = True`
+  - `supports_native_fetch = True` (true unauthenticated single-posting detail endpoint)
+  - `supports_company_filter = True`
+  - `supports_work_mode = False` (API does not filter work mode on server side; done client-side)
+  - `supports_query = True` (native server-side `q` parameter)
+  - `supports_pagination = True` (native server-side `limit`/`offset` pagination)
+* `SearchPlaneAdapter.create_job_ref`: Extracts `account = company_identifier` and `locator = posting_id` from `smartrecruiters_{company_identifier}_{posting_id}` using `rsplit("_", 1)` (safe for identifiers containing underscores).
+* `SearchPlaneAdapter.fetch`: Dispatches to `SmartRecruitersSource.fetch_job_by_ref` via generic duck-typing seam (`hasattr(src, "fetch_job_by_ref")`).
+* Native Refetch Semantics: Queries exact posting detail endpoint `/v1/companies/{companyIdentifier}/postings/{postingId}`:
+  - 200 OK: returns `FetchResult(status=FetchStatus.FOUND, job=job)`.
+  - 404 Not Found: returns `FetchResult(status=FetchStatus.NOT_FOUND, job=None)` with diagnostic message. Strictly refuses to synthesize dummy placeholder jobs.
+  - Upstream 5xx / Network exception: returns `FetchResult(status=FetchStatus.UPSTREAM_ERROR, job=None)`.
+  - Malformed payload: returns `FetchResult(status=FetchStatus.UPSTREAM_ERROR, job=None)`.
+  - Invalid ref (mismatched family or missing account/locator): returns `FetchResult(status=FetchStatus.INVALID_REF, job=None)`.
+  - No M7 lifecycle conclusions: missing posting is never labeled expired, stale, or dead.
+
+*Zero-Cost Fixture-Backed CI & Configuration-Only Extension:*
+* Created 7 static JSON fixtures in `tests/fixtures/smartrecruiters/`: `valid_postings.json`, `second_page_postings.json`, `empty_postings.json`, `valid_detail.json`, `minimal_detail.json`, `malformed_list.json`, `malformed_detail.json`.
+* Configuration-only addition proven in tests: adding a company via `CompanyRegistry`/catalog enables full search and refetch under mocked transport without any edits to `smartrecruiters.py`.
+
+*Evidence & Quality Gates:*
+* `tests/test_smartrecruiters_source.py`: 23 passed (normalization, query propagation, pagination, error isolation, health check, refetch exact detail / 404 / 500 / malformed / invalid ref, zero truncation).
+* `tests/test_smartrecruiters_search_plane.py`: 14 passed (capabilities, JobRef round-trip, search conversion, company filtering, cache hit, native detail refetch, 404 NOT_FOUND, upstream 500, config-only addition, 14 mutation proofs).
+* `tests/test_company_registry.py`: 231 passed (including SmartRecruiters entries, single-path-token validation, overrides, catalog isolation).
+* `tests/test_search_plane_adapter.py`: 30 passed.
+* Combined relevant suite: 462 passed.
+* Scoped Ruff check on all modified and created files: 0 errors.
+* Wheel build (`uv build --wheel`): verified clean package build.
+* Full test suite: 1538 passed, 2 xfailed (zero regressions against 1482 passed baseline; exactly 1482 + 56 = 1538).
+* Independent review: `Merge verdict: OK` with P0: 0, P1: 0.
+
+*Known Limitations & Clarifications:*
+* (a) Work mode filtering: SmartRecruiters does not support server-side work mode filtering on the public posting API; work mode filtering remains client-side. (b) Per-call AsyncClient during refetch: `fetch_job_by_ref` instantiates an `httpx.AsyncClient` per call; a shared client session would optimize high-frequency refetches. (c) Default enablement: `ENABLE_SMARTRECRUITERS` defaults to `False` in `reset_builtin_providers()` to preserve 10-provider legacy registry expectations in backward-compatibility test suites, while `SearchPlaneAdapter` enables SmartRecruiters by default.
+* Note: Workable (M6-B3) remains pending in subsequent slices.
 
 ---
 

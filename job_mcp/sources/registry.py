@@ -376,12 +376,20 @@ def reset_builtin_providers() -> None:
     from job_mcp.sources.public.gotfriends import GotFriendsSource
     from job_mcp.sources.public.jobify import JobifySource
     from job_mcp.sources.public.lever import LeverSource
+    from job_mcp.sources.public.smartrecruiters import SmartRecruitersSource
 
     register_provider(
         name="ashby",
         factory_or_cls=AshbySource,
         default_enabled=False,
         env_var="ENABLE_ASHBY",
+        category=SourceCategory.PUBLIC,
+    )
+    register_provider(
+        name="smartrecruiters",
+        factory_or_cls=SmartRecruitersSource,
+        default_enabled=False,
+        env_var="ENABLE_SMARTRECRUITERS",
         category=SourceCategory.PUBLIC,
     )
     register_provider(
@@ -471,6 +479,7 @@ def create_default_registry(
     session_manager: Optional[Any] = None,
     enable_alljobs: Optional[bool] = None,
     enable_ashby: Optional[bool] = None,
+    enable_smartrecruiters: Optional[bool] = None,
     enable_workday: Optional[bool] = None,
     enable_eightfold: Optional[bool] = None,
     enable_direct_tech: Optional[bool] = None,
@@ -487,7 +496,7 @@ def create_default_registry(
 
     By default, enterprise, public, and authenticated sources (HireMeTech, Comeet, Workday,
     Eightfold AI, Direct Tech, LinkedIn, Jobify, Greenhouse, Lever, and GotFriends) are enabled out-of-the-box.
-    AllJobs and Ashby are disabled by default in the legacy registry factory and can be enabled via ENABLE_ALLJOBS=true and ENABLE_ASHBY=true.
+    AllJobs, Ashby, and SmartRecruiters are disabled by default in the legacy registry factory and can be enabled via ENABLE_ALLJOBS=true, ENABLE_ASHBY=true, and ENABLE_SMARTRECRUITERS=true.
     """
     reg = SourceRegistry()
     explicit_map: dict[str, Optional[bool]] = {
@@ -495,6 +504,7 @@ def create_default_registry(
         "comeet": enable_comeet,
         "alljobs": enable_alljobs,
         "ashby": enable_ashby,
+        "smartrecruiters": enable_smartrecruiters,
         "workday": enable_workday,
         "eightfold": enable_eightfold,
         "direct_tech": enable_direct_tech,

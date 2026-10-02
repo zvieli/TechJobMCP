@@ -51,6 +51,10 @@ from job_mcp.sources.public.ashby import ASHBY_COMPANIES, AshbySource
 from job_mcp.sources.public.eightfold import EIGHTFOLD_COMPANIES, EightfoldAISource
 from job_mcp.sources.public.greenhouse import GREENHOUSE_COMPANIES, GreenhouseSource
 from job_mcp.sources.public.lever import LEVER_COMPANIES, LeverSource
+from job_mcp.sources.public.smartrecruiters import (
+    SMARTRECRUITERS_COMPANIES,
+    SmartRecruitersSource,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,6 +66,16 @@ FAMILIES: dict[str, dict[str, Any]] = {
         "catalog": ASHBY_COMPANIES,
         "new": {"name": "Config Only Ashby", "board_name": "configonlyashby"},
         # Ashby assigns the catalog wholesale, so it keys by registry id.
+        "probe_key": "configonlycorp",
+    },
+    "smartrecruiters": {
+        "source": SmartRecruitersSource,
+        "catalog": SMARTRECRUITERS_COMPANIES,
+        "new": {
+            "name": "Config Only SmartRecruiters",
+            "company_identifier": "configonlysmartrecruiters",
+        },
+        # SmartRecruiters assigns the catalog wholesale, so it keys by registry id.
         "probe_key": "configonlycorp",
     },
     "greenhouse": {
@@ -732,6 +746,12 @@ def test_valid_workday_base_urls_still_accepted(good_base_url: str) -> None:
         ("greenhouse", {"id": "g4", "name": "G", "board_token": "a#b"}, "board_token"),
         ("greenhouse", {"id": "g5", "name": "G", "board_token": "a b"}, "board_token"),
         ("greenhouse", {"id": "jfrog", "board_token": "x/y"}, "board_token"),
+        # smartrecruiters.company_identifier -> path position
+        ("smartrecruiters", {"id": "sr2", "name": "SR", "company_identifier": "../../evil"}, "company_identifier"),
+        ("smartrecruiters", {"id": "sr3", "name": "SR", "company_identifier": "a?x=1"}, "company_identifier"),
+        ("smartrecruiters", {"id": "sr4", "name": "SR", "company_identifier": "a#b"}, "company_identifier"),
+        ("smartrecruiters", {"id": "sr5", "name": "SR", "company_identifier": "a b"}, "company_identifier"),
+        ("smartrecruiters", {"id": "smartrecruiters", "company_identifier": "x/y"}, "company_identifier"),
         # workday.wd_suffix -> path position
         ("workday", {"id": "w4", "name": "W", "wd_company": "ok", "wd_suffix": "a/b"}, "wd_suffix"),
         ("workday", {"id": "w5", "name": "W", "wd_company": "ok", "wd_suffix": "a?x=1"}, "wd_suffix"),
@@ -819,6 +839,9 @@ def test_legitimate_host_and_path_identifiers_are_accepted() -> None:
             {"id": "ok5", "name": "O", "wd_company": "cisco", "wd_suffix": "Cisco_Careers"},
         ),
         ("greenhouse", {"id": "ok6", "name": "O", "board_token": "mondaydotcom"}),
+        ("smartrecruiters", {"id": "ok7", "name": "O", "company_identifier": "smart_recruiters"}),
+        ("smartrecruiters", {"id": "ok8", "name": "O", "company_identifier": "smart-recruiters"}),
+        ("smartrecruiters", {"id": "ok9", "name": "O", "company_identifier": "smart.recruiters"}),
     ]
     for provider, payload in good:
         assert validate_document({"providers": {provider: {"companies": [payload]}}})
@@ -830,6 +853,22 @@ def test_all_builtin_identifiers_still_pass_the_tightened_charsets() -> None:
     A charset that silently rejected a curated default would be a
     backward-compatibility regression that config-only tests cannot see.
     """
+    for company_id, entry in builtin_defaults.SMARTRECRUITERS_COMPANIES.items():
+        validate_document(
+            {
+                "providers": {
+                    "smartrecruiters": {
+                        "companies": [
+                            {
+                                "id": company_id,
+                                "name": entry.name,
+                                "company_identifier": entry.company_identifier,
+                            }
+                        ]
+                    }
+                }
+            }
+        )
     for company_id, entry in builtin_defaults.GREENHOUSE_COMPANIES.items():
         validate_document(
             {
@@ -891,7 +930,7 @@ def test_unsupported_provider_reports_the_provider_not_the_entry_shape() -> None
         {},
     ):
         with pytest.raises(CompanyRegistryError, match="unsupported provider"):
-            validate_document({"providers": {"smartrecruiters": block}}, source="unsupported")
+            validate_document({"providers": {"workable": block}}, source="unsupported")
 
 
 def test_validation_error_identifies_the_offending_entry_index_and_id() -> None:
@@ -1501,10 +1540,10 @@ def test_registry_repr_is_informative() -> None:
 
 def test_querying_an_unmanaged_family_fails_loudly() -> None:
     with pytest.raises(CompanyRegistryError, match="unsupported provider"):
-        resolve([]).catalog("smartrecruiters")
+        resolve([]).catalog("bamboohr")
 
 
-@pytest.mark.parametrize("family", ["smartrecruiters", "workable", "jobsapi"])
+@pytest.mark.parametrize("family", ["workable", "bamboohr", "jobsapi"])
 def test_no_new_ats_family_is_accepted_in_milestone_5(family: str) -> None:
     with pytest.raises(CompanyRegistryError, match="unsupported provider"):
         validate_document({"providers": {family: {"companies": []}}})
@@ -1552,6 +1591,7 @@ def entry_sort_key(entry: Any) -> tuple[Any, ...]:
 def test_registry_output_is_typed_before_provider_construction() -> None:
     expected_types = {
         "ashby": AshbySource,
+        "smartrecruiters": SmartRecruitersSource,
         "greenhouse": GreenhouseSource,
         "lever": LeverSource,
         "eightfold": EightfoldAISource,

@@ -42,6 +42,15 @@ SOURCE_CAPABILITY_MAP: dict[str, SourceCapabilities] = {
         supports_work_mode=True,
         supports_pagination=False,
     ),
+    "smartrecruiters": SourceCapabilities(
+        supports_search=True,
+        supports_native_fetch=True,
+        supports_url_fetch=False,
+        supports_query=True,
+        supports_company_filter=True,
+        supports_work_mode=False,
+        supports_pagination=True,
+    ),
     "linkedin": SourceCapabilities(
         supports_search=True,
         supports_native_fetch=True,
@@ -215,6 +224,41 @@ class SearchPlaneAdapter:
             else:
                 raise ValueError(
                     f"Cannot deterministically derive Ashby routing coordinates from job_id {job_id!r}"
+                )
+        elif source_family == "smartrecruiters":
+            if job_id.startswith("smartrecruiters_"):
+                payload = job_id[len("smartrecruiters_") :]
+                if "_" in payload:
+                    account_part, locator_part = payload.rsplit("_", 1)
+                    if account_part and locator_part:
+                        account = account_part
+                        locator = locator_part
+                    else:
+                        raise ValueError(
+                            f"Malformed SmartRecruiters job_id has empty account or locator: {job_id!r}"
+                        )
+                else:
+                    raise ValueError(
+                        f"Malformed SmartRecruiters job_id missing locator delimiter: {job_id!r}"
+                    )
+            elif job.url and ("jobs.smartrecruiters.com/" in job.url or "careers.smartrecruiters.com/" in job.url):
+                matched_domain = (
+                    "jobs.smartrecruiters.com/"
+                    if "jobs.smartrecruiters.com/" in job.url
+                    else "careers.smartrecruiters.com/"
+                )
+                url_path = job.url.split(matched_domain, 1)[1].strip("/").split("?")[0]
+                url_parts = url_path.split("/")
+                if len(url_parts) >= 2 and url_parts[0] and url_parts[1]:
+                    account = url_parts[0]
+                    locator = url_parts[1].split("-")[0] if "-" in url_parts[1] else url_parts[1]
+                else:
+                    raise ValueError(
+                        f"Cannot deterministically derive SmartRecruiters routing coordinates from URL: {job.url!r}"
+                    )
+            else:
+                raise ValueError(
+                    f"Cannot deterministically derive SmartRecruiters routing coordinates from job_id {job_id!r}"
                 )
         elif source_family == "greenhouse":
             account = job.company.strip() if job.company else None

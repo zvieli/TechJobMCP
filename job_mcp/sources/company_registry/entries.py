@@ -24,6 +24,15 @@ class AshbyCompany:
 
 
 @dataclass
+class SmartRecruitersCompany:
+    """Descriptor for a company using SmartRecruiters ATS."""
+
+    name: str
+    company_identifier: str
+    enabled: bool = True
+
+
+@dataclass
 class GreenhouseCompany:
     """Descriptor for a company using Greenhouse ATS."""
 
@@ -128,5 +137,6 @@ __all__ = [
     "EightfoldCompany",
     "GreenhouseCompany",
     "LeverCompany",
+    "SmartRecruitersCompany",
     "WorkdayCompany",
 ]

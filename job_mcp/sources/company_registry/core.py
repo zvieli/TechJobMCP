@@ -36,6 +36,7 @@ from job_mcp.sources.company_registry.entries import (
     EightfoldCompany,
     GreenhouseCompany,
     LeverCompany,
+    SmartRecruitersCompany,
     WorkdayCompany,
 )
 from job_mcp.sources.company_registry.schema import (
@@ -56,6 +57,7 @@ DEFAULT_CONFIG_FILENAMES = ("portals.yml", "portals.yaml")
 
 _BUILTIN_CATALOGS: dict[str, dict[str, Any]] = {
     "ashby": _defaults.ASHBY_COMPANIES,
+    "smartrecruiters": _defaults.SMARTRECRUITERS_COMPANIES,
     "greenhouse": _defaults.GREENHOUSE_COMPANIES,
     "lever": _defaults.LEVER_COMPANIES,
     "eightfold": _defaults.EIGHTFOLD_COMPANIES,
@@ -65,6 +67,7 @@ _BUILTIN_CATALOGS: dict[str, dict[str, Any]] = {
 
 _ENTRY_TYPES: dict[str, type] = {
     "ashby": AshbyCompany,
+    "smartrecruiters": SmartRecruitersCompany,
     "greenhouse": GreenhouseCompany,
     "lever": LeverCompany,
     "eightfold": EightfoldCompany,

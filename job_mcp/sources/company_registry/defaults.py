@@ -16,12 +16,21 @@ from job_mcp.sources.company_registry.entries import (
     EightfoldCompany,
     GreenhouseCompany,
     LeverCompany,
+    SmartRecruitersCompany,
     WorkdayCompany,
 )
 
 # Curated directory of tech companies using Ashby ATS
 ASHBY_COMPANIES: dict[str, AshbyCompany] = {
     "ashby": AshbyCompany(name="Ashby", board_name="ashby", enabled=True),
+}
+
+
+# Curated directory of tech companies using SmartRecruiters ATS
+SMARTRECRUITERS_COMPANIES: dict[str, SmartRecruitersCompany] = {
+    "smartrecruiters": SmartRecruitersCompany(
+        name="SmartRecruiters", company_identifier="smartrecruiters", enabled=True
+    ),
 }
 
 
@@ -233,6 +242,7 @@ DEFAULT_WORKDAY_COMPANIES: list[WorkdayCompany] = list(WORKDAY_COMPANIES.values(
 # specify the fields a new company of that family requires.
 BUILTIN_COMPANY_IDS: dict[str, frozenset[str]] = {
     "ashby": frozenset(ASHBY_COMPANIES),
+    "smartrecruiters": frozenset(SMARTRECRUITERS_COMPANIES),
     "greenhouse": frozenset(GREENHOUSE_COMPANIES),
     "lever": frozenset(LEVER_COMPANIES),
     "eightfold": frozenset(EIGHTFOLD_COMPANIES),
@@ -251,5 +261,6 @@ __all__ = [
     "EIGHTFOLD_COMPANIES",
     "GREENHOUSE_COMPANIES",
     "LEVER_COMPANIES",
+    "SMARTRECRUITERS_COMPANIES",
     "WORKDAY_COMPANIES",
 ]
