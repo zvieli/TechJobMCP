@@ -29,6 +29,7 @@ from pydantic import (
 from job_mcp.sources.company_registry.defaults import BUILTIN_COMPANY_IDS
 from job_mcp.sources.company_registry.entries import (
     DIRECT_TECH_DEFAULT_QUERY,
+    AshbyCompany,
     DirectTechCompany,
     EightfoldCompany,
     GreenhouseCompany,
@@ -105,6 +106,7 @@ def _require_base_url(value: str | None, field_name: str) -> str | None:
     return checked
 
 
+ASHBY = "ashby"
 GREENHOUSE = "greenhouse"
 LEVER = "lever"
 EIGHTFOLD = "eightfold"
@@ -302,6 +304,20 @@ class _EntryBase(BaseModel):
         raise NotImplementedError
 
 
+class AshbyEntry(_EntryBase):
+    """A new Ashby company."""
+
+    name: _RequiredName
+    board_name: _PathToken
+    enabled: bool = True
+
+    def to_entry(self) -> AshbyCompany:
+        """Build the typed provider entry."""
+        return AshbyCompany(
+            name=self.name, board_name=self.board_name, enabled=self.enabled
+        )
+
+
 class GreenhouseEntry(_EntryBase):
     """A new Greenhouse company."""
 
@@ -407,6 +423,7 @@ class WorkdayEntry(_EntryBase):
 
 
 ENTRY_MODELS: dict[str, type[_EntryBase]] = {
+    ASHBY: AshbyEntry,
     GREENHOUSE: GreenhouseEntry,
     LEVER: LeverEntry,
     EIGHTFOLD: EightfoldEntry,
@@ -448,6 +465,13 @@ class _OverrideBase(BaseModel):
     @classmethod
     def _check_id(cls, value: str) -> str:
         return _validate_company_key(value)
+
+
+class AshbyOverride(_OverrideBase):
+    """Partial Ashby override."""
+
+    name: _OptionalName = None
+    board_name: _OptionalPathToken = None
 
 
 class GreenhouseOverride(_OverrideBase):
@@ -519,6 +543,7 @@ class WorkdayOverride(_OverrideBase):
 
 
 OVERRIDE_MODELS: dict[str, type[_OverrideBase]] = {
+    ASHBY: AshbyOverride,
     GREENHOUSE: GreenhouseOverride,
     LEVER: LeverOverride,
     EIGHTFOLD: EightfoldOverride,
@@ -748,11 +773,14 @@ def supported_providers() -> tuple[str, ...]:
 
 
 __all__ = [
+    "ASHBY",
     "BUILTIN_COMPANY_IDS",
     "ENTRY_MODELS",
     "MANAGED_PROVIDERS",
     "OVERRIDE_MODELS",
     "PROVIDER_ID_RE",
+    "AshbyEntry",
+    "AshbyOverride",
     "ProviderConfig",
     "RegistryConfig",
     "is_builtin_company",

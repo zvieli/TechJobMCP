@@ -33,6 +33,15 @@ logger = logging.getLogger(__name__)
 # ===========================================================================
 
 SOURCE_CAPABILITY_MAP: dict[str, SourceCapabilities] = {
+    "ashby": SourceCapabilities(
+        supports_search=True,
+        supports_native_fetch=True,
+        supports_url_fetch=False,
+        supports_query=False,
+        supports_company_filter=True,
+        supports_work_mode=True,
+        supports_pagination=False,
+    ),
     "linkedin": SourceCapabilities(
         supports_search=True,
         supports_native_fetch=True,
@@ -176,7 +185,38 @@ class SearchPlaneAdapter:
         account: str | None = None
         locator: str = job_id
 
-        if source_family == "greenhouse":
+        if source_family == "ashby":
+            if job_id.startswith("ashby_"):
+                payload = job_id[len("ashby_") :]
+                if "_" in payload:
+                    account_part, locator_part = payload.rsplit("_", 1)
+                    if account_part and locator_part:
+                        account = account_part
+                        locator = locator_part
+                    else:
+                        raise ValueError(
+                            f"Malformed Ashby job_id has empty account or locator: {job_id!r}"
+                        )
+                else:
+                    raise ValueError(
+                        f"Malformed Ashby job_id missing locator delimiter: {job_id!r}"
+                    )
+            elif job.url and "jobs.ashbyhq.com/" in job.url:
+                # Derive from authoritative URL path: https://jobs.ashbyhq.com/<board>/<locator>
+                url_path = job.url.split("jobs.ashbyhq.com/", 1)[1].strip("/").split("?")[0]
+                url_parts = url_path.split("/")
+                if len(url_parts) >= 2 and url_parts[0] and url_parts[1]:
+                    account = url_parts[0]
+                    locator = url_parts[1]
+                else:
+                    raise ValueError(
+                        f"Cannot deterministically derive Ashby routing coordinates from URL: {job.url!r}"
+                    )
+            else:
+                raise ValueError(
+                    f"Cannot deterministically derive Ashby routing coordinates from job_id {job_id!r}"
+                )
+        elif source_family == "greenhouse":
             account = job.company.strip() if job.company else None
             locator = job_id.removeprefix("greenhouse_")
         elif source_family == "lever":
@@ -308,50 +348,77 @@ class SearchPlaneAdapter:
 
         # 3. Check native provider refetch if supported
         caps = get_source_capabilities(job_ref.source_family)
-        if caps.supports_native_fetch and job_ref.source_family == "linkedin":
-            linkedin_src: Any = self.registry.get("linkedin") if self.registry else None
-            if linkedin_src and hasattr(linkedin_src, "fetch_job_details"):
-                try:
-                    details = await linkedin_src.fetch_job_details(job_ref.locator)
-                    if details:
-                        raw_id = job_ref.locator.replace("linkedin_", "")
-                        hydrated_job = Job(
-                            job_id=f"linkedin_{raw_id}",
-                            source="linkedin",
-                            sources=["linkedin"],
-                            url=f"https://www.linkedin.com/jobs/view/{raw_id}",
-                            title=details["title"],
-                            company=details["company"],
-                            location=details.get("location") or "",
-                            description=details.get("description") or "",
-                            work_mode=details.get("work_mode"),
-                            tech_stack=details.get("tech_stack") or [],
-                            posted_date=details.get("posted_date"),
-                            apply_url=details.get("apply_url"),
-                            seniority_level=details.get("seniority_level"),
-                            department=details.get("department"),
-                            requirements=details.get("requirements"),
-                            responsibilities=details.get("responsibilities"),
-                            company_overview=details.get("company_overview"),
-                        )
-                        if self.cache is not None:
-                            self.cache.update([hydrated_job])
+        if caps.supports_native_fetch:
+            src: Any = self.registry.get(job_ref.source_family) if self.registry else None
+            if src is None:
+                from job_mcp.sources.registry import (
+                    _instantiate_provider,
+                    get_registered_providers,
+                )
+
+                providers = get_registered_providers()
+                if job_ref.source_family in providers:
+                    src = _instantiate_provider(providers[job_ref.source_family])
+
+            if src is not None:
+                # Prefer source-native refetch method if implemented
+                if hasattr(src, "fetch_job_by_ref"):
+                    try:
+                        res = await src.fetch_job_by_ref(job_ref)
+                        if res is not None:
+                            if res.status == FetchStatus.FOUND and res.job and self.cache is not None:
+                                self.cache.update([res.job])
+                            return res
+                    except Exception as exc:  # noqa: BLE001
                         return FetchResult(
-                            status=FetchStatus.FOUND,
-                            job=hydrated_job,
+                            status=FetchStatus.UPSTREAM_ERROR,
                             ref=ref_str,
+                            diagnostic=f"Upstream error while fetching posting: {exc}",
                         )
-                    return FetchResult(
-                        status=FetchStatus.NOT_FOUND,
-                        ref=ref_str,
-                        diagnostic=f"Posting {job_ref.locator!r} was not found on LinkedIn.",
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    return FetchResult(
-                        status=FetchStatus.UPSTREAM_ERROR,
-                        ref=ref_str,
-                        diagnostic=f"Upstream error while fetching LinkedIn posting: {exc}",
-                    )
+
+                # Legacy LinkedIn support
+                if job_ref.source_family == "linkedin" and hasattr(src, "fetch_job_details"):
+                    try:
+                        details = await src.fetch_job_details(job_ref.locator)
+                        if details:
+                            raw_id = job_ref.locator.replace("linkedin_", "")
+                            hydrated_job = Job(
+                                job_id=f"linkedin_{raw_id}",
+                                source="linkedin",
+                                sources=["linkedin"],
+                                url=f"https://www.linkedin.com/jobs/view/{raw_id}",
+                                title=details["title"],
+                                company=details["company"],
+                                location=details.get("location") or "",
+                                description=details.get("description") or "",
+                                work_mode=details.get("work_mode"),
+                                tech_stack=details.get("tech_stack") or [],
+                                posted_date=details.get("posted_date"),
+                                apply_url=details.get("apply_url"),
+                                seniority_level=details.get("seniority_level"),
+                                department=details.get("department"),
+                                requirements=details.get("requirements"),
+                                responsibilities=details.get("responsibilities"),
+                                company_overview=details.get("company_overview"),
+                            )
+                            if self.cache is not None:
+                                self.cache.update([hydrated_job])
+                            return FetchResult(
+                                status=FetchStatus.FOUND,
+                                job=hydrated_job,
+                                ref=ref_str,
+                            )
+                        return FetchResult(
+                            status=FetchStatus.NOT_FOUND,
+                            ref=ref_str,
+                            diagnostic=f"Posting {job_ref.locator!r} was not found on LinkedIn.",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        return FetchResult(
+                            status=FetchStatus.UPSTREAM_ERROR,
+                            ref=ref_str,
+                            diagnostic=f"Upstream error while fetching LinkedIn posting: {exc}",
+                        )
 
         # 4. Fallback for sources without native refetch support
         return FetchResult(

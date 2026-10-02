@@ -1,0 +1,10 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "minimal-posting-001",
+      "title": "General Application",
+      "jobUrl": "https://jobs.ashbyhq.com/ashby/minimal-posting-001"
+    }
+  ]
+}

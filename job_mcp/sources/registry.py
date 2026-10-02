@@ -369,6 +369,7 @@ def reset_builtin_providers() -> None:
     from job_mcp.sources.enterprise.direct_tech import DirectTechSource
     from job_mcp.sources.enterprise.workday import WorkdaySource
     from job_mcp.sources.public.alljobs import AllJobsSource
+    from job_mcp.sources.public.ashby import AshbySource
     from job_mcp.sources.public.comeet import ComeetSource
     from job_mcp.sources.public.eightfold import EightfoldAISource
     from job_mcp.sources.public.greenhouse import GreenhouseSource
@@ -376,6 +377,13 @@ def reset_builtin_providers() -> None:
     from job_mcp.sources.public.jobify import JobifySource
     from job_mcp.sources.public.lever import LeverSource
 
+    register_provider(
+        name="ashby",
+        factory_or_cls=AshbySource,
+        default_enabled=False,
+        env_var="ENABLE_ASHBY",
+        category=SourceCategory.PUBLIC,
+    )
     register_provider(
         name="hiremetech",
         factory_or_cls=HireMeTechSource,
@@ -462,6 +470,7 @@ reset_builtin_providers()
 def create_default_registry(
     session_manager: Optional[Any] = None,
     enable_alljobs: Optional[bool] = None,
+    enable_ashby: Optional[bool] = None,
     enable_workday: Optional[bool] = None,
     enable_eightfold: Optional[bool] = None,
     enable_direct_tech: Optional[bool] = None,
@@ -476,15 +485,16 @@ def create_default_registry(
 ) -> SourceRegistry:
     """Create and return a SourceRegistry pre-populated with standard job sources.
 
-    By default, all enterprise, public, and authenticated sources (HireMeTech, Comeet, Workday,
+    By default, enterprise, public, and authenticated sources (HireMeTech, Comeet, Workday,
     Eightfold AI, Direct Tech, LinkedIn, Jobify, Greenhouse, Lever, and GotFriends) are enabled out-of-the-box.
-    AllJobs is disabled by default and can be enabled via ENABLE_ALLJOBS=true.
+    AllJobs and Ashby are disabled by default in the legacy registry factory and can be enabled via ENABLE_ALLJOBS=true and ENABLE_ASHBY=true.
     """
     reg = SourceRegistry()
     explicit_map: dict[str, Optional[bool]] = {
         "hiremetech": enable_hiremetech,
         "comeet": enable_comeet,
         "alljobs": enable_alljobs,
+        "ashby": enable_ashby,
         "workday": enable_workday,
         "eightfold": enable_eightfold,
         "direct_tech": enable_direct_tech,

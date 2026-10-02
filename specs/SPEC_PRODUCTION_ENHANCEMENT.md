@@ -513,6 +513,63 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
 * Wheel build (`uv build --wheel`): verified `job_mcp/core/search_plane/` (`__init__.py`, `models.py`, `adapter.py`) packaged cleanly.
 * Full test suite: 1438 passed, 2 xfailed (zero regressions against 1409 passed baseline; exactly 1409 + 29 = 1438).
 
+**Implemented Design — M6-B1 Ashby ATS Backend (verified 2026-10-02):**
+
+*Public API Contract & Authentication:*
+* Consumes solely Ashby's unauthenticated public job board endpoint: `GET https://api.ashbyhq.com/posting-api/job-board/{board_name}?includeCompensation=true`.
+* Zero credentials, zero API keys, zero paid endpoints, zero dependence on private Ashby Hiring RPC (`jobPosting.info`, etc.).
+
+*Registry Integration & URL Path Validation:*
+* Added `AshbyCompany(name: str, board_name: str, enabled: bool = True)` in `job_mcp/sources/company_registry/entries.py`.
+* In `job_mcp/sources/company_registry/schema.py`, defined `AshbyEntry` and `AshbyOverride`. Board slug (`board_name`) is validated as a strict `_PathToken` (letters, digits, `.`, `_`, `-`, rejecting `/`, `?`, `#`, whitespace, empty strings, and `..` path traversal).
+* Registered `ashby` in `MANAGED_PROVIDERS`, `ENTRY_MODELS`, and `OVERRIDE_MODELS` with default built-in `ashby` -> `Ashby` (`ashby`).
+
+*Provider Architecture & Normalization:*
+* `AshbySource(BasePublicSource)` in `job_mcp/sources/public/ashby.py`:
+  - Fetches open roles concurrently across enabled catalog companies using `asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)`.
+  - Maps upstream job fields to canonical `Job` (`job_id=f"ashby_{board_name}_{raw_id}"`, title, company, location, secondary locations, description, department, published date, salary range from compensation components, work mode from `isRemote` and location text).
+  - Uses `extract_clean_job_tech_stack` and `parse_job_sections` for structured description extraction.
+  - Implements bounded `check_health()` pinging the first enabled board endpoint.
+  - Implements deterministic `fetch_job_by_ref(ref: JobRef) -> FetchResult`.
+
+*Search Plane Integration & Native Refetch Seam:*
+* `SOURCE_CAPABILITY_MAP["ashby"]`: Declared truthful capabilities:
+  - `supports_search = True`
+  - `supports_native_fetch = True`
+  - `supports_company_filter = True`
+  - `supports_work_mode = True`
+  - `supports_query = False` (Ashby public board API does not provide server-side keyword search; filtering is performed client-side)
+  - `supports_pagination = False`
+* `SearchPlaneAdapter.create_job_ref`: Extracts `account = board_name` and clean upstream `locator = uuid` from `ashby_{board}_{uuid}`.
+* `SearchPlaneAdapter.fetch`: Dispatches to `AshbySource.fetch_job_by_ref` via an extensible duck-typing seam (`hasattr(src, "fetch_job_by_ref")`), avoiding permanent ATS-specific `if/elif` branching in the adapter.
+* Native Refetch Semantics: Re-queries the company's public board and matches exact locator UUID:
+  - Match found: returns `FetchResult(status=FetchStatus.FOUND, job=job)`.
+  - Locator missing from board: returns `FetchResult(status=FetchStatus.NOT_FOUND, job=None)` with diagnostic message. Strictly refuses to synthesize dummy placeholder jobs.
+  - Board 404: returns `FetchResult(status=FetchStatus.NOT_FOUND, job=None)`.
+  - Upstream 5xx / Network exception: returns `FetchResult(status=FetchStatus.UPSTREAM_ERROR, job=None)`.
+  - Invalid ref (e.g. missing board/account or mismatched source family): returns `FetchResult(status=FetchStatus.INVALID_REF, job=None)`.
+  - No M7 lifecycle conclusions: missing posting is never labeled expired, stale, or dead.
+
+*Zero-Cost Fixture-Backed CI & Configuration-Only Extension:*
+* Created 5 static JSON fixtures in `tests/fixtures/ashby/`: `valid_board.json`, `empty_board.json`, `compensation_board.json`, `missing_optional_fields.json`, `malformed_board.json`.
+* Configuration-only addition proven in `tests/test_ashby_search_plane.py`: dynamically adding a new company (e.g. `Ramp`, board `ramp`) via `CompanyRegistry`/catalog enables full search and refetch under mocked transport without any edits to `ashby.py`.
+
+*Evidence & Quality Gates:*
+* `tests/test_ashby_source.py`: 23 passed (normalization, compensation, optional fields, full description preservation >2000 chars, init catalogs, fetch jobs, error isolation, aligned health check, refetch exact match / missing / 404 / 500 / invalid ref).
+* `tests/test_ashby_search_plane.py`: 14 passed (capabilities, JobRef round-trip, search conversion, company filtering, cache hit, native board refetch, missing locator NOT_FOUND, board 404, upstream 500, config-only addition, 10 mutation proofs).
+* `tests/test_company_registry.py`: 218 passed (including Ashby entries, validation, overrides, and catalog isolation).
+* `tests/test_search_plane_adapter.py`: 29 passed.
+* `tests/test_search_plane_models.py`: 53 passed.
+* Combined relevant suite: 449 passed.
+* Scoped Ruff check on all modified and created files: 0 errors.
+* Wheel build (`uv build --wheel`): verified `job_mcp/sources/public/ashby.py` is packaged cleanly.
+* Full test suite: 1482 passed, 2 xfailed (zero regressions; 1438 baseline + 44 new tests = 1482 passed).
+* Independent review: `Merge verdict: OK` with P0: 0, P1: 0.
+
+*Known Limitations & Clarifications:*
+* (a) Whole-board retrieval: The Ashby public posting API retrieves all open jobs on a board in a single response; large boards fetch all postings before client-side filtering. (b) Per-call AsyncClient during refetch: `fetch_job_by_ref` instantiates an `httpx.AsyncClient` per call; a shared client session would optimize high-frequency refetches. (c) `supports_native_fetch = True`: Represents provider-native board re-query + exact locator match; not an unauthenticated public single-job detail API. (d) Default enablement: `ENABLE_ASHBY` defaults to `False` in `reset_builtin_providers()` to preserve 10-provider legacy registry expectations in backward-compatibility test suites, while `SearchPlaneAdapter` enables Ashby by default.
+* Note: SmartRecruiters (M6-B2) and Workable (M6-B3) remain pending in subsequent slices.
+
 ---
 
 ### Milestone 7: Verified Freshness & Search Quality Evidence

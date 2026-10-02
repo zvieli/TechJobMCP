@@ -15,6 +15,15 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class AshbyCompany:
+    """Descriptor for a company using Ashby ATS."""
+
+    name: str
+    board_name: str
+    enabled: bool = True
+
+
+@dataclass
 class GreenhouseCompany:
     """Descriptor for a company using Greenhouse ATS."""
 
@@ -114,6 +123,7 @@ class WorkdayCompany:
 
 __all__ = [
     "DIRECT_TECH_DEFAULT_QUERY",
+    "AshbyCompany",
     "DirectTechCompany",
     "EightfoldCompany",
     "GreenhouseCompany",

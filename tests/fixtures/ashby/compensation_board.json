@@ -1,0 +1,35 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "7fa12345-6789-abcd-ef01-23456789abcd",
+      "title": "Data Platform Engineer",
+      "location": "Tel Aviv, Israel",
+      "secondaryLocations": [],
+      "department": "Infrastructure",
+      "jobUrl": "https://jobs.ashbyhq.com/ashby/7fa12345-6789-abcd-ef01-23456789abcd",
+      "applyUrl": "https://jobs.ashbyhq.com/ashby/7fa12345-6789-abcd-ef01-23456789abcd/application",
+      "descriptionHtml": "<p>Data platform engineering role with Spark and Kafka.</p>",
+      "descriptionPlain": "Data platform engineering role with Spark and Kafka.",
+      "publishedAt": "2026-09-18T14:15:00.000Z",
+      "isRemote": false,
+      "compensation": {
+        "compensationTierSummary": "$140K – $180K USD",
+        "compensationTiers": [
+          {
+            "tierSummary": "$140,000 – $180,000",
+            "tierComponents": [
+              {
+                "compensationType": "Salary",
+                "interval": "1 YEAR",
+                "currencyCode": "USD",
+                "minValue": 140000,
+                "maxValue": 180000
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

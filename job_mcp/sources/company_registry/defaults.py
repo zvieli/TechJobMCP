@@ -11,12 +11,19 @@ user or project configuration is present.
 from __future__ import annotations
 
 from job_mcp.sources.company_registry.entries import (
+    AshbyCompany,
     DirectTechCompany,
     EightfoldCompany,
     GreenhouseCompany,
     LeverCompany,
     WorkdayCompany,
 )
+
+# Curated directory of tech companies using Ashby ATS
+ASHBY_COMPANIES: dict[str, AshbyCompany] = {
+    "ashby": AshbyCompany(name="Ashby", board_name="ashby", enabled=True),
+}
+
 
 # Curated directory of Israeli AI/tech companies using Greenhouse
 GREENHOUSE_COMPANIES: dict[str, GreenhouseCompany] = {
@@ -225,6 +232,7 @@ DEFAULT_WORKDAY_COMPANIES: list[WorkdayCompany] = list(WORKDAY_COMPANIES.values(
 # id appears here are validated as partial overrides; anything else must fully
 # specify the fields a new company of that family requires.
 BUILTIN_COMPANY_IDS: dict[str, frozenset[str]] = {
+    "ashby": frozenset(ASHBY_COMPANIES),
     "greenhouse": frozenset(GREENHOUSE_COMPANIES),
     "lever": frozenset(LEVER_COMPANIES),
     "eightfold": frozenset(EIGHTFOLD_COMPANIES),
@@ -234,6 +242,7 @@ BUILTIN_COMPANY_IDS: dict[str, frozenset[str]] = {
 
 
 __all__ = [
+    "ASHBY_COMPANIES",
     "BUILTIN_COMPANY_IDS",
     "DEFAULT_DIRECT_TECH_COMPANIES",
     "DEFAULT_EIGHTFOLD_COMPANIES",

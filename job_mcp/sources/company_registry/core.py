@@ -31,6 +31,7 @@ from pydantic import ValidationError
 
 from job_mcp.sources.company_registry import defaults as _defaults
 from job_mcp.sources.company_registry.entries import (
+    AshbyCompany,
     DirectTechCompany,
     EightfoldCompany,
     GreenhouseCompany,
@@ -54,6 +55,7 @@ _TRUTHY = ("1", "true", "yes", "on")
 DEFAULT_CONFIG_FILENAMES = ("portals.yml", "portals.yaml")
 
 _BUILTIN_CATALOGS: dict[str, dict[str, Any]] = {
+    "ashby": _defaults.ASHBY_COMPANIES,
     "greenhouse": _defaults.GREENHOUSE_COMPANIES,
     "lever": _defaults.LEVER_COMPANIES,
     "eightfold": _defaults.EIGHTFOLD_COMPANIES,
@@ -62,6 +64,7 @@ _BUILTIN_CATALOGS: dict[str, dict[str, Any]] = {
 }
 
 _ENTRY_TYPES: dict[str, type] = {
+    "ashby": AshbyCompany,
     "greenhouse": GreenhouseCompany,
     "lever": LeverCompany,
     "eightfold": EightfoldCompany,

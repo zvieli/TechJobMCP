@@ -47,6 +47,7 @@ from job_mcp.sources.enterprise.direct_tech import (
     DirectTechSource,
 )
 from job_mcp.sources.enterprise.workday import WORKDAY_COMPANIES, WorkdaySource
+from job_mcp.sources.public.ashby import ASHBY_COMPANIES, AshbySource
 from job_mcp.sources.public.eightfold import EIGHTFOLD_COMPANIES, EightfoldAISource
 from job_mcp.sources.public.greenhouse import GREENHOUSE_COMPANIES, GreenhouseSource
 from job_mcp.sources.public.lever import LEVER_COMPANIES, LeverSource
@@ -56,6 +57,13 @@ ROOT = Path(__file__).resolve().parents[1]
 # Each family is exercised through the same abstraction. `new` carries exactly
 # the fields needed to declare a brand-new company for that family.
 FAMILIES: dict[str, dict[str, Any]] = {
+    "ashby": {
+        "source": AshbySource,
+        "catalog": ASHBY_COMPANIES,
+        "new": {"name": "Config Only Ashby", "board_name": "configonlyashby"},
+        # Ashby assigns the catalog wholesale, so it keys by registry id.
+        "probe_key": "configonlycorp",
+    },
     "greenhouse": {
         "source": GreenhouseSource,
         "catalog": GREENHOUSE_COMPANIES,
@@ -883,7 +891,7 @@ def test_unsupported_provider_reports_the_provider_not_the_entry_shape() -> None
         {},
     ):
         with pytest.raises(CompanyRegistryError, match="unsupported provider"):
-            validate_document({"providers": {"ashby": block}}, source="unsupported")
+            validate_document({"providers": {"smartrecruiters": block}}, source="unsupported")
 
 
 def test_validation_error_identifies_the_offending_entry_index_and_id() -> None:
@@ -1493,10 +1501,10 @@ def test_registry_repr_is_informative() -> None:
 
 def test_querying_an_unmanaged_family_fails_loudly() -> None:
     with pytest.raises(CompanyRegistryError, match="unsupported provider"):
-        resolve([]).catalog("ashby")
+        resolve([]).catalog("smartrecruiters")
 
 
-@pytest.mark.parametrize("family", ["ashby", "smartrecruiters", "workable", "jobsapi"])
+@pytest.mark.parametrize("family", ["smartrecruiters", "workable", "jobsapi"])
 def test_no_new_ats_family_is_accepted_in_milestone_5(family: str) -> None:
     with pytest.raises(CompanyRegistryError, match="unsupported provider"):
         validate_document({"providers": {family: {"companies": []}}})
@@ -1543,6 +1551,7 @@ def entry_sort_key(entry: Any) -> tuple[Any, ...]:
 
 def test_registry_output_is_typed_before_provider_construction() -> None:
     expected_types = {
+        "ashby": AshbySource,
         "greenhouse": GreenhouseSource,
         "lever": LeverSource,
         "eightfold": EightfoldAISource,

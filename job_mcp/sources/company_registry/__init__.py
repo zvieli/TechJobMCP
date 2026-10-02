@@ -24,6 +24,7 @@ from job_mcp.sources.company_registry.core import (
     validate_document,
 )
 from job_mcp.sources.company_registry.entries import (
+    AshbyCompany,
     DirectTechCompany,
     EightfoldCompany,
     GreenhouseCompany,
@@ -35,6 +36,7 @@ from job_mcp.sources.company_registry.schema import RegistryConfig
 __all__ = [
     "CONFIG_PATH_ENV_VAR",
     "DEFAULT_CONFIG_FILENAMES",
+    "AshbyCompany",
     "CompanyRegistry",
     "CompanyRegistryError",
     "DirectTechCompany",

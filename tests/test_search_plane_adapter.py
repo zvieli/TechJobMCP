@@ -44,7 +44,7 @@ from job_mcp.sources.registry import SourceRegistry
 
 
 def test_capability_matrix_completeness() -> None:
-    """All 11 active source families are cataloged in the capability map."""
+    """All active source families are cataloged in the capability map."""
     expected_sources = {
         "linkedin",
         "greenhouse",
@@ -57,6 +57,7 @@ def test_capability_matrix_completeness() -> None:
         "gotfriends",
         "jobify",
         "hiremetech",
+        "ashby",
     }
     assert set(SOURCE_CAPABILITY_MAP.keys()) == expected_sources
 
