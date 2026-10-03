@@ -7,6 +7,16 @@ from job_mcp.core.search_plane.adapter import (
     SearchPlaneAdapter,
     get_source_capabilities,
 )
+from job_mcp.core.search_plane.discovery import (
+    DiscoveredPortal,
+    DiscoveryEvidence,
+    DiscoveryResult,
+    DiscoveryStatus,
+    DiscoveryTarget,
+    discover_companies,
+    discover_company,
+    to_registry_config,
+)
 from job_mcp.core.search_plane.models import (
     FetchResult,
     FetchStatus,
@@ -19,6 +29,11 @@ from job_mcp.core.search_plane.models import (
 
 __all__ = [
     "SOURCE_CAPABILITY_MAP",
+    "DiscoveredPortal",
+    "DiscoveryEvidence",
+    "DiscoveryResult",
+    "DiscoveryStatus",
+    "DiscoveryTarget",
     "FetchResult",
     "FetchStatus",
     "JobRef",
@@ -27,5 +42,8 @@ __all__ = [
     "JobSearchResultSet",
     "SearchPlaneAdapter",
     "SourceCapabilities",
+    "discover_companies",
+    "discover_company",
     "get_source_capabilities",
+    "to_registry_config",
 ]

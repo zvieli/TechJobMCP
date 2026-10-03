@@ -716,6 +716,67 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
 * (a) Server-side query/pagination: Workable's public widget API returns all active jobs for an account in one payload without server-side `q` or offset pagination; query and pagination filtering remain client-side in the search plane. (b) 302 Redirection: `httpx.AsyncClient(follow_redirects=True)` is required to follow Workable's 302 redirect from `workable.com/api/accounts/...` to `apply.workable.com/api/v1/widget/accounts/...`. (c) `supports_native_fetch = True`: Represents provider-native account re-query + exact shortcode match. (d) Default enablement: `ENABLE_WORKABLE` defaults to `False` in `reset_builtin_providers()` to preserve 10-provider legacy registry expectations in backward-compatibility test suites, while `SearchPlaneAdapter` enables Workable by default.
 
 
+**Implemented Design — M6-C Deterministic ATS / Career Board Discovery (verified 2026-10-03):**
+
+*Architecture & Module Ownership:*
+* `job_mcp/core/search_plane/discovery/`: Implemented as a dedicated, self-contained Search Plane capability.
+  - `models.py`: Strongly typed discovery models (`DiscoveryStatus`, `DiscoveryTarget`, `DiscoveryEvidence`, `DiscoveredPortal`, `DiscoveryResult`).
+  - `security.py`: Strict SSRF protection and URL validation engine (`validate_url_safety`, `is_ip_blocked`, `default_dns_resolver`).
+  - `fingerprints.py`: Direct ATS URL classifier (`classify_direct_url`) and bounded body scanner (`inspect_html_body`).
+  - `probes.py`: Zero-credential public verification probes for Ashby, SmartRecruiters, and Workable (`verify_ashby_candidate`, `verify_smartrecruiters_candidate`, `verify_workable_candidate`).
+  - `config.py`: Deterministic M5 registry configuration projection (`to_registry_config`).
+  - `service.py`: Core bounded orchestration service (`discover_company`, `discover_companies`).
+
+*Authoritative Status Semantics:*
+* `CONFIRMED`: Exactly one supported provider/routing candidate established by authoritative deterministic evidence (validated direct ATS URL or verified probe).
+* `AMBIGUOUS`: Multiple distinct provider candidates verified or found in career surface (e.g. during corporate migrations); never picks arbitrarily.
+* `UNSUPPORTED`: Career surface is reachable but positive evidence indicates an unsupported ATS architecture (e.g. Greenhouse, Lever, Workday, Taleo, Eightfold, ICIMS).
+* `NOT_FOUND`: Bounded discovery completed cleanly within limits, but no supported ATS portal could be established.
+* `MALFORMED`: Input target is invalid (bad URL syntax, unsupported scheme, blank/whitespace inputs, control characters, private/blocked IP targets).
+
+*Host Security & SSRF Protection Policy:*
+* Strict scheme enforcement: Only `http` and `https` permitted; rejects `file:`, `ftp:`, `data:`, `javascript:`, etc.
+* Embedded credentials prohibited: Rejects userinfo in URLs (`user:pass@host`).
+* Port validation: Enforces standard 1..65535 range; rejects port 0.
+* IP Target Blacklist: Blocks loopback (`127.0.0.0/8`, `::1`), private RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local and cloud metadata (`169.254.0.0/16`, `169.254.169.254`), CGNAT (`100.64.0.0/10`), IPv6 ULA (`fc00::/7`), IPv4-mapped IPv6 (`::ffff:127.0.0.1`), documentation nets, and multicast/broadcast.
+* DNS Re-resolution & Redirect Revalidation: Resolves hostnames via mockable DNS resolver; every redirect hop target is re-validated before execution.
+
+*Bounded Limits & Budget Controls:*
+* Max Redirects: Strictly capped at 3 redirects; 4th redirect terminates.
+* Redirect Cycle Protection: Normalized visited URL set tracks hops and stops cycles immediately.
+* Body Inspection Ceiling: Streams/reads at most 256 KiB (`MAX_BODY_BYTES = 262144`); records `BODY_TRUNCATED` evidence if payload exceeds limit; ignores tokens beyond 256 KiB.
+* Global Monotonic Deadline: Enforces 5.0-second total discovery budget per target (`deadline = clock() + budget_seconds`); remaining budget dynamically bounds all network calls.
+* No Spidering: Zero recursive link crawling or arbitrary internal spidering.
+
+*Company-Name Discovery Policy:*
+* Step 1 (Registry Match): Checks effective M5 catalogs for exact normalized name or ID match; emits `REGISTRY_MATCH` evidence and `CONFIRMED` result without network traffic.
+* Step 2 (Deterministic Slug Generation): Generates at most 2 candidate slug variants (compact alphanumeric and hyphenated, stripping corporate suffixes).
+* Step 3 (Bounded Probes): Probes Ashby, SmartRecruiters, and Workable in deterministic order; enforces a hard ceiling of at most `2 slugs * 3 providers = 6 requests`.
+* Ambiguity Resolution: Returns `AMBIGUOUS` if multiple provider probes succeed; returns `NOT_FOUND` if zero probes succeed.
+
+*Configuration Projection & No Silent Persistence:*
+* `to_registry_config`: Converts `CONFIRMED` single-candidate results into valid M5 `portals.yml` YAML syntax.
+* Re-validates generated YAML directly against `CompanyRegistry.validate_document` to guarantee 100% schema compliance.
+* Strictly refuses to project for non-`CONFIRMED` or multi-candidate results.
+* Zero silent persistence: Never touches disk, never modifies `portals.yml`, and never reloads the running registry in the background.
+
+*Quality Gates & Executed Evidence:*
+* `tests/test_discovery_models.py`: 5 passed.
+* `tests/test_discovery_security.py`: 9 passed.
+* `tests/test_discovery_config_export.py`: 5 passed.
+* `tests/test_search_plane_discovery.py`: 17 passed.
+* `tests/test_discovery_mutations.py`: 15 passed (7 budget mutations + 8 classification mutations).
+* Focused discovery suite: 51 passed in 2.04s.
+* M5/M6 regression + discovery suite: 526 passed, 3 warnings in 6.88s.
+* Full repository suite: 1671 passed, 2 xfailed, 18 warnings in 257.03s (0:04:17).
+* Scoped Ruff check: 0 errors across all discovery modules and tests.
+* Wheel build (`uv build --wheel`): clean build containing `job_mcp/core/search_plane/discovery/`.
+* Independent review: Merge verdict: OK (P0: 0, P1: 0, P2: 0, P3: 0).
+
+*Known Limitations & Clarifications:*
+* (a) Non-crawler architecture: TechJobMCP discovery is strictly deterministic and bounded (direct URL matching, 3 redirects, 256KB body, 5.0s monotonic deadline, 2 candidate slugs); it is not a general-purpose web search engine or multi-page crawler. (b) MCP tool exposure: Agent-facing MCP tools (`discover_companies`) remain deferred to Milestone 6-D to keep the internal discovery service cleanly separated from MCP transport. (c) Unsupported ATS surfaces: Greenhouse, Lever, Workday, Taleo, Eightfold, and ICIMS surfaces are intentionally classified as `UNSUPPORTED` rather than failing as `NOT_FOUND`.
+
+
 ---
 
 ### Milestone 7: Verified Freshness & Search Quality Evidence
