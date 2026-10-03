@@ -33,6 +33,15 @@ class SmartRecruitersCompany:
 
 
 @dataclass
+class WorkableCompany:
+    """Descriptor for a company using Workable ATS."""
+
+    name: str
+    account_subdomain: str
+    enabled: bool = True
+
+
+@dataclass
 class GreenhouseCompany:
     """Descriptor for a company using Greenhouse ATS."""
 
@@ -138,5 +147,6 @@ __all__ = [
     "GreenhouseCompany",
     "LeverCompany",
     "SmartRecruitersCompany",
+    "WorkableCompany",
     "WorkdayCompany",
 ]

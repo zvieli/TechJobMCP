@@ -17,6 +17,7 @@ from job_mcp.sources.company_registry.entries import (
     GreenhouseCompany,
     LeverCompany,
     SmartRecruitersCompany,
+    WorkableCompany,
     WorkdayCompany,
 )
 
@@ -30,6 +31,14 @@ ASHBY_COMPANIES: dict[str, AshbyCompany] = {
 SMARTRECRUITERS_COMPANIES: dict[str, SmartRecruitersCompany] = {
     "smartrecruiters": SmartRecruitersCompany(
         name="SmartRecruiters", company_identifier="smartrecruiters", enabled=True
+    ),
+}
+
+
+# Curated directory of tech companies using Workable ATS
+WORKABLE_COMPANIES: dict[str, WorkableCompany] = {
+    "huggingface": WorkableCompany(
+        name="Hugging Face", account_subdomain="huggingface", enabled=True
     ),
 }
 
@@ -243,6 +252,7 @@ DEFAULT_WORKDAY_COMPANIES: list[WorkdayCompany] = list(WORKDAY_COMPANIES.values(
 BUILTIN_COMPANY_IDS: dict[str, frozenset[str]] = {
     "ashby": frozenset(ASHBY_COMPANIES),
     "smartrecruiters": frozenset(SMARTRECRUITERS_COMPANIES),
+    "workable": frozenset(WORKABLE_COMPANIES),
     "greenhouse": frozenset(GREENHOUSE_COMPANIES),
     "lever": frozenset(LEVER_COMPANIES),
     "eightfold": frozenset(EIGHTFOLD_COMPANIES),
@@ -262,5 +272,6 @@ __all__ = [
     "GREENHOUSE_COMPANIES",
     "LEVER_COMPANIES",
     "SMARTRECRUITERS_COMPANIES",
+    "WORKABLE_COMPANIES",
     "WORKDAY_COMPANIES",
 ]

@@ -30,6 +30,7 @@ from job_mcp.sources.company_registry.entries import (
     GreenhouseCompany,
     LeverCompany,
     SmartRecruitersCompany,
+    WorkableCompany,
     WorkdayCompany,
 )
 from job_mcp.sources.company_registry.schema import RegistryConfig
@@ -46,6 +47,7 @@ __all__ = [
     "LeverCompany",
     "RegistryConfig",
     "SmartRecruitersCompany",
+    "WorkableCompany",
     "WorkdayCompany",
     "catalog",
     "configure",

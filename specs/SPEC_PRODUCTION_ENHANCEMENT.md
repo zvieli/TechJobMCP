@@ -630,7 +630,91 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
 
 *Known Limitations & Clarifications:*
 * (a) Work mode filtering: SmartRecruiters does not support server-side work mode filtering on the public posting API; work mode filtering remains client-side. (b) Per-call AsyncClient during refetch: `fetch_job_by_ref` instantiates an `httpx.AsyncClient` per call; a shared client session would optimize high-frequency refetches. (c) Default enablement: `ENABLE_SMARTRECRUITERS` defaults to `False` in `reset_builtin_providers()` to preserve 10-provider legacy registry expectations in backward-compatibility test suites, while `SearchPlaneAdapter` enables SmartRecruiters by default.
-* Note: Workable (M6-B3) remains pending in subsequent slices.
+
+**Implemented Design — M6-B3 Workable ATS Backend (verified 2026-10-03):**
+
+*Public API Contract & Authentication:*
+* Consumes solely Workable's unauthenticated public widget/account API:
+  - Account Jobs: `GET https://www.workable.com/api/accounts/{account_subdomain}?details=true` (HTTP 302 redirecting to `https://apply.workable.com/api/v1/widget/accounts/{account_subdomain}?details=true`)
+* `httpx.AsyncClient(follow_redirects=True)` is used for all network calls to transparently follow the 302 redirect.
+* Zero credentials, zero API keys, zero paid endpoints, zero dependence on private or authenticated Workable SPI partner APIs (`/spi/v3/jobs`).
+
+*Registry Integration & DNS Label Validation:*
+* Added `WorkableCompany(name: str, account_subdomain: str, enabled: bool = True)` in `job_mcp/sources/company_registry/entries.py`.
+* In `job_mcp/sources/company_registry/schema.py`, defined `WorkableEntry` and `WorkableOverride`.
+* Validated `account_subdomain` strictly as a DNS label via `HOST_LABEL_RE` and max 63 characters (rejecting `_`, `.`, `/`, `?`, `#`, whitespace, empty strings, uppercase, and non-DNS hostname characters).
+* Registered `workable` in `MANAGED_PROVIDERS`, `ENTRY_MODELS`, and `OVERRIDE_MODELS` with default built-in `workable` -> `Hugging Face` (`huggingface`).
+
+*Provider Architecture & Normalization:*
+* `WorkableSource(BasePublicSource)` in `job_mcp/sources/public/workable.py`:
+  - Fetches open positions concurrently across enabled catalog companies using `asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)`.
+  - Maps upstream job fields to canonical `Job`: `job_id=f"workable_{account_subdomain}_{shortcode}"`, title, company name with precedence, location (city, state, country, or structured locations list), work mode (`telecommuting: bool` flag with truthful textual fallback returning `None` when zero evidence exists, strictly avoiding manufactured `ONSITE`), published date (`published_on` or `created_at`), seniority level (`experience`), department/function, structured description without arbitrary 2000-char truncation, clean tech stack extraction.
+  - Implements bounded `check_health()` pinging the first enabled company's accounts endpoint.
+  - Implements native account re-query detail refetch `fetch_job_by_ref(ref: JobRef) -> FetchResult`.
+
+*Search Plane Integration & Native Refetch Seam:*
+* `SOURCE_CAPABILITY_MAP["workable"]`: Declared truthful capabilities:
+  - `supports_search = True`
+  - `supports_native_fetch = True` (provider-native account re-query + exact shortcode match)
+  - `supports_url_fetch = False`
+  - `supports_query = False` (public widget API does not support server-side query filtering)
+  - `supports_company_filter = True`
+  - `supports_work_mode = False` (work mode filtering remains client-side)
+  - `supports_pagination = False` (public widget API returns all active jobs for the account)
+* `SearchPlaneAdapter.create_job_ref`: Extracts `account = account_subdomain` and `locator = shortcode` from `workable_{account_subdomain}_{shortcode}` using `rsplit("_", 1)` (safe for hyphenated accounts with alphanumeric shortcodes). Rejects non-decorated or malformed `job_id` explicitly with `ValueError`.
+* `SearchPlaneAdapter.fetch`: Dispatches to `WorkableSource.fetch_job_by_ref` via generic duck-typing seam (`hasattr(src, "fetch_job_by_ref")`).
+* Native Refetch Semantics: Re-queries public account endpoint:
+  - Exact `shortcode` match against account jobs list.
+  - 200 OK with matching shortcode: returns `FetchResult(status=FetchStatus.FOUND, job=job)`. Populates `JobCache`.
+  - 200 OK without matching shortcode: returns `FetchResult(status=FetchStatus.NOT_FOUND, job=None)`. Strictly refuses to synthesize dummy placeholder jobs.
+  - 404 Not Found: returns `FetchResult(status=FetchStatus.NOT_FOUND, job=None)`.
+  - Upstream 5xx / Network exception: returns `FetchResult(status=FetchStatus.UPSTREAM_ERROR, job=None)`.
+  - Malformed payload: returns `FetchResult(status=FetchStatus.UPSTREAM_ERROR, job=None)`.
+  - Invalid ref (mismatched family or missing account/locator): returns `FetchResult(status=FetchStatus.INVALID_REF, job=None)`.
+  - No M7 lifecycle conclusions: missing posting is never labeled expired, stale, or dead.
+
+*Zero-Cost Fixture-Backed CI & Configuration-Only Extension:*
+* Created 6 static JSON fixtures in `tests/fixtures/workable/`: `valid_account.json`, `multiple_jobs.json`, `empty_account.json`, `full_description.json`, `minimal_job.json`, `malformed_account.json`. All normally tracked in git (zero `git add -f`, `.gitignore` untouched).
+* Configuration-only addition proven in tests: adding a company via `CompanyRegistry`/catalog enables full search and refetch under mocked transport without any edits to `workable.py`.
+
+*Evidence & Quality Gates:*
+* `tests/test_workable_source.py`: 23 passed (normalization, work mode detection, full description preservation, minimal fields, constructor variants, error isolation, malformed response classification, health check, native refetch with exact shortcode / missing / 404 / 500 / malformed / invalid ref).
+* `tests/test_workable_search_plane.py`: 36 passed (capabilities, JobRef round-trip, slug variants, non-decorated explicit failure, search conversion, company filtering, cache hit, native refetch seam, 404 NOT_FOUND, upstream 500, config-only addition, all 15 required original M6-B3 mutation proofs, 4 auxiliary invariants).
+* `tests/test_company_registry.py`: 248 passed (including Workable entries, DNS subdomain validation, overrides, catalog isolation).
+* `tests/test_search_plane_adapter.py`: 29 passed.
+* `tests/test_search_plane_models.py`: 53 passed.
+* Combined relevant suite (`test_workable_*`, `test_ashby_*`, `test_smartrecruiters_*`, `test_company_registry`, `test_search_plane_*`): 475 passed, 3 warnings in 10.76s.
+* Scoped Ruff check on all modified and created files: 0 errors.
+* Wheel build (`uv build --wheel`): verified clean package build containing `job_mcp/sources/public/workable.py`.
+* Full test suite: 1620 passed, 2 xfailed, 18 warnings in 405.73s (zero regressions; authoritative M6-B3 execution).
+* Independent review: Merge verdict: OK (P0: 0, P1: 0, P2: 0, P3: 0).
+* Original 15 Mutation Invariants verified:
+  1. Wrong Workable public base URL -> `test_mutation_proof_01_wrong_public_base_url_fails` (PASS)
+  2. Missing `details=true` -> `test_mutation_proof_02_missing_details_parameter_fails` (PASS)
+  3. Wrong account subdomain -> `test_mutation_proof_03_wrong_account_subdomain_fails` (PASS)
+  4. Disabled account still queried -> `test_mutation_proof_04_disabled_account_still_queried_fails` (PASS)
+  5. Config-added account ignored -> `test_mutation_proof_05_config_added_account_ignored_fails` (PASS)
+  6. Malformed response treated as valid empty account -> `test_mutation_proof_06_malformed_response_treated_as_valid_empty_account_fails` (PASS)
+  7. Refetch returns first posting instead of exact locator -> `test_mutation_proof_07_refetch_returns_first_posting_instead_of_exact_locator_fails` (PASS)
+  8. Locator missing but returns FOUND -> `test_mutation_proof_08_locator_missing_but_returns_found_fails` (PASS)
+  9. Malformed ref uses display company as routing coordinate -> `test_mutation_proof_09_malformed_ref_uses_display_company_as_routing_coordinate_fails` (PASS)
+  10. Arbitrary description truncation -> `test_mutation_proof_10_arbitrary_description_truncation_fails` (PASS)
+  11. Zero work-mode evidence becomes ONSITE -> `test_mutation_proof_11_zero_work_mode_evidence_becomes_onsite_fails` (PASS)
+  12. 429/5xx incorrectly becomes NOT_FOUND -> `test_mutation_proof_12_http_429_and_5xx_incorrectly_become_not_found_fails` (PASS)
+  13. Lifecycle status such as EXPIRED leaks into B3 -> `test_mutation_proof_13_lifecycle_status_such_as_expired_leaks_into_b3_fails` (PASS)
+  14. Capability incorrectly claims native query -> `test_mutation_proof_14_capability_incorrectly_claims_native_query_fails` (PASS)
+  15. Capability incorrectly claims pagination without implementation -> `test_mutation_proof_15_capability_incorrectly_claims_pagination_fails` (PASS)
+* Auxiliary Invariants verified:
+  - Delimiter parsing for hyphenated accounts -> `test_auxiliary_delimiter_parsing_hyphenated_account` (PASS)
+  - Subdomain rejects underscores -> `test_auxiliary_subdomain_rejects_underscores` (PASS)
+  - JobRef version invariance -> `test_auxiliary_job_ref_version_invariance` (PASS)
+  - JobCache populated on FOUND refetch -> `test_auxiliary_cache_populated_on_found` (PASS)
+  - Follow redirects handling on 302 -> `test_workable_fetch_jobs_success`, `test_workable_fetch_job_by_ref_found` (PASS)
+  - Health check returns False when zero enabled companies -> `test_auxiliary_check_health_false_when_no_enabled_companies` (PASS)
+
+*Known Limitations & Clarifications:*
+* (a) Server-side query/pagination: Workable's public widget API returns all active jobs for an account in one payload without server-side `q` or offset pagination; query and pagination filtering remain client-side in the search plane. (b) 302 Redirection: `httpx.AsyncClient(follow_redirects=True)` is required to follow Workable's 302 redirect from `workable.com/api/accounts/...` to `apply.workable.com/api/v1/widget/accounts/...`. (c) `supports_native_fetch = True`: Represents provider-native account re-query + exact shortcode match. (d) Default enablement: `ENABLE_WORKABLE` defaults to `False` in `reset_builtin_providers()` to preserve 10-provider legacy registry expectations in backward-compatibility test suites, while `SearchPlaneAdapter` enables Workable by default.
+
 
 ---
 

@@ -51,6 +51,15 @@ SOURCE_CAPABILITY_MAP: dict[str, SourceCapabilities] = {
         supports_work_mode=False,
         supports_pagination=True,
     ),
+    "workable": SourceCapabilities(
+        supports_search=True,
+        supports_native_fetch=True,
+        supports_url_fetch=False,
+        supports_query=False,
+        supports_company_filter=True,
+        supports_work_mode=False,
+        supports_pagination=False,
+    ),
     "linkedin": SourceCapabilities(
         supports_search=True,
         supports_native_fetch=True,
@@ -244,6 +253,26 @@ class SearchPlaneAdapter:
             else:
                 raise ValueError(
                     f"Cannot deterministically derive SmartRecruiters routing coordinates from job_id {job_id!r}"
+                )
+        elif source_family == "workable":
+            if job_id.startswith("workable_"):
+                payload = job_id[len("workable_") :]
+                if "_" in payload:
+                    account_part, locator_part = payload.rsplit("_", 1)
+                    if account_part and locator_part:
+                        account = account_part
+                        locator = locator_part
+                    else:
+                        raise ValueError(
+                            f"Malformed Workable job_id has empty account or locator: {job_id!r}"
+                        )
+                else:
+                    raise ValueError(
+                        f"Malformed Workable job_id missing locator delimiter: {job_id!r}"
+                    )
+            else:
+                raise ValueError(
+                    f"Cannot deterministically derive Workable routing coordinates from job_id {job_id!r}"
                 )
         elif source_family == "greenhouse":
             account = job.company.strip() if job.company else None

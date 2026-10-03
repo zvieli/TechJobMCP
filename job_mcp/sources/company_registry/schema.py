@@ -35,6 +35,7 @@ from job_mcp.sources.company_registry.entries import (
     GreenhouseCompany,
     LeverCompany,
     SmartRecruitersCompany,
+    WorkableCompany,
     WorkdayCompany,
 )
 
@@ -109,6 +110,7 @@ def _require_base_url(value: str | None, field_name: str) -> str | None:
 
 ASHBY = "ashby"
 SMARTRECRUITERS = "smartrecruiters"
+WORKABLE = "workable"
 GREENHOUSE = "greenhouse"
 LEVER = "lever"
 EIGHTFOLD = "eightfold"
@@ -159,6 +161,28 @@ def _require_path_token(value: str | None, field_name: str) -> str | None:
         raise ValueError(
             f"{field_name} must be a URL path token (letters, digits, '_', '.', '-'; "
             f"no '/', '?', '#' or whitespace), got {value!r}"
+        )
+    return token
+
+
+def _require_workable_subdomain(value: str | None, field_name: str) -> str | None:
+    """Require a Workable account subdomain (DNS label).
+
+    Workable account subdomains are DNS labels (e.g. 'huggingface', 'foo-bar').
+    Rejects '_', '.', '/', '?', '#', spaces, uppercase, empty, and labels >63 chars.
+    """
+    if value is None:
+        return None
+    token = value.strip()
+    if not HOST_LABEL_RE.match(token):
+        raise ValueError(
+            f"{field_name} must be a lowercase DNS label (letters, digits, hyphens; "
+            f"no '_', '.', '/', '?', '#', spaces), got {value!r}"
+        )
+    if len(token) > 63:
+        raise ValueError(
+            f"{field_name} exceeds the DNS per-label limit of 63 characters "
+            f"({len(token)} characters), got {value!r}"
         )
     return token
 
@@ -258,6 +282,14 @@ _OptionalPathToken = Annotated[
     AfterValidator(_reject_null),
     AfterValidator(lambda v: _require_path_token(v, "path token")),
 ]
+_WorkableSubdomain = Annotated[
+    str, AfterValidator(lambda v: _require_workable_subdomain(v, "account_subdomain"))
+]
+_OptionalWorkableSubdomain = Annotated[
+    str | None,
+    AfterValidator(_reject_null),
+    AfterValidator(lambda v: _require_workable_subdomain(v, "account_subdomain")),
+]
 
 # Nullable *and* base-shaped: WorkdayCompany.base_url may be cleared to null, and
 # must not carry a query/fragment because providers append paths to it.
@@ -331,6 +363,22 @@ class SmartRecruitersEntry(_EntryBase):
         """Build the typed provider entry."""
         return SmartRecruitersCompany(
             name=self.name, company_identifier=self.company_identifier, enabled=self.enabled
+        )
+
+
+class WorkableEntry(_EntryBase):
+    """A new Workable company."""
+
+    name: _RequiredName
+    account_subdomain: _WorkableSubdomain
+    enabled: bool = True
+
+    def to_entry(self) -> WorkableCompany:
+        """Build the typed provider entry."""
+        return WorkableCompany(
+            name=self.name,
+            account_subdomain=self.account_subdomain,
+            enabled=self.enabled,
         )
 
 
@@ -441,6 +489,7 @@ class WorkdayEntry(_EntryBase):
 ENTRY_MODELS: dict[str, type[_EntryBase]] = {
     ASHBY: AshbyEntry,
     SMARTRECRUITERS: SmartRecruitersEntry,
+    WORKABLE: WorkableEntry,
     GREENHOUSE: GreenhouseEntry,
     LEVER: LeverEntry,
     EIGHTFOLD: EightfoldEntry,
@@ -496,6 +545,13 @@ class SmartRecruitersOverride(_OverrideBase):
 
     name: _OptionalName = None
     company_identifier: _OptionalPathToken = None
+
+
+class WorkableOverride(_OverrideBase):
+    """Partial Workable override."""
+
+    name: _OptionalName = None
+    account_subdomain: _OptionalWorkableSubdomain = None
 
 
 class GreenhouseOverride(_OverrideBase):
@@ -569,6 +625,7 @@ class WorkdayOverride(_OverrideBase):
 OVERRIDE_MODELS: dict[str, type[_OverrideBase]] = {
     ASHBY: AshbyOverride,
     SMARTRECRUITERS: SmartRecruitersOverride,
+    WORKABLE: WorkableOverride,
     GREENHOUSE: GreenhouseOverride,
     LEVER: LeverOverride,
     EIGHTFOLD: EightfoldOverride,
@@ -805,12 +862,15 @@ __all__ = [
     "OVERRIDE_MODELS",
     "PROVIDER_ID_RE",
     "SMARTRECRUITERS",
+    "WORKABLE",
     "AshbyEntry",
     "AshbyOverride",
     "ProviderConfig",
     "RegistryConfig",
     "SmartRecruitersEntry",
     "SmartRecruitersOverride",
+    "WorkableEntry",
+    "WorkableOverride",
     "is_builtin_company",
     "parse_company",
     "parse_entry",

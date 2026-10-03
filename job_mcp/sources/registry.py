@@ -377,6 +377,7 @@ def reset_builtin_providers() -> None:
     from job_mcp.sources.public.jobify import JobifySource
     from job_mcp.sources.public.lever import LeverSource
     from job_mcp.sources.public.smartrecruiters import SmartRecruitersSource
+    from job_mcp.sources.public.workable import WorkableSource
 
     register_provider(
         name="ashby",
@@ -390,6 +391,13 @@ def reset_builtin_providers() -> None:
         factory_or_cls=SmartRecruitersSource,
         default_enabled=False,
         env_var="ENABLE_SMARTRECRUITERS",
+        category=SourceCategory.PUBLIC,
+    )
+    register_provider(
+        name="workable",
+        factory_or_cls=WorkableSource,
+        default_enabled=False,
+        env_var="ENABLE_WORKABLE",
         category=SourceCategory.PUBLIC,
     )
     register_provider(
@@ -480,6 +488,7 @@ def create_default_registry(
     enable_alljobs: Optional[bool] = None,
     enable_ashby: Optional[bool] = None,
     enable_smartrecruiters: Optional[bool] = None,
+    enable_workable: Optional[bool] = None,
     enable_workday: Optional[bool] = None,
     enable_eightfold: Optional[bool] = None,
     enable_direct_tech: Optional[bool] = None,
@@ -496,7 +505,7 @@ def create_default_registry(
 
     By default, enterprise, public, and authenticated sources (HireMeTech, Comeet, Workday,
     Eightfold AI, Direct Tech, LinkedIn, Jobify, Greenhouse, Lever, and GotFriends) are enabled out-of-the-box.
-    AllJobs, Ashby, and SmartRecruiters are disabled by default in the legacy registry factory and can be enabled via ENABLE_ALLJOBS=true, ENABLE_ASHBY=true, and ENABLE_SMARTRECRUITERS=true.
+    AllJobs, Ashby, SmartRecruiters, and Workable are disabled by default in the legacy registry factory and can be enabled via ENABLE_ALLJOBS=true, ENABLE_ASHBY=true, ENABLE_SMARTRECRUITERS=true, and ENABLE_WORKABLE=true.
     """
     reg = SourceRegistry()
     explicit_map: dict[str, Optional[bool]] = {
@@ -505,6 +514,7 @@ def create_default_registry(
         "alljobs": enable_alljobs,
         "ashby": enable_ashby,
         "smartrecruiters": enable_smartrecruiters,
+        "workable": enable_workable,
         "workday": enable_workday,
         "eightfold": enable_eightfold,
         "direct_tech": enable_direct_tech,

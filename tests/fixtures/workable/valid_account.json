@@ -1,0 +1,34 @@
+{
+  "name": "Hugging Face",
+  "description": "The AI community building the future.",
+  "jobs": [
+    {
+      "title": "Senior Machine Learning Engineer",
+      "shortcode": "F4C096B22E",
+      "code": "ML-01",
+      "employment_type": "Full-time",
+      "telecommuting": true,
+      "department": "Engineering",
+      "url": "https://apply.workable.com/huggingface/j/F4C096B22E/",
+      "shortlink": "https://apply.workable.com/j/F4C096B22E",
+      "application_url": "https://apply.workable.com/huggingface/j/F4C096B22E/apply/",
+      "published_on": "2024-03-01",
+      "created_at": "2024-03-01T12:00:00Z",
+      "country": "United States",
+      "city": "New York",
+      "state": "NY",
+      "education": "Master's Degree",
+      "experience": "Senior level",
+      "function": "Engineering",
+      "industry": "Internet",
+      "locations": [
+        {
+          "city": "New York",
+          "region": "NY",
+          "country": "United States"
+        }
+      ],
+      "description": "<p>We are looking for a Senior ML Engineer to build cutting-edge transformer models.</p><h3>Requirements</h3><ul><li>5+ years of experience with Python and PyTorch</li><li>Experience deploying LLMs with Triton and ONNX</li></ul><h3>Responsibilities</h3><ul><li>Develop and scale open source ML models</li><li>Collaborate with the research community</li></ul>"
+    }
+  ]
+}

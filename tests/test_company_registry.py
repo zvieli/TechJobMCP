@@ -55,6 +55,10 @@ from job_mcp.sources.public.smartrecruiters import (
     SMARTRECRUITERS_COMPANIES,
     SmartRecruitersSource,
 )
+from job_mcp.sources.public.workable import (
+    WORKABLE_COMPANIES,
+    WorkableSource,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,6 +80,16 @@ FAMILIES: dict[str, dict[str, Any]] = {
             "company_identifier": "configonlysmartrecruiters",
         },
         # SmartRecruiters assigns the catalog wholesale, so it keys by registry id.
+        "probe_key": "configonlycorp",
+    },
+    "workable": {
+        "source": WorkableSource,
+        "catalog": WORKABLE_COMPANIES,
+        "new": {
+            "name": "Config Only Workable",
+            "account_subdomain": "configonlyworkable",
+        },
+        # Workable assigns the catalog wholesale, so it keys by registry id.
         "probe_key": "configonlycorp",
     },
     "greenhouse": {
@@ -752,6 +766,16 @@ def test_valid_workday_base_urls_still_accepted(good_base_url: str) -> None:
         ("smartrecruiters", {"id": "sr4", "name": "SR", "company_identifier": "a#b"}, "company_identifier"),
         ("smartrecruiters", {"id": "sr5", "name": "SR", "company_identifier": "a b"}, "company_identifier"),
         ("smartrecruiters", {"id": "smartrecruiters", "company_identifier": "x/y"}, "company_identifier"),
+        # workable.account_subdomain -> host label / DNS subdomain position
+        ("workable", {"id": "wk1", "name": "WK", "account_subdomain": "../../evil"}, "account_subdomain"),
+        ("workable", {"id": "wk2", "name": "WK", "account_subdomain": "a?x=1"}, "account_subdomain"),
+        ("workable", {"id": "wk3", "name": "WK", "account_subdomain": "a#b"}, "account_subdomain"),
+        ("workable", {"id": "wk4", "name": "WK", "account_subdomain": "a b"}, "account_subdomain"),
+        ("workable", {"id": "wk5", "name": "WK", "account_subdomain": "x/y"}, "account_subdomain"),
+        ("workable", {"id": "wk6", "name": "WK", "account_subdomain": "has_underscore"}, "account_subdomain"),
+        ("workable", {"id": "wk7", "name": "WK", "account_subdomain": "has.dot"}, "account_subdomain"),
+        ("workable", {"id": "wk8", "name": "WK", "account_subdomain": "Upper"}, "account_subdomain"),
+        ("workable", {"id": "wk9", "name": "WK", "account_subdomain": "a" * 64}, "account_subdomain"),
         # workday.wd_suffix -> path position
         ("workday", {"id": "w4", "name": "W", "wd_company": "ok", "wd_suffix": "a/b"}, "wd_suffix"),
         ("workday", {"id": "w5", "name": "W", "wd_company": "ok", "wd_suffix": "a?x=1"}, "wd_suffix"),
@@ -842,6 +866,8 @@ def test_legitimate_host_and_path_identifiers_are_accepted() -> None:
         ("smartrecruiters", {"id": "ok7", "name": "O", "company_identifier": "smart_recruiters"}),
         ("smartrecruiters", {"id": "ok8", "name": "O", "company_identifier": "smart-recruiters"}),
         ("smartrecruiters", {"id": "ok9", "name": "O", "company_identifier": "smart.recruiters"}),
+        ("workable", {"id": "ok10", "name": "O", "account_subdomain": "huggingface"}),
+        ("workable", {"id": "ok11", "name": "O", "account_subdomain": "foo-bar"}),
     ]
     for provider, payload in good:
         assert validate_document({"providers": {provider: {"companies": [payload]}}})
@@ -853,6 +879,22 @@ def test_all_builtin_identifiers_still_pass_the_tightened_charsets() -> None:
     A charset that silently rejected a curated default would be a
     backward-compatibility regression that config-only tests cannot see.
     """
+    for company_id, entry in builtin_defaults.WORKABLE_COMPANIES.items():
+        validate_document(
+            {
+                "providers": {
+                    "workable": {
+                        "companies": [
+                            {
+                                "id": company_id,
+                                "name": entry.name,
+                                "account_subdomain": entry.account_subdomain,
+                            }
+                        ]
+                    }
+                }
+            }
+        )
     for company_id, entry in builtin_defaults.SMARTRECRUITERS_COMPANIES.items():
         validate_document(
             {
@@ -930,7 +972,7 @@ def test_unsupported_provider_reports_the_provider_not_the_entry_shape() -> None
         {},
     ):
         with pytest.raises(CompanyRegistryError, match="unsupported provider"):
-            validate_document({"providers": {"workable": block}}, source="unsupported")
+            validate_document({"providers": {"bamboohr": block}}, source="unsupported")
 
 
 def test_validation_error_identifies_the_offending_entry_index_and_id() -> None:
@@ -1543,7 +1585,7 @@ def test_querying_an_unmanaged_family_fails_loudly() -> None:
         resolve([]).catalog("bamboohr")
 
 
-@pytest.mark.parametrize("family", ["workable", "bamboohr", "jobsapi"])
+@pytest.mark.parametrize("family", ["taleo", "bamboohr", "jobsapi"])
 def test_no_new_ats_family_is_accepted_in_milestone_5(family: str) -> None:
     with pytest.raises(CompanyRegistryError, match="unsupported provider"):
         validate_document({"providers": {family: {"companies": []}}})
@@ -1592,6 +1634,7 @@ def test_registry_output_is_typed_before_provider_construction() -> None:
     expected_types = {
         "ashby": AshbySource,
         "smartrecruiters": SmartRecruitersSource,
+        "workable": WorkableSource,
         "greenhouse": GreenhouseSource,
         "lever": LeverSource,
         "eightfold": EightfoldAISource,

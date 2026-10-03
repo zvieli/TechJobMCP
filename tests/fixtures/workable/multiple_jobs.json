@@ -1,0 +1,62 @@
+{
+  "name": "Hugging Face",
+  "description": "The AI community building the future.",
+  "jobs": [
+    {
+      "title": "Senior Machine Learning Engineer",
+      "shortcode": "F4C096B22E",
+      "code": "ML-01",
+      "employment_type": "Full-time",
+      "telecommuting": true,
+      "department": "Engineering",
+      "url": "https://apply.workable.com/huggingface/j/F4C096B22E/",
+      "shortlink": "https://apply.workable.com/j/F4C096B22E",
+      "application_url": "https://apply.workable.com/huggingface/j/F4C096B22E/apply/",
+      "published_on": "2024-03-01",
+      "created_at": "2024-03-01T12:00:00Z",
+      "country": "United States",
+      "city": "New York",
+      "state": "NY",
+      "experience": "Senior level",
+      "function": "Engineering",
+      "description": "<p>We are looking for a Senior ML Engineer to build cutting-edge transformer models with Python and PyTorch.</p>"
+    },
+    {
+      "title": "Frontend Engineer",
+      "shortcode": "A1B2C3D4E5",
+      "code": "FE-02",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "department": "Product",
+      "url": "https://apply.workable.com/huggingface/j/A1B2C3D4E5/",
+      "shortlink": "https://apply.workable.com/j/A1B2C3D4E5",
+      "application_url": "https://apply.workable.com/huggingface/j/A1B2C3D4E5/apply/",
+      "published_on": "2024-03-02",
+      "created_at": "2024-03-02T10:00:00Z",
+      "country": "France",
+      "city": "Paris",
+      "state": "IDF",
+      "experience": "Mid level",
+      "function": "Frontend",
+      "description": "<p>Building great web interfaces using React and TypeScript.</p>"
+    },
+    {
+      "title": "DevOps Engineer",
+      "shortcode": "9Z8Y7X6W5V",
+      "code": "OPS-03",
+      "employment_type": "Full-time",
+      "telecommuting": false,
+      "department": "Infrastructure",
+      "url": "https://apply.workable.com/huggingface/j/9Z8Y7X6W5V/",
+      "shortlink": "https://apply.workable.com/j/9Z8Y7X6W5V",
+      "application_url": "https://apply.workable.com/huggingface/j/9Z8Y7X6W5V/apply/",
+      "published_on": "2024-03-03",
+      "created_at": "2024-03-03T09:00:00Z",
+      "country": "United Kingdom",
+      "city": "London",
+      "experience": "Lead",
+      "function": "Operations",
+      "description": "<p>This is a hybrid position in London office managing Kubernetes clusters.</p>"
+    }
+  ]
+}

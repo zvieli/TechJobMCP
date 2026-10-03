@@ -1,0 +1,10 @@
+{
+  "name": "Minimal Co",
+  "description": "Minimal description",
+  "jobs": [
+    {
+      "title": "Junior Developer",
+      "shortcode": "MIN1234567"
+    }
+  ]
+}
