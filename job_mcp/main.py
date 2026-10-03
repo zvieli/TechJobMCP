@@ -58,6 +58,15 @@ from job_mcp.models.schemas import (
     ToolResponse,
     WorkMode,
 )
+from job_mcp.core.search_plane import (
+    DiscoveryResult,
+    DiscoveryStatus,
+    DiscoveryTarget,
+    FetchStatus,
+    JobSearchRequest,
+    SearchPlaneAdapter,
+    discover_companies as service_discover_companies,
+)
 from job_mcp.notifiers.base import BaseNotifier
 from job_mcp.notifiers.telegram import TelegramNotifier
 from job_mcp.notifiers.tracker import JobTracker
@@ -106,7 +115,7 @@ The server supports two operation modes, controlled via `set_operation_mode`:
 - Standard behavior matching typical MCP tool usage.
 
 ### Autonomous Mode
-- Execute read-only and safe-action tools (`list_job_sources`, `get_job_matches`, `filter_jobs_by_preferences`, `bookmark_job`, `delete_job`, `calibrate_selectors`, `search_linkedin_jobs`, `get_linkedin_job_details`, `notify_new_jobs`, `test_notifier`) WITHOUT asking the user for per-tool confirmation.
+- Execute read-only and safe-action tools (`list_job_sources`, `get_job_matches`, `filter_jobs_by_preferences`, `bookmark_job`, `delete_job`, `calibrate_selectors`, `search_linkedin_jobs`, `get_linkedin_job_details`, `notify_new_jobs`, `test_notifier`, `job_search`, `job_fetch`, `discover_companies`) WITHOUT asking the user for per-tool confirmation.
 - Chain operations freely: list sources -> scan -> filter -> bookmark matching jobs -> notify alerts -> report results.
 - The ONLY action that ALWAYS requires explicit user confirmation is `confirm_auto_apply` — actual job application submission. This is a safety-critical action.
 
@@ -126,6 +135,10 @@ The server supports two operation modes, controlled via `set_operation_mode`:
 13. `test_notifier`: Test connectivity, health, and message delivery for notification channels.
 14. `run_job_scout`: Comprehensive autonomous end-to-end multi-source job scouting, scoring, bookmarking, and application pipeline.
 15. `get_application_history`: Retrieve historical job application submissions and outcomes from the persistent audit ledger.
+16. `mark_job_as_applied`: Manually record a job as applied in the persistent ledger and dismiss it from cache.
+17. `job_search`: Search normalized jobs across enabled TechJobMCP sources returning opaque refs for agent evaluation.
+18. `job_fetch`: Fetch one canonical job using an opaque ref returned by job_search (factual status only).
+19. `discover_companies`: Deterministic ATS and career board discovery from company names or career URLs with reviewable registry config.
 
 ## Safety Rules
 - Never apply to a job without first inspecting details using `auto_apply_job` (Step 1) and receiving explicit user confirmation before calling `confirm_auto_apply` (Step 2). This rule applies in ALL modes.
@@ -142,6 +155,7 @@ _default_tracker: Optional[JobTracker] = None
 _default_notifier: Optional[BaseNotifier] = None
 _default_ledger: Optional[ApplicationLedger] = None
 _default_dispatcher: Optional[HybridApplicationDispatcher] = None
+_default_search_adapter: Optional[SearchPlaneAdapter] = None
 
 # Staged pending applications store: job_id -> application preview dict
 _pending_applications: dict[str, dict[str, Any]] = {}
@@ -226,7 +240,7 @@ async def _warm_cache(
 @asynccontextmanager
 async def browser_lifespan(server: FastMCP):
     """Lifespan context manager to manage browser session, job cache, ledger, and dispatcher across server lifecycle."""
-    global _default_session, _default_cache, _default_registry, _default_aggregator, _default_tracker, _default_notifier, _default_ledger, _default_dispatcher
+    global _default_session, _default_cache, _default_registry, _default_aggregator, _default_tracker, _default_notifier, _default_ledger, _default_dispatcher, _default_search_adapter
     logger.info("Starting Tech Job MCP FastMCP lifespan...")
 
     session_mgr = SessionManager()
@@ -237,6 +251,7 @@ async def browser_lifespan(server: FastMCP):
     telegram_notifier = TelegramNotifier()
     ledger = ApplicationLedger()
     dispatcher = HybridApplicationDispatcher(ledger=ledger, session_manager=session_mgr)
+    search_adapter = SearchPlaneAdapter(aggregator=aggregator, registry=registry, cache=job_cache)
 
     _default_session = session_mgr
     _default_cache = job_cache
@@ -246,6 +261,7 @@ async def browser_lifespan(server: FastMCP):
     _default_notifier = telegram_notifier
     _default_ledger = ledger
     _default_dispatcher = dispatcher
+    _default_search_adapter = search_adapter
 
     warmup_task = asyncio.create_task(_warm_cache(session_mgr, job_cache, aggregator=aggregator))
 
@@ -270,6 +286,7 @@ async def browser_lifespan(server: FastMCP):
             "notifier": telegram_notifier,
             "ledger": ledger,
             "dispatcher": dispatcher,
+            "search_adapter": search_adapter,
         }
     finally:
         logger.info("Shutting down Tech Job MCP FastMCP lifespan...")
@@ -596,6 +613,34 @@ def _get_dispatcher(ctx: Optional[Context] = None) -> HybridApplicationDispatche
         if session is not None:
             _default_dispatcher.session_manager = session
     return _default_dispatcher
+
+
+def _get_search_adapter(ctx: Context | None = None) -> SearchPlaneAdapter:
+    """Retrieve SearchPlaneAdapter instance from Context lifespan state or global default."""
+    global _default_search_adapter
+    aggregator = _get_aggregator(ctx)
+    cache = _get_cache(ctx)
+    registry = _get_registry(ctx)
+
+    if ctx is not None:
+        lifespan_ctx = getattr(ctx, "lifespan_context", None)
+        if isinstance(lifespan_ctx, dict) and "search_adapter" in lifespan_ctx:
+            adapter = lifespan_ctx["search_adapter"]
+            adapter.aggregator = aggregator
+            adapter.cache = cache
+            adapter.registry = registry
+            return adapter
+
+    if _default_search_adapter is None:
+        _default_search_adapter = SearchPlaneAdapter(
+            aggregator=aggregator, registry=registry, cache=cache
+        )
+    else:
+        _default_search_adapter.aggregator = aggregator
+        _default_search_adapter.registry = registry
+        _default_search_adapter.cache = cache
+
+    return _default_search_adapter
 
 
 async def _is_session_authenticated(session: Optional[SessionManager]) -> bool:
@@ -2227,4 +2272,277 @@ async def run_job_scout(
     )
 
 
+MAX_DISCOVERY_TARGETS_PER_CALL: int = 10
 
+
+def _serialize_discovery_result(res: DiscoveryResult) -> dict[str, Any]:
+    """Serialize a DiscoveryResult into a JSON-compatible dictionary."""
+    registry_config: str | None = None
+    if res.status == DiscoveryStatus.CONFIRMED:
+        try:
+            registry_config = res.to_registry_config()
+        except (ValueError, TypeError, KeyError) as exc:
+            logger.warning("Failed to project registry config for confirmed discovery: %s", exc)
+
+    return {
+        "status": res.status.value,
+        "input": {
+            "company_name": res.input.company_name,
+            "career_url": res.input.career_url,
+        },
+        "candidates": [
+            {
+                "source_family": c.source_family,
+                "account": c.account,
+                "confidence_basis": [
+                    {
+                        "kind": ev.kind,
+                        "value": ev.value,
+                        "source_url": ev.source_url,
+                    }
+                    for ev in c.confidence_basis
+                ],
+            }
+            for c in res.candidates
+        ],
+        "evidence": [
+            {
+                "kind": ev.kind,
+                "value": ev.value,
+                "source_url": ev.source_url,
+            }
+            for ev in res.evidence
+        ],
+        "diagnostic": res.diagnostic,
+        "registry_config": registry_config,
+    }
+
+
+@mcp.tool()
+async def job_search(
+    query: str | None = None,
+    location: str | None = None,
+    work_mode: str | None = None,
+    company: str | None = None,
+    tech_stack: list[str] | None = None,
+    limit: int = 25,
+    sources: list[str] | None = None,
+    seniority: str | None = None,
+    cursor: str | None = None,
+    freshness_days: int | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Search normalized jobs across enabled TechJobMCP sources.
+
+    Returns opaque refs that can be passed to job_fetch.
+    Provider knowledge is not required.
+
+    Args:
+        query: Free-text search query / keywords (e.g. 'Software Engineer', 'Python').
+        location: Geographic location filter (e.g. 'Tel Aviv', 'Remote', 'New York').
+        work_mode: Preferred work mode: 'remote', 'hybrid', or 'onsite'.
+        company: Company name filter.
+        tech_stack: List of technology stack requirements (e.g. ['Python', 'FastAPI']).
+        limit: Maximum number of postings to return (1-200, default: 25).
+        sources: Optional list of source families to query (e.g. ['ashby', 'linkedin']).
+                 If omitted, searches across all enabled sources.
+        seniority: Deferred to future milestones. Non-null values will be rejected.
+        cursor: Deferred to future milestones. Non-null values will be rejected.
+        freshness_days: Deferred to Milestone 7. Non-null values will be rejected.
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse containing JobSearchResultSet with normalized items and opaque refs.
+    """
+    if freshness_days is not None:
+        raise ValueError("freshness_days is not supported in Milestone 6 (deferred to Milestone 7)")
+    if cursor is not None:
+        raise ValueError("cursor pagination is not supported in Milestone 6")
+    if seniority is not None:
+        raise ValueError("seniority filtering is not supported in Milestone 6")
+    if limit < 1 or limit > 200:
+        raise ValueError(f"limit must be between 1 and 200 (got {limit})")
+
+    parsed_work_mode: WorkMode | None = None
+    if work_mode:
+        try:
+            parsed_work_mode = WorkMode(work_mode.strip().lower())
+        except ValueError:
+            raise ValueError(
+                f"Invalid work_mode '{work_mode}'. Valid options: 'remote', 'hybrid', 'onsite'."
+            )
+
+    req = JobSearchRequest(
+        query=query,
+        location=location,
+        work_mode=parsed_work_mode,
+        company=company,
+        tech_stack=list(tech_stack) if tech_stack else [],
+        limit=limit,
+        sources=sources,
+    )
+
+    adapter = _get_search_adapter(ctx)
+    try:
+        result_set = await adapter.search(req)
+        return _response(
+            success=True,
+            message=f"Retrieved {len(result_set.items)} job search results.",
+            data=result_set.model_dump(),
+        )
+    except Exception:
+        logger.exception("Error in job_search")
+        return _response(
+            success=False,
+            message="Search failed",
+            error_code="SEARCH_ERROR",
+        )
+
+
+@mcp.tool()
+async def job_fetch(
+    ref: str,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Fetch one canonical job using an opaque ref returned by job_search.
+
+    Returns factual retrieval status only.
+
+    Args:
+        ref: Opaque, versioned JobRef string (e.g. 'v1_...').
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse with FetchResult data containing status and canonical Job (if FOUND).
+    """
+    if not ref or not isinstance(ref, str) or not ref.strip():
+        data = {
+            "status": FetchStatus.INVALID_REF.value,
+            "job": None,
+            "ref": ref if isinstance(ref, str) else None,
+            "diagnostic": "ref must be a non-empty string",
+        }
+        return _response(
+            success=True,
+            message="Invalid job reference: ref must be a non-empty string.",
+            data=data,
+        )
+
+    adapter = _get_search_adapter(ctx)
+    try:
+        fetch_res = await adapter.fetch(ref.strip())
+        res_data = fetch_res.model_dump()
+        res_data["status"] = fetch_res.status.value
+
+        is_success = fetch_res.status != FetchStatus.UPSTREAM_ERROR
+        msg = f"Job fetch status: {fetch_res.status.value}."
+        if fetch_res.status == FetchStatus.FOUND and fetch_res.job:
+            msg = f"Job found: {fetch_res.job.title} at {fetch_res.job.company}."
+
+        return _response(
+            success=is_success,
+            message=msg,
+            data=res_data,
+            error_code="UPSTREAM_ERROR" if fetch_res.status == FetchStatus.UPSTREAM_ERROR else None,
+        )
+    except Exception:
+        logger.exception("Unexpected error in job_fetch for ref %r", ref)
+        return _response(
+            success=False,
+            message="Fetch failed",
+            error_code="FETCH_ERROR",
+            data={
+                "status": FetchStatus.UPSTREAM_ERROR.value,
+                "job": None,
+                "ref": ref,
+                "diagnostic": "Unexpected fetch error",
+            },
+        )
+
+
+@mcp.tool()
+async def discover_companies(
+    company_name: str | None = None,
+    career_url: str | None = None,
+    targets: list[dict[str, Any]] | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Identify supported ATS portals from company names or career URLs using bounded deterministic discovery.
+
+    Returns evidence and optional validated registry configuration.
+    Does not persist configuration.
+
+    Args:
+        company_name: Single company name to discover (e.g. 'Stripe', 'Vercel').
+        career_url: Single career board / jobs page URL to inspect.
+        targets: Bounded list of discovery targets (each with 'company_name' and/or 'career_url'), max 10.
+        ctx: FastMCP Context object.
+
+    Returns:
+        dict: ToolResponse with list of DiscoveryResult objects and generated registry configs where CONFIRMED.
+    """
+    resolved_targets: list[DiscoveryTarget] = []
+
+    if targets is not None:
+        if not isinstance(targets, list):
+            raise ValueError("targets must be a list of target specifications")
+        for item in targets:
+            if isinstance(item, DiscoveryTarget):
+                resolved_targets.append(item)
+            elif isinstance(item, dict):
+                c_name = item.get("company_name")
+                c_url = item.get("career_url")
+                resolved_targets.append(DiscoveryTarget(company_name=c_name, career_url=c_url))
+            elif isinstance(item, str):
+                s = item.strip()
+                if s.startswith(("http://", "https://")):
+                    resolved_targets.append(DiscoveryTarget(career_url=s))
+                else:
+                    resolved_targets.append(DiscoveryTarget(company_name=s))
+            else:
+                raise TypeError(f"Unsupported discovery target item type: {type(item)}")
+
+    if company_name or career_url:
+        resolved_targets.append(DiscoveryTarget(company_name=company_name, career_url=career_url))
+
+    if len(resolved_targets) == 0:
+        raise ValueError(
+            "At least one discovery target must be provided via 'company_name', 'career_url', or 'targets'"
+        )
+
+    if len(resolved_targets) > MAX_DISCOVERY_TARGETS_PER_CALL:
+        raise ValueError(
+            f"Discovery target batch size ({len(resolved_targets)}) exceeds maximum allowed of {MAX_DISCOVERY_TARGETS_PER_CALL}"
+        )
+
+    try:
+        from job_mcp.sources.company_registry.core import get_registry
+
+        company_registry = get_registry()
+        results = await service_discover_companies(
+            resolved_targets,
+            registry=company_registry,
+        )
+        serialized_results = [_serialize_discovery_result(r) for r in results]
+
+        confirmed_count = sum(1 for r in results if r.status == DiscoveryStatus.CONFIRMED)
+        res_data: dict[str, Any] = {
+            "results": serialized_results,
+            "total": len(serialized_results),
+            "confirmed_count": confirmed_count,
+        }
+        if len(serialized_results) == 1:
+            res_data["result"] = serialized_results[0]
+
+        return _response(
+            success=True,
+            message=f"Discovery completed for {len(results)} target(s) ({confirmed_count} confirmed).",
+            data=res_data,
+        )
+    except Exception:
+        logger.exception("Error in discover_companies")
+        return _response(
+            success=False,
+            message="Discovery failed",
+            error_code="DISCOVERY_ERROR",
+        )

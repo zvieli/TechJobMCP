@@ -15,10 +15,12 @@ TOOL_NAMES = frozenset({
     "calibrate_selectors", "set_operation_mode", "search_linkedin_jobs",
     "get_linkedin_job_details", "notify_new_jobs", "test_notifier",
     "run_job_scout", "get_application_history", "mark_job_as_applied",
+    "job_search", "job_fetch", "discover_companies",
 })
 SOURCE_NAMES = frozenset({
     "hiremetech", "comeet", "alljobs", "workday", "eightfold", "direct_tech",
     "linkedin", "jobify", "greenhouse", "lever", "gotfriends",
+    "ashby", "smartrecruiters", "workable",
 })
 
 TOOL_EXECUTION_DURATION = Histogram(

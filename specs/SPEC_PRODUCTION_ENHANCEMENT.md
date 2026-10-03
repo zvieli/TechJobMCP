@@ -429,7 +429,7 @@ Data flow is one-directional: `portals.yml` → `schema.py` (typed validation) �
 
 ---
 
-### Milestone 6: Unified Search Plane, ATS Discovery & Coverage Expansion
+### Milestone 6: Unified Search Plane, ATS Discovery & Coverage Expansion — COMPLETE
 
 **Objective:** Transform TechJobMCP into a provider-agnostic employment search plane by establishing unified search and fetch contracts, integrating high-value modern ATS families (Ashby, SmartRecruiters, Workable), and enabling bounded, deterministic company career discovery.
 
@@ -453,7 +453,7 @@ Implement Ashby, SmartRecruiters, and Workable as parametric providers integrate
 Implement bounded, deterministic company and board discovery (`discover_companies`), ATS fingerprinting, and structured diagnostic reporting with M5 configuration export.
 
 #### M6-D — Agent-Facing MCP Integration
-Expose the unified search and fetch surface on the FastMCP server while preserving existing tool signatures as compatibility aliases.
+Expose the unified search and fetch surface on the FastMCP server while preserving existing tool signatures for backward compatibility. Where semantics align, delegation may use the unified plane; tools with materially different contracts retain their existing implementation.
 
 **Specification:**
 1. *Unified Retrieval Plane:* Define logical `job_search` and `job_fetch` operations that abstract underlying provider mechanics, returning normalized `Job` objects and stable, opaque references.
@@ -773,9 +773,34 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
 * Wheel build (`uv build --wheel`): clean build containing `job_mcp/core/search_plane/discovery/`.
 * Independent review: Merge verdict: OK (P0: 0, P1: 0, P2: 0, P3: 0).
 
-*Known Limitations & Clarifications:*
-* (a) Non-crawler architecture: TechJobMCP discovery is strictly deterministic and bounded (direct URL matching, 3 redirects, 256KB body, 5.0s monotonic deadline, 2 candidate slugs); it is not a general-purpose web search engine or multi-page crawler. (b) MCP tool exposure: Agent-facing MCP tools (`discover_companies`) remain deferred to Milestone 6-D to keep the internal discovery service cleanly separated from MCP transport. (c) Unsupported ATS surfaces: Greenhouse, Lever, Workday, Taleo, Eightfold, and ICIMS surfaces are intentionally classified as `UNSUPPORTED` rather than failing as `NOT_FOUND`.
 
+#### Milestone 6-D: Agent-Facing MCP Integration
+
+**Objective:** Expose the unified search, fetch, and discovery surfaces on FastMCP with opaque refs, factual fetch outcomes, and bounded deterministic discovery, while preserving all 16 legacy tools with 100% backward compatibility.
+
+*Architectural Seams & Tool Surface:*
+* `job_search`: High-level entry point querying normalized postings across enabled providers via `SearchPlaneAdapter`. Accepts `query`, `location`, `work_mode`, `company`, `tech_stack`, `limit` (bounded 1..200), and `sources`. Returns compact `JobSearchResultItem` entries containing opaque, stateless `ref` strings (`v1_...`). Provider knowledge is not required.
+* `job_fetch`: Single-posting retrieval using an opaque `ref`. Delegates directly to `SearchPlaneAdapter.fetch(ref)`. Adheres strictly to factual retrieval statuses (`FOUND`, `NOT_FOUND`, `INVALID_REF`, `UNSUPPORTED_REFETCH`, `UPSTREAM_ERROR`). Returns `success=True` for expected negative retrieval outcomes (e.g. `NOT_FOUND` or `INVALID_REF`) without raising exceptions.
+* `discover_companies`: Deterministic ATS identification from company names or career URLs. Enforces batch ceiling (max 10 targets per call) and monotonic deadline budget (5.0s per target). Returns `DiscoveryResult` entries with valid, reviewable M5 `registry_config` YAML for `CONFIRMED` targets. Strictly read-only with respect to configuration: it never writes configuration or persists results, and never modifies `portals.yml`.
+* Server Lifecycle Integration: `SearchPlaneAdapter` initialized within `browser_lifespan()` and shared across requests via `lifespan_context["search_adapter"]`. Falls back cleanly to lazily initialized defaults with shared cache, registry, and aggregator.
+* Metrics Middleware Bounding: All three new tools registered in `job_mcp/utils/metrics.py` within the frozen `TOOL_NAMES` frozenset. Added `ashby`, `smartrecruiters`, `workable` to `SOURCE_NAMES` frozenset.
+* Strict Milestone 7 Boundary: Rejects deferred parameters (`freshness_days`, `cursor`, `seniority`) with explicit `ValueError`. Zero observation or lifecycle terms (`EXPIRED`, `STALE`, `DEAD`, `POSTING_EXPIRED`).
+* Full Legacy Compatibility: All 16 legacy MCP tools remain registered with unchanged signatures, annotations, and defaults. Total registered FastMCP tools: 19.
+
+*Quality Gates & Executed Evidence:*
+* `tests/test_mcp_search_plane_tools.py`: 16 passed in 1.26s.
+* `tests/test_mcp_discovery_tool.py`: 9 passed in 1.26s.
+* `tests/test_mcp_tool_compatibility.py`: 4 passed in 0.83s.
+* `tests/test_mcp_mutations.py`: 18 passed in 0.88s (18 mutation proofs).
+* Focused M6-D suite: 47 passed in 1.26s.
+* Combined Milestone 6 regression suite: 347 passed in 9.29s.
+* Full repository suite: 1718 passed, 2 xfailed, 18 warnings in 235.29s (0:03:55).
+* Scoped Ruff check: 0 errors across all new test files, adapter, and metrics.
+* Wheel build (`uv build --wheel`): clean build.
+* Trailing whitespace check: Clean (`git diff --check`).
+
+*Known Limitations & Clarifications:*
+* (a) Deferred Pagination & Freshness: Cursor pagination, seniority filtering, and freshness windowing (`freshness_days`) are reserved for Milestone 7 and strictly rejected in M6-D. (b) Single-job detail endpoints: For providers lacking native single-job query APIs without prior caching, `job_fetch` factually reports `UNSUPPORTED_REFETCH` rather than fabricating dummy data. (c) Read-only discovery: `discover_companies` projects M5 YAML in-memory for human or agent review; configuration onboarding remains deliberate and explicit.
 
 ---
 

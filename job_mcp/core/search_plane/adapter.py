@@ -360,9 +360,16 @@ class SearchPlaneAdapter:
                 )
             )
 
+        warnings: list[str] = []
+        if request.sources:
+            for s in request.sources:
+                if s.lower() not in SOURCE_CAPABILITY_MAP:
+                    warnings.append(f"Source family '{s}' is unknown or unsupported.")
+
         return JobSearchResultSet(
             items=items,
             total_estimated=len(items),
+            warnings=warnings,
         )
 
     async def fetch(self, ref: str | JobRef) -> FetchResult:
