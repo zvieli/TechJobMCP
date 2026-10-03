@@ -1,0 +1,67 @@
+{
+  "totalFound": 2,
+  "offset": 0,
+  "limit": 10,
+  "content": [
+    {
+      "id": "743999961234567",
+      "name": "Senior Python Backend Engineer",
+      "uuid": "34225731-e7cf-4584-b0b7-78098fe1a66b",
+      "refNumber": "REF-SR-101",
+      "company": {
+        "identifier": "smartrecruiters",
+        "name": "SmartRecruiters Inc"
+      },
+      "releasedDate": "2024-03-01T12:00:00.000Z",
+      "location": {
+        "city": "San Francisco",
+        "region": "CA",
+        "country": "us",
+        "remote": false,
+        "locationType": "ONSITE"
+      },
+      "department": {
+        "id": "eng",
+        "label": "Engineering"
+      },
+      "function": {
+        "id": "it",
+        "label": "Information Technology"
+      },
+      "typeOfEmployment": {
+        "id": "permanent",
+        "label": "Full-time"
+      },
+      "experienceLevel": {
+        "id": "senior",
+        "label": "Mid-Senior Level"
+      },
+      "ref": "https://api.smartrecruiters.com/v1/companies/smartrecruiters/postings/743999961234567",
+      "applyUrl": "https://careers.smartrecruiters.com/smartrecruiters/743999961234567-senior-python-backend-engineer"
+    },
+    {
+      "id": "743999961234568",
+      "name": "Staff Distributed Systems Engineer",
+      "uuid": "550e8400-e29b-41d4-a716-446655440000",
+      "refNumber": "REF-SR-102",
+      "company": {
+        "identifier": "smartrecruiters",
+        "name": "SmartRecruiters Inc"
+      },
+      "releasedDate": "2024-03-02T14:30:00.000Z",
+      "location": {
+        "city": "Tel Aviv",
+        "region": "Tel Aviv District",
+        "country": "il",
+        "remote": true,
+        "locationType": "REMOTE"
+      },
+      "department": {
+        "id": "platform",
+        "label": "Platform Infrastructure"
+      },
+      "ref": "https://api.smartrecruiters.com/v1/companies/smartrecruiters/postings/743999961234568",
+      "applyUrl": "https://careers.smartrecruiters.com/smartrecruiters/743999961234568-staff-distributed-systems-engineer"
+    }
+  ]
+}

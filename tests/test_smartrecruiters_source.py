@@ -118,7 +118,7 @@ def test_parse_smartrecruiters_job_missing_optional_fields() -> None:
     assert job.department is None
     assert job.posted_date is None
     assert job.salary_range is None
-    assert job.work_mode == WorkMode.ONSITE
+    assert job.work_mode is None
 
     # Fallback to upstream raw company name when company_name is empty
     job_fallback = parse_smartrecruiters_job(
@@ -280,6 +280,32 @@ async def test_fetch_jobs_empty_board() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_jobs_malformed_list_response_logs_warning_and_returns_empty(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    malformed_data = load_fixture("malformed_list.json")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = malformed_data
+
+    source = SmartRecruitersSource(
+        companies={
+            "smartrecruiters": SmartRecruitersCompany(
+                name="SmartRecruiters", company_identifier="smartrecruiters", enabled=True
+            )
+        }
+    )
+
+    with patch("httpx.AsyncClient.get", AsyncMock(return_value=mock_resp)):
+        jobs = await source.fetch_jobs(limit=10)
+        assert len(jobs) == 0
+        captured = capsys.readouterr()
+        assert "malformed response missing 'content' list" in captured.err
+
+
+
+@pytest.mark.asyncio
 async def test_fetch_jobs_skips_disabled_companies() -> None:
     source = SmartRecruitersSource(
         companies={
@@ -400,6 +426,57 @@ async def test_fetch_job_by_ref_500_returns_upstream_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_job_by_ref_matching_uuid_returns_found() -> None:
+    detail_data = load_fixture("valid_detail.json")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = detail_data
+
+    source = SmartRecruitersSource()
+    ref = JobRef(
+        version=1,
+        source_family="smartrecruiters",
+        account="smartrecruiters",
+        locator="34225731-e7cf-4584-b0b7-78098fe1a66b",
+    )
+
+    with patch("httpx.AsyncClient.get", AsyncMock(return_value=mock_resp)) as mock_get:
+        result = await source.fetch_job_by_ref(ref)
+
+        assert result.status == FetchStatus.FOUND
+        assert result.job is not None
+        assert result.job.title == "Senior Python Backend Engineer"
+        assert mock_get.called
+        url = mock_get.call_args[0][0]
+        assert url == "https://api.smartrecruiters.com/v1/companies/smartrecruiters/postings/34225731-e7cf-4584-b0b7-78098fe1a66b"
+
+
+@pytest.mark.asyncio
+async def test_fetch_job_by_ref_identity_mismatch_returns_upstream_error() -> None:
+    detail_data = load_fixture("valid_detail.json")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = detail_data
+
+    source = SmartRecruitersSource()
+    ref = JobRef(
+        version=1,
+        source_family="smartrecruiters",
+        account="smartrecruiters",
+        locator="999999999999999",
+    )
+
+    with patch("httpx.AsyncClient.get", AsyncMock(return_value=mock_resp)):
+        result = await source.fetch_job_by_ref(ref)
+
+        assert result.status == FetchStatus.UPSTREAM_ERROR
+        assert result.job is None
+        assert "identity mismatch" in (result.diagnostic or "")
+
+
+@pytest.mark.asyncio
 async def test_fetch_job_by_ref_malformed_detail_returns_upstream_error() -> None:
     malformed_data = load_fixture("malformed_detail.json")
 
@@ -420,7 +497,7 @@ async def test_fetch_job_by_ref_malformed_detail_returns_upstream_error() -> Non
 
     assert result.status == FetchStatus.UPSTREAM_ERROR
     assert result.job is None
-    assert "missing 'id' field" in (result.diagnostic or "")
+    assert "missing usable id/uuid" in (result.diagnostic or "")
 
 
 @pytest.mark.asyncio

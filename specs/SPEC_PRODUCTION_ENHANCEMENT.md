@@ -587,8 +587,9 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
 * `SmartRecruitersSource(BasePublicSource)` in `job_mcp/sources/public/smartrecruiters.py`:
   - Implements native server-side query propagation (`q=`) passing user search keywords to upstream postings query.
   - Implements bounded server-side pagination loop (`limit=100`, `offset=`) with early termination when exhausted.
+  - Distinguishes malformed responses (missing or non-list `content`) from legitimate empty lists (`content: []`), logging explicit provider warnings.
   - Fetches open postings concurrently across enabled catalog companies using `asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)`.
-  - Maps upstream posting fields to canonical `Job`: `job_id=f"smartrecruiters_{company_identifier}_{posting_id}"`, title, company name with precedence (catalog name > raw company name > identifier), location (city, region, country), work mode (`isRemote`), published date (`releasedDate`), structured description from `jobAd.sections` without arbitrary truncation, compensation components, clean tech stack extraction.
+  - Maps upstream posting fields to canonical `Job`: `job_id=f"smartrecruiters_{company_identifier}_{posting_id}"`, title, company name with precedence (catalog name > raw company name > identifier), location (city, region, country), work mode (`isRemote`, `is_hybrid`, `is_onsite`, with truthful fallback returning `None` when zero evidence exists), published date (`releasedDate`), structured description from `jobAd.sections` without arbitrary truncation, compensation components, clean tech stack extraction.
   - Implements bounded `check_health()` pinging the first enabled company's postings endpoint with `limit=1`.
   - Implements true single-posting detail refetch `fetch_job_by_ref(ref: JobRef) -> FetchResult`.
 
@@ -600,9 +601,10 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
   - `supports_work_mode = False` (API does not filter work mode on server side; done client-side)
   - `supports_query = True` (native server-side `q` parameter)
   - `supports_pagination = True` (native server-side `limit`/`offset` pagination)
-* `SearchPlaneAdapter.create_job_ref`: Extracts `account = company_identifier` and `locator = posting_id` from `smartrecruiters_{company_identifier}_{posting_id}` using `rsplit("_", 1)` (safe for identifiers containing underscores).
+* `SearchPlaneAdapter.create_job_ref`: Extracts `account = company_identifier` and `locator = posting_id` from `smartrecruiters_{company_identifier}_{posting_id}` using `rsplit("_", 1)` (safe for identifiers containing underscores, dots, or hyphens, with numeric or UUID locators). Rejects non-decorated `job_id` explicitly with `ValueError` without speculative or lossy URL guessing.
 * `SearchPlaneAdapter.fetch`: Dispatches to `SmartRecruitersSource.fetch_job_by_ref` via generic duck-typing seam (`hasattr(src, "fetch_job_by_ref")`).
 * Native Refetch Semantics: Queries exact posting detail endpoint `/v1/companies/{companyIdentifier}/postings/{postingId}`:
+  - Validates that requested `locator` matches upstream response `id` or `uuid`; returns `UPSTREAM_ERROR` if locator matches neither or if identity fields are absent.
   - 200 OK: returns `FetchResult(status=FetchStatus.FOUND, job=job)`.
   - 404 Not Found: returns `FetchResult(status=FetchStatus.NOT_FOUND, job=None)` with diagnostic message. Strictly refuses to synthesize dummy placeholder jobs.
   - Upstream 5xx / Network exception: returns `FetchResult(status=FetchStatus.UPSTREAM_ERROR, job=None)`.
@@ -615,14 +617,15 @@ Expose the unified search and fetch surface on the FastMCP server while preservi
 * Configuration-only addition proven in tests: adding a company via `CompanyRegistry`/catalog enables full search and refetch under mocked transport without any edits to `smartrecruiters.py`.
 
 *Evidence & Quality Gates:*
-* `tests/test_smartrecruiters_source.py`: 23 passed (normalization, query propagation, pagination, error isolation, health check, refetch exact detail / 404 / 500 / malformed / invalid ref, zero truncation).
-* `tests/test_smartrecruiters_search_plane.py`: 14 passed (capabilities, JobRef round-trip, search conversion, company filtering, cache hit, native detail refetch, 404 NOT_FOUND, upstream 500, config-only addition, 14 mutation proofs).
+* `tests/test_smartrecruiters_source.py`: 26 passed (normalization, query propagation, pagination, malformed response classification, error isolation, health check, refetch exact detail with id or uuid / identity mismatch / 404 / 500 / malformed / invalid ref, truthful work mode with None on zero evidence, zero description truncation).
+* `tests/test_smartrecruiters_search_plane.py`: 17 passed (capabilities, JobRef round-trip, slug variants with numeric and UUID locators, non-decorated explicit failure without URL guessing, search conversion, company filtering, cache hit, native detail refetch, 404 NOT_FOUND, upstream 500, config-only addition, 14 mutation proofs).
 * `tests/test_company_registry.py`: 231 passed (including SmartRecruiters entries, single-path-token validation, overrides, catalog isolation).
-* `tests/test_search_plane_adapter.py`: 30 passed.
-* Combined relevant suite: 462 passed.
+* `tests/test_search_plane_adapter.py`: 29 passed.
+* `tests/test_search_plane_models.py`: 53 passed.
+* Combined relevant suite: 511 passed.
 * Scoped Ruff check on all modified and created files: 0 errors.
-* Wheel build (`uv build --wheel`): verified clean package build.
-* Full test suite: 1538 passed, 2 xfailed (zero regressions against 1482 passed baseline; exactly 1482 + 56 = 1538).
+* Wheel build (`uv build --wheel`): verified clean package build containing `job_mcp/sources/public/smartrecruiters.py`.
+* Full test suite: 1544 passed, 2 xfailed, 7 warnings in 258.91s (zero regressions against 1482 passed baseline; exactly 1482 + 62 = 1544).
 * Independent review: `Merge verdict: OK` with P0: 0, P1: 0.
 
 *Known Limitations & Clarifications:*

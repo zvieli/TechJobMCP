@@ -94,15 +94,18 @@ def test_smartrecruiters_job_ref_creation_and_roundtrip() -> None:
     ("company_identifier", "posting_id"),
     [
         ("my_company", "743999961234567"),
+        ("my_company", "34225731-e7cf-4584-b0b7-78098fe1a66b"),
         ("foo-bar", "743999961234568"),
+        ("foo-bar", "c1f77d34-7a42-4f05-8a8b-302efb1a4731"),
         ("foo.bar", "743999961234569"),
+        ("foo.bar", "550e8400-e29b-41d4-a716-446655440000"),
         ("complex_sub_domain_slug", "uuid-posting-token-1234"),
     ],
 )
 def test_smartrecruiters_job_ref_identifier_slug_variants(
     company_identifier: str, posting_id: str
 ) -> None:
-    """Verify company identifiers with underscores, hyphens, or dots are parsed without ambiguity."""
+    """Verify company identifiers with underscores, hyphens, or dots and numeric or UUID posting IDs produce stable JobRef."""
     adapter = SearchPlaneAdapter()
     job = Job(
         job_id=f"smartrecruiters_{company_identifier}_{posting_id}",
@@ -122,8 +125,8 @@ def test_smartrecruiters_job_ref_identifier_slug_variants(
     assert decoded.locator == posting_id
 
 
-def test_smartrecruiters_job_ref_url_fallback() -> None:
-    """Verify create_job_ref extracts coordinates from canonical SmartRecruiters URL."""
+def test_smartrecruiters_job_ref_no_url_guessing_fails_explicitly() -> None:
+    """Verify create_job_ref rejects non-decorated job_id even when URL is present (no speculative URL fallback)."""
     adapter = SearchPlaneAdapter()
     job = Job(
         job_id="custom_raw_id",
@@ -133,10 +136,10 @@ def test_smartrecruiters_job_ref_url_fallback() -> None:
         url="https://jobs.smartrecruiters.com/acme-corp/743999961234567",
     )
 
-    ref = adapter.create_job_ref(job)
-    assert ref.source_family == "smartrecruiters"
-    assert ref.account == "acme-corp"
-    assert ref.locator == "743999961234567"
+    with pytest.raises(
+        ValueError, match="Cannot deterministically derive SmartRecruiters routing coordinates"
+    ):
+        adapter.create_job_ref(job)
 
 
 def test_smartrecruiters_job_ref_malformed_fails_without_company_fallback() -> None:

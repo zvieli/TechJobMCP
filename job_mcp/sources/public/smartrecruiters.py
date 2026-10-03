@@ -54,8 +54,11 @@ def _detect_work_mode(
     is_onsite: bool,
     location_str: str,
     description: str,
-) -> WorkMode:
-    """Detect work mode from structured location flags and textual fallback."""
+) -> WorkMode | None:
+    """Detect work mode from structured location flags and textual fallback.
+
+    Returns None when neither structured flags nor textual/location evidence is present.
+    """
     if is_remote:
         return WorkMode.REMOTE
     if is_hybrid:
@@ -68,7 +71,11 @@ def _detect_work_mode(
         return WorkMode.REMOTE
     if "hybrid" in combined:
         return WorkMode.HYBRID
-    return WorkMode.ONSITE
+    if "on-site" in combined or "onsite" in combined:
+        return WorkMode.ONSITE
+    if location_str:
+        return WorkMode.ONSITE
+    return None
 
 
 def parse_smartrecruiters_job(
@@ -298,9 +305,17 @@ class SmartRecruitersSource(BasePublicSource):
                     )
                     break
 
-                content = data.get("content")
-                if not isinstance(content, list) or not content:
-                    # Empty page or no more postings
+                if "content" not in data or not isinstance(data["content"], list):
+                    logger.warning(
+                        "SmartRecruiters %s returned malformed response missing 'content' list: %r",
+                        company.name,
+                        data,
+                    )
+                    break
+
+                content = data["content"]
+                if not content:
+                    # Legitimate empty page or no more postings
                     break
 
                 total_found = data.get("totalFound")
@@ -431,12 +446,27 @@ class SmartRecruitersSource(BasePublicSource):
                     diagnostic=f"SmartRecruiters posting {posting_id!r} returned malformed non-dict response",
                 )
 
-            returned_id = str(data.get("id") or "")
-            if not returned_id:
+            returned_ids = {
+                str(data.get("id") or "").strip(),
+                str(data.get("uuid") or "").strip(),
+            }
+            returned_ids.discard("")
+
+            if not returned_ids:
                 return FetchResult(
                     status=FetchStatus.UPSTREAM_ERROR,
                     ref=ref_str,
-                    diagnostic="SmartRecruiters posting detail response missing 'id' field",
+                    diagnostic=f"SmartRecruiters posting detail response missing usable id/uuid for ref {posting_id!r}",
+                )
+
+            if posting_id not in returned_ids:
+                return FetchResult(
+                    status=FetchStatus.UPSTREAM_ERROR,
+                    ref=ref_str,
+                    diagnostic=(
+                        f"SmartRecruiters posting detail identity mismatch: requested locator {posting_id!r} "
+                        f"does not match response id/uuid {returned_ids!r}"
+                    ),
                 )
 
             job = parse_smartrecruiters_job(

@@ -1,0 +1,61 @@
+{
+  "id": "743999961234567",
+  "name": "Senior Python Backend Engineer",
+  "uuid": "34225731-e7cf-4584-b0b7-78098fe1a66b",
+  "refNumber": "REF-SR-101",
+  "company": {
+    "identifier": "smartrecruiters",
+    "name": "SmartRecruiters Inc"
+  },
+  "releasedDate": "2024-03-01T12:00:00.000Z",
+  "location": {
+    "city": "San Francisco",
+    "region": "CA",
+    "country": "us",
+    "remote": false,
+    "locationType": "ONSITE"
+  },
+  "department": {
+    "id": "eng",
+    "label": "Engineering"
+  },
+  "function": {
+    "id": "it",
+    "label": "Information Technology"
+  },
+  "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+  },
+  "experienceLevel": {
+    "id": "senior",
+    "label": "Mid-Senior Level"
+  },
+  "ref": "https://api.smartrecruiters.com/v1/companies/smartrecruiters/postings/743999961234567",
+  "applyUrl": "https://careers.smartrecruiters.com/smartrecruiters/743999961234567-senior-python-backend-engineer",
+  "jobAd": {
+    "sections": {
+      "companyDescription": {
+        "title": "Company Description",
+        "text": "<p>SmartRecruiters is a global leader in enterprise talent acquisition software.</p>"
+      },
+      "jobDescription": {
+        "title": "Job Description",
+        "text": "<p>We are looking for a Senior Python Backend Engineer to scale our core APIs.</p>"
+      },
+      "qualifications": {
+        "title": "Qualifications",
+        "text": "<p>Requirements: 5+ years of Python experience, FastAPI, PostgreSQL, Docker, Kubernetes.</p>"
+      },
+      "additionalInformation": {
+        "title": "Additional Information",
+        "text": "<p>Competitive benefits, health insurance, and 401(k) matching.</p>"
+      }
+    }
+  },
+  "compensation": {
+    "min": 160000,
+    "max": 195000,
+    "currency": "USD"
+  }
+}

@@ -241,21 +241,6 @@ class SearchPlaneAdapter:
                     raise ValueError(
                         f"Malformed SmartRecruiters job_id missing locator delimiter: {job_id!r}"
                     )
-            elif job.url and ("jobs.smartrecruiters.com/" in job.url or "careers.smartrecruiters.com/" in job.url):
-                matched_domain = (
-                    "jobs.smartrecruiters.com/"
-                    if "jobs.smartrecruiters.com/" in job.url
-                    else "careers.smartrecruiters.com/"
-                )
-                url_path = job.url.split(matched_domain, 1)[1].strip("/").split("?")[0]
-                url_parts = url_path.split("/")
-                if len(url_parts) >= 2 and url_parts[0] and url_parts[1]:
-                    account = url_parts[0]
-                    locator = url_parts[1].split("-")[0] if "-" in url_parts[1] else url_parts[1]
-                else:
-                    raise ValueError(
-                        f"Cannot deterministically derive SmartRecruiters routing coordinates from URL: {job.url!r}"
-                    )
             else:
                 raise ValueError(
                     f"Cannot deterministically derive SmartRecruiters routing coordinates from job_id {job_id!r}"

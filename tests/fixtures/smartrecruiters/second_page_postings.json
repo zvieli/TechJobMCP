@@ -1,0 +1,31 @@
+{
+  "totalFound": 3,
+  "offset": 2,
+  "limit": 10,
+  "content": [
+    {
+      "id": "743999961234569",
+      "name": "DevOps Engineer",
+      "uuid": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+      "refNumber": "REF-SR-103",
+      "company": {
+        "identifier": "smartrecruiters",
+        "name": "SmartRecruiters Inc"
+      },
+      "releasedDate": "2024-03-03T09:15:00.000Z",
+      "location": {
+        "city": "New York",
+        "region": "NY",
+        "country": "us",
+        "remote": false,
+        "locationType": "HYBRID"
+      },
+      "department": {
+        "id": "devops",
+        "label": "Operations"
+      },
+      "ref": "https://api.smartrecruiters.com/v1/companies/smartrecruiters/postings/743999961234569",
+      "applyUrl": "https://careers.smartrecruiters.com/smartrecruiters/743999961234569-devops-engineer"
+    }
+  ]
+}
